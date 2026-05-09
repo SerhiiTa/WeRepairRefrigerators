@@ -20,14 +20,16 @@ export const metadata = toNextMetadata(
 
 export default function BrandsPage() {
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
+    <main className="min-h-screen bg-white text-slate-950">
       <PublicPageHeader
         eyebrow="Refrigerator brands"
         title="Brand-specific refrigerator repair pages for the Houston MVP."
         description="Explore the public SEO foundation for refrigerator brands WeRepairRefrigerators will support with privacy-safe repair summaries and technical education."
+        variant="light"
       />
       <div className="mx-auto max-w-7xl px-6 py-16">
         <PublicCardGrid
+          variant="light"
           items={publicBrands.map((brand) => ({
             href: `/brands/${brand.slug}`,
             title: `${brand.name} refrigerator repair`,
@@ -36,14 +38,18 @@ export default function BrandsPage() {
           }))}
         />
         <div className="mt-10 grid gap-6 lg:grid-cols-2">
-          <PublicSymptomList symptoms={publicSymptoms} />
-          <PublicRepairProcess steps={publicRepairProcessSteps} />
+          <PublicSymptomList symptoms={publicSymptoms} variant="light" />
+          <PublicRepairProcess steps={publicRepairProcessSteps} variant="light" />
         </div>
         <div className="mt-10">
-          <PublicFaqSection faqs={publicFaqs} />
+          <PublicFaqSection faqs={publicFaqs} variant="light" />
         </div>
       </div>
-      <PublicCtaSection />
+      <PublicCtaSection
+        title="Need help with a refrigerator brand in Houston?"
+        description="Browse brand-specific repair guidance, then schedule service when the appliance needs a technician on site."
+        variant="light"
+      />
     </main>
   );
 }

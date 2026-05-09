@@ -54,28 +54,45 @@ export default async function LocationPage({ params }: LocationPageProps) {
   }
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
+    <main className="min-h-screen bg-white text-slate-950">
       <PublicPageHeader
         eyebrow="Location page"
         title={`${location.name} refrigerator repair`}
         description={location.description}
+        variant="light"
       />
       <section className="mx-auto grid max-w-7xl gap-6 px-6 py-16 lg:grid-cols-[1fr_22rem]">
-        <article className="rounded-lg border border-white/10 bg-slate-900 p-6">
-          <h2 className="text-2xl font-bold tracking-tight text-white">Local SEO foundation</h2>
-          <p className="mt-4 leading-8 text-slate-300">{location.summary}</p>
-          <p className="mt-4 leading-8 text-slate-300">
+        <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm shadow-blue-950/5">
+          <p className="text-xs font-black uppercase tracking-[0.2em] text-blue-700">
+            Service area
+          </p>
+          <h2 className="mt-3 text-2xl font-black tracking-tight text-slate-950">
+            Local refrigerator repair foundation
+          </h2>
+          <p className="mt-4 leading-8 text-slate-600">{location.summary}</p>
+          <p className="mt-4 leading-8 text-slate-600">
             Future public pages can connect approved repair summaries to city and
             neighborhood intent while avoiding private customer data.
           </p>
+          <div className="mt-6 flex flex-wrap gap-3">
+            {["Local Houston market", "Brand and service links", "Public-safe summaries"].map((item) => (
+              <span key={item} className="rounded-full border border-blue-100 bg-blue-50 px-4 py-2 text-sm font-black text-blue-800">
+                {item}
+              </span>
+            ))}
+          </div>
         </article>
-        <PublicRelatedLinks links={getRelatedLinks({ currentSlug: location.slug })} />
+        <PublicRelatedLinks links={getRelatedLinks({ currentSlug: location.slug })} variant="light" />
       </section>
       <section className="mx-auto grid max-w-7xl gap-6 px-6 pb-16 lg:grid-cols-2">
-        <PublicRepairProcess steps={publicRepairProcessSteps} />
-        <PublicFaqSection faqs={publicFaqs} />
+        <PublicRepairProcess steps={publicRepairProcessSteps} variant="light" />
+        <PublicFaqSection faqs={publicFaqs} variant="light" />
       </section>
-      <PublicCtaSection />
+      <PublicCtaSection
+        title={`Refrigerator repair guidance for ${location.name}.`}
+        description="Find location-specific repair information and move toward service when a refrigerator needs a professional diagnosis."
+        variant="light"
+      />
     </main>
   );
 }

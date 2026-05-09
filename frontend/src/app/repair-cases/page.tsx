@@ -19,14 +19,16 @@ export const metadata = toNextMetadata(
 
 export default function PublicRepairCasesPage() {
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
+    <main className="min-h-screen bg-white text-slate-950">
       <PublicPageHeader
         eyebrow="Public repair cases"
         title="Privacy-safe refrigerator repair case summaries."
         description="These mock public pages show how approved repair cases can become technical SEO content without customer names, phone numbers, addresses, or private notes."
+        variant="light"
       />
       <div className="mx-auto max-w-7xl px-6 py-16">
         <PublicCardGrid
+          variant="light"
           items={publicRepairCases.map((repairCase) => ({
             href: `/repair-cases/${repairCase.slug}`,
             title: repairCase.title,
@@ -35,11 +37,15 @@ export default function PublicRepairCasesPage() {
           }))}
         />
         <div className="mt-10 grid gap-6 lg:grid-cols-2">
-          <PublicRepairProcess steps={publicRepairProcessSteps} />
-          <PublicFaqSection faqs={publicFaqs} />
+          <PublicRepairProcess steps={publicRepairProcessSteps} variant="light" />
+          <PublicFaqSection faqs={publicFaqs} variant="light" />
         </div>
       </div>
-      <PublicCtaSection />
+      <PublicCtaSection
+        title="Repair examples should help customers without exposing customers."
+        description="Every public repair case is structured around the appliance, symptom, diagnosis, and location-safe summary."
+        variant="light"
+      />
     </main>
   );
 }

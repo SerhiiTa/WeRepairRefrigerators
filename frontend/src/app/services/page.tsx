@@ -19,14 +19,16 @@ export const metadata = toNextMetadata(
 
 export default function ServicesPage() {
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
+    <main className="min-h-screen bg-white text-slate-950">
       <PublicPageHeader
         eyebrow="Repair services"
         title="Public refrigerator repair service pages."
         description="Create scalable service pages for refrigerator symptoms, repair categories, and Houston-area search intent without exposing customer personal data."
+        variant="light"
       />
       <div className="mx-auto max-w-7xl px-6 py-16">
         <PublicCardGrid
+          variant="light"
           items={publicServices.map((service) => ({
             href: `/services/${service.slug}`,
             title: service.name,
@@ -35,11 +37,15 @@ export default function ServicesPage() {
           }))}
         />
         <div className="mt-10 grid gap-6 lg:grid-cols-2">
-          <PublicRepairProcess steps={publicRepairProcessSteps} />
-          <PublicFaqSection faqs={publicFaqs} />
+          <PublicRepairProcess steps={publicRepairProcessSteps} variant="light" />
+          <PublicFaqSection faqs={publicFaqs} variant="light" />
         </div>
       </div>
-      <PublicCtaSection />
+      <PublicCtaSection
+        title="Book refrigerator service with clear next steps."
+        description="Start with the repair category that matches the symptom, then move toward a technician visit when troubleshooting is no longer enough."
+        variant="light"
+      />
     </main>
   );
 }

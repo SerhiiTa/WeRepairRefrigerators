@@ -1,8 +1,13 @@
-import Link from "next/link";
+"use client";
 
-const mobileItems = ["Overview", "Repair Cases", "AI Articles", "Technicians", "Settings"];
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+
+import { dashboardNavigationItems } from "@/config/dashboard-navigation";
 
 export function DashboardTopbar() {
+  const pathname = usePathname();
+
   return (
     <header className="border-b border-white/10 bg-slate-950/95 px-5 py-4 sm:px-6 lg:px-8">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -29,19 +34,22 @@ export function DashboardTopbar() {
       </div>
 
       <nav aria-label="Mobile dashboard navigation" className="mt-4 flex gap-2 overflow-x-auto lg:hidden">
-        {mobileItems.map((item, index) => (
-          <a
-            key={item}
-            href="#"
-            className={`shrink-0 rounded-md px-3 py-2 text-sm font-semibold ${
-              index === 0
-                ? "bg-cyan-300 text-slate-950"
-                : "border border-white/10 text-slate-300"
-            }`}
-          >
-            {item}
-          </a>
-        ))}
+        {dashboardNavigationItems.map((item) => {
+          const isActive =
+            item.href === "/dashboard" ? pathname === item.href : pathname.startsWith(item.href);
+
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`shrink-0 rounded-md px-3 py-2 text-sm font-semibold ${
+                isActive ? "bg-cyan-300 text-slate-950" : "border border-white/10 text-slate-300"
+              }`}
+            >
+              {item.label}
+            </Link>
+          );
+        })}
       </nav>
     </header>
   );

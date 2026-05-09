@@ -3,28 +3,23 @@ import Link from "next/link";
 import { FormField } from "@/components/FormField";
 import { FormSection } from "@/components/FormSection";
 import { RadioCardGroup } from "@/components/RadioCardGroup";
-import { SelectField } from "@/components/SelectField";
 import { TextArea } from "@/components/TextArea";
 import { TextInput } from "@/components/TextInput";
-import { DashboardShell } from "@/components/dashboard/DashboardShell";
+import { BrandSelector } from "@/components/dashboard/BrandSelector";
 import { PhotoUploadPlaceholder } from "@/components/dashboard/PhotoUploadPlaceholder";
 import { SeoMetadataPreview } from "@/components/dashboard/SeoMetadataPreview";
+import type { ApplianceLabelExtraction } from "@/types/repair-case";
 
-const applianceBrands = [
-  "GE",
-  "Whirlpool",
-  "Samsung",
-  "LG",
-  "Frigidaire",
-  "KitchenAid",
-  "Sub-Zero",
-  "Other",
-];
+const mockLabelExtraction: ApplianceLabelExtraction = {
+  detectedBrand: "Sub-Zero",
+  detectedModelNumber: "BI-36UFD",
+  detectedSerialNumber: "SZ18492073",
+  confidence: "Mock 94%",
+};
 
 export default function NewRepairCasePage() {
   return (
-    <DashboardShell>
-      <div className="mx-auto max-w-7xl space-y-6">
+    <div className="mx-auto max-w-7xl space-y-6">
         <section className="rounded-lg border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.14),transparent_34%),#0f172a] p-6">
           <p className="text-sm font-bold uppercase tracking-[0.22em] text-cyan-200">
             Repair cases
@@ -35,7 +30,7 @@ export default function NewRepairCasePage() {
                 Create refrigerator repair case
               </h1>
               <p className="mt-3 max-w-3xl leading-7 text-slate-300">
-                Capture the customer location, appliance details, symptoms, diagnosis,
+                Capture the job location, appliance details, symptoms, diagnosis,
                 parts, repair outcome, and SEO-ready summary. This is UI only with mock
                 placeholders for the MVP.
               </p>
@@ -51,16 +46,14 @@ export default function NewRepairCasePage() {
 
         <form className="grid gap-6" noValidate>
           <FormSection
-            title="Customer & location"
-            description="Basic service-area information for the Houston MVP."
+            title="Job location"
+            description="Only city and ZIP code are required so outside-platform repair jobs can be tracked without customer personal data."
           >
+            <div className="rounded-md border border-amber-300/20 bg-amber-300/10 p-4 text-sm leading-6 text-amber-100">
+              Do not enter customer personal information unless the customer came through the
+              platform or gave permission.
+            </div>
             <div className="grid gap-5 md:grid-cols-2">
-              <FormField id="customer-name" label="Customer name">
-                <TextInput id="customer-name" name="customerName" placeholder="Maria Thompson" />
-              </FormField>
-              <FormField id="phone" label="Phone number">
-                <TextInput id="phone" name="phone" type="tel" placeholder="(713) 555-0142" />
-              </FormField>
               <FormField id="city" label="City" required>
                 <TextInput id="city" name="city" placeholder="Houston" required />
               </FormField>
@@ -77,13 +70,33 @@ export default function NewRepairCasePage() {
           </FormSection>
 
           <FormSection
+            title="Private notes — not used for public SEO pages"
+            description="Optional admin-only fields for platform-originated jobs or customers who gave permission."
+          >
+            <div className="grid gap-5 md:grid-cols-2">
+              <FormField id="customer-name" label="Customer name">
+                <TextInput id="customer-name" name="customerName" placeholder="Optional" />
+              </FormField>
+              <FormField id="phone" label="Phone number">
+                <TextInput id="phone" name="phone" type="tel" placeholder="Optional" />
+              </FormField>
+            </div>
+            <FormField id="private-notes" label="Private admin notes">
+              <TextArea
+                id="private-notes"
+                name="privateNotes"
+                placeholder="Internal notes only. Do not use this content for public SEO pages."
+                rows={3}
+              />
+            </FormField>
+          </FormSection>
+
+          <FormSection
             title="Appliance information"
             description="Details that help technicians identify parts, warranty context, and recurring model issues."
           >
             <div className="grid gap-5 md:grid-cols-3">
-              <FormField id="brand" label="Brand" required>
-                <SelectField id="brand" name="brand" options={applianceBrands} required />
-              </FormField>
+              <BrandSelector />
               <FormField id="model-number" label="Model number" required>
                 <TextInput id="model-number" name="modelNumber" placeholder="WRF555SDFZ" required />
               </FormField>
@@ -94,8 +107,45 @@ export default function NewRepairCasePage() {
           </FormSection>
 
           <FormSection
+            title="AI label extraction"
+            description="AI extraction will be connected later. For now, enter appliance data manually."
+          >
+            <div className="grid gap-4 md:grid-cols-4">
+              {[
+                ["Detected brand", mockLabelExtraction.detectedBrand],
+                ["Detected model number", mockLabelExtraction.detectedModelNumber],
+                ["Detected serial number", mockLabelExtraction.detectedSerialNumber],
+                ["Confidence", mockLabelExtraction.confidence],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-md border border-white/10 bg-slate-950 p-4">
+                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">
+                    {label}
+                  </p>
+                  <p className="mt-2 text-sm font-semibold text-slate-100">{value}</p>
+                </div>
+              ))}
+            </div>
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <button
+                type="button"
+                disabled
+                className="rounded-md border border-white/10 px-5 py-3 text-sm font-bold text-slate-500"
+              >
+                Extract from label photo
+              </button>
+              <button
+                type="button"
+                disabled
+                className="rounded-md bg-slate-800 px-5 py-3 text-sm font-bold text-slate-500"
+              >
+                Apply extracted data
+              </button>
+            </div>
+          </FormSection>
+
+          <FormSection
             title="Symptoms"
-            description="Customer-reported issue details before the technician diagnosis."
+            description="Reported issue details before the technician diagnosis."
           >
             <FormField id="issue-description" label="Issue description" required>
               <TextArea
@@ -217,7 +267,6 @@ export default function NewRepairCasePage() {
             </button>
           </div>
         </form>
-      </div>
-    </DashboardShell>
+    </div>
   );
 }

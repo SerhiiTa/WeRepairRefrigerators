@@ -56,31 +56,48 @@ export default async function BrandPage({ params }: BrandPageProps) {
   }
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
+    <main className="min-h-screen bg-white text-slate-950">
       <PublicPageHeader
         eyebrow="Brand repair page"
         title={`${brand.name} refrigerator repair in Houston`}
         description={brand.description}
+        variant="light"
       />
       <section className="mx-auto grid max-w-7xl gap-6 px-6 py-16 lg:grid-cols-[1fr_22rem]">
-        <article className="rounded-lg border border-white/10 bg-slate-900 p-6">
-          <h2 className="text-2xl font-bold tracking-tight text-white">Public repair summary</h2>
-          <p className="mt-4 leading-8 text-slate-300">{brand.summary}</p>
-          <p className="mt-4 leading-8 text-slate-300">
+        <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm shadow-blue-950/5">
+          <p className="text-xs font-black uppercase tracking-[0.2em] text-blue-700">
+            Brand guidance
+          </p>
+          <h2 className="mt-3 text-2xl font-black tracking-tight text-slate-950">
+            Public repair summary
+          </h2>
+          <p className="mt-4 leading-8 text-slate-600">{brand.summary}</p>
+          <p className="mt-4 leading-8 text-slate-600">
             Future AI-generated pages can connect brand, symptom, service, and location data
             while keeping customer names, phone numbers, and private notes out of public content.
           </p>
+          <div className="mt-6 grid gap-3 sm:grid-cols-3">
+            {["Houston service", "Brand-aware diagnosis", "No private data"].map((item) => (
+              <div key={item} className="rounded-2xl border border-blue-100 bg-blue-50/70 p-4 text-sm font-black text-blue-900">
+                {item}
+              </div>
+            ))}
+          </div>
         </article>
-        <PublicRelatedLinks links={getRelatedLinks({ currentSlug: brand.slug })} />
+        <PublicRelatedLinks links={getRelatedLinks({ currentSlug: brand.slug })} variant="light" />
       </section>
       <section className="mx-auto grid max-w-7xl gap-6 px-6 pb-16 lg:grid-cols-2">
-        <PublicSymptomList symptoms={publicSymptoms} />
-        <PublicRepairProcess steps={publicRepairProcessSteps} />
+        <PublicSymptomList symptoms={publicSymptoms} variant="light" />
+        <PublicRepairProcess steps={publicRepairProcessSteps} variant="light" />
       </section>
       <section className="mx-auto max-w-7xl px-6 pb-16">
-        <PublicFaqSection faqs={publicFaqs} />
+        <PublicFaqSection faqs={publicFaqs} variant="light" />
       </section>
-      <PublicCtaSection />
+      <PublicCtaSection
+        title={`Schedule ${brand.name} refrigerator repair in Houston.`}
+        description="Use public guidance to understand the symptom, then bring in a qualified refrigerator technician for diagnosis and repair."
+        variant="light"
+      />
     </main>
   );
 }

@@ -1,31 +1,7 @@
-import { StatusBadge } from "@/components/StatusBadge";
+import Link from "next/link";
 
-const repairCases = [
-  {
-    id: "WRR-1042",
-    customer: "Memorial home",
-    issue: "Built-in refrigerator not cooling",
-    technician: "Unassigned",
-    status: "Needs review",
-    tone: "amber" as const,
-  },
-  {
-    id: "WRR-1041",
-    customer: "Heights bungalow",
-    issue: "Ice maker leaking after filter change",
-    technician: "Marisol Reyes",
-    status: "In progress",
-    tone: "cyan" as const,
-  },
-  {
-    id: "WRR-1040",
-    customer: "Midtown condo",
-    issue: "Compressor noise and warm freezer",
-    technician: "Andre Lewis",
-    status: "Article draft",
-    tone: "emerald" as const,
-  },
-];
+import { StatusBadge } from "@/components/StatusBadge";
+import { mockRepairCases } from "@/lib/mock-repair-cases";
 
 export function RepairCasesTable() {
   return (
@@ -42,21 +18,34 @@ export function RepairCasesTable() {
           <thead className="text-slate-400">
             <tr>
               <th className="px-5 py-3 font-semibold">Case</th>
-              <th className="px-5 py-3 font-semibold">Customer</th>
+              <th className="px-5 py-3 font-semibold">Location</th>
+              <th className="px-5 py-3 font-semibold">Appliance</th>
               <th className="px-5 py-3 font-semibold">Issue</th>
               <th className="px-5 py-3 font-semibold">Technician</th>
               <th className="px-5 py-3 font-semibold">Status</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-white/10">
-            {repairCases.map((repairCase) => (
+            {mockRepairCases.map((repairCase) => (
               <tr key={repairCase.id} className="text-slate-300">
-                <td className="whitespace-nowrap px-5 py-4 font-bold text-white">{repairCase.id}</td>
-                <td className="whitespace-nowrap px-5 py-4">{repairCase.customer}</td>
-                <td className="min-w-64 px-5 py-4">{repairCase.issue}</td>
+                <td className="whitespace-nowrap px-5 py-4 font-bold text-white">
+                  <Link
+                    href={`/dashboard/repair-cases/${repairCase.id}`}
+                    className="transition hover:text-cyan-200"
+                  >
+                    {repairCase.caseNumber}
+                  </Link>
+                </td>
+                <td className="whitespace-nowrap px-5 py-4">
+                  {repairCase.location.neighborhood}, {repairCase.location.zipCode}
+                </td>
+                <td className="whitespace-nowrap px-5 py-4">
+                  {repairCase.appliance.brand} {repairCase.appliance.modelNumber}
+                </td>
+                <td className="min-w-64 px-5 py-4">{repairCase.issueDescription}</td>
                 <td className="whitespace-nowrap px-5 py-4">{repairCase.technician}</td>
                 <td className="whitespace-nowrap px-5 py-4">
-                  <StatusBadge tone={repairCase.tone}>{repairCase.status}</StatusBadge>
+                  <StatusBadge tone={repairCase.repairStatusTone}>{repairCase.repairStatus}</StatusBadge>
                 </td>
               </tr>
             ))}

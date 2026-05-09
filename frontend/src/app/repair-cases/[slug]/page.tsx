@@ -54,11 +54,12 @@ export default async function PublicRepairCasePage({ params }: PublicRepairCaseP
   }
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
+    <main className="min-h-screen bg-white text-slate-950">
       <PublicPageHeader
         eyebrow="Public repair case"
         title={repairCase.title}
         description="A privacy-safe technical summary prepared for future AI-generated SEO workflows."
+        variant="light"
       />
       <section className="mx-auto max-w-7xl px-6 py-16">
         <article className="grid gap-5 lg:grid-cols-3">
@@ -67,11 +68,14 @@ export default async function PublicRepairCasePage({ params }: PublicRepairCaseP
             ["Brand", repairCase.brand],
             ["Service", repairCase.service],
           ].map(([label, value]) => (
-            <div key={label} className="rounded-lg border border-white/10 bg-slate-900 p-5">
-              <p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">
+            <div
+              key={label}
+              className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm shadow-blue-950/5"
+            >
+              <p className="text-xs font-black uppercase tracking-[0.2em] text-blue-700">
                 {label}
               </p>
-              <p className="mt-2 text-lg font-bold text-white">{value}</p>
+              <p className="mt-2 text-lg font-black text-slate-950">{value}</p>
             </div>
           ))}
         </article>
@@ -82,18 +86,31 @@ export default async function PublicRepairCasePage({ params }: PublicRepairCaseP
             ["Diagnostic summary", repairCase.diagnosis],
             ["Public repair summary", repairCase.resolution],
           ].map(([title, body]) => (
-            <section key={title} className="rounded-lg border border-white/10 bg-slate-900 p-6">
-              <h2 className="text-xl font-bold text-white">{title}</h2>
-              <p className="mt-4 leading-7 text-slate-300">{body}</p>
+            <section
+              key={title}
+              className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm shadow-blue-950/5"
+            >
+              <h2 className="text-xl font-black text-slate-950">{title}</h2>
+              <p className="mt-4 leading-7 text-slate-600">{body}</p>
             </section>
           ))}
         </article>
+        <div className="mt-6 rounded-3xl border border-blue-100 bg-blue-50/80 p-6">
+          <p className="text-xs font-black uppercase tracking-[0.2em] text-blue-700">
+            Customer privacy
+          </p>
+          <p className="mt-3 max-w-4xl leading-7 text-slate-700">
+            This public case uses location-safe service context only. Customer names, phone
+            numbers, exact addresses, and private dashboard notes stay out of SEO pages.
+          </p>
+        </div>
         <div className="mt-10 grid gap-6 lg:grid-cols-[1fr_22rem]">
           <div className="space-y-6">
-            <PublicAiContentBlocks blocks={publicAiContentBlocks} />
-            <PublicFaqSection faqs={publicFaqs} />
+            <PublicAiContentBlocks blocks={publicAiContentBlocks} variant="light" />
+            <PublicFaqSection faqs={publicFaqs} variant="light" />
           </div>
           <PublicRelatedLinks
+            variant="light"
             links={getRelatedLinks({
               currentSlug: repairCase.slug,
               includeRepairCases: false,
@@ -104,6 +121,7 @@ export default async function PublicRepairCasePage({ params }: PublicRepairCaseP
       <PublicCtaSection
         title="Public case pages stay privacy-first."
         description="This page intentionally excludes customer names, phone numbers, exact addresses, private notes, and dashboard-only CRM fields."
+        variant="light"
       />
     </main>
   );

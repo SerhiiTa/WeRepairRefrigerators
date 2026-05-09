@@ -19,14 +19,16 @@ export const metadata = toNextMetadata(
 
 export default function LocationsPage() {
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
+    <main className="min-h-screen bg-white text-slate-950">
       <PublicPageHeader
         eyebrow="Houston MVP locations"
         title="Location pages for refrigerator repair search."
         description="Start with Houston and nearby service areas, then expand the same public SEO structure into future markets."
+        variant="light"
       />
       <div className="mx-auto max-w-7xl px-6 py-16">
         <PublicCardGrid
+          variant="light"
           items={publicLocations.map((location) => ({
             href: `/locations/${location.slug}`,
             title: `${location.name} refrigerator repair`,
@@ -35,11 +37,15 @@ export default function LocationsPage() {
           }))}
         />
         <div className="mt-10 grid gap-6 lg:grid-cols-2">
-          <PublicRepairProcess steps={publicRepairProcessSteps} />
-          <PublicFaqSection faqs={publicFaqs} />
+          <PublicRepairProcess steps={publicRepairProcessSteps} variant="light" />
+          <PublicFaqSection faqs={publicFaqs} variant="light" />
         </div>
       </div>
-      <PublicCtaSection />
+      <PublicCtaSection
+        title="Houston-area refrigerator repair, organized by service area."
+        description="Use local pages to find relevant refrigerator repair guidance for Houston, Katy, Sugar Land, Memorial, Spring Branch, and nearby neighborhoods."
+        variant="light"
+      />
     </main>
   );
 }
