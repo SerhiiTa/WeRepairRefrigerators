@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 const mobileItems = ["Overview", "Repair Cases", "AI Articles", "Technicians", "Settings"];
 
 export function DashboardTopbar() {
@@ -14,12 +16,12 @@ export function DashboardTopbar() {
         </div>
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <a
-            href="/repair-cases/new"
+          <Link
+            href="/dashboard/repair-cases/new"
             className="inline-flex items-center justify-center rounded-md bg-cyan-300 px-4 py-2.5 text-sm font-bold text-slate-950 transition hover:bg-cyan-200"
           >
             New Repair Case
-          </a>
+          </Link>
           <span className="rounded-md border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-sm font-semibold text-emerald-200">
             Houston MVP
           </span>
