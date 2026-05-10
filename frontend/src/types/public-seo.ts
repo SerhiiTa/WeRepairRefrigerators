@@ -1,4 +1,4 @@
-export type SeoEntityKind = "brand" | "service" | "location" | "repair-case";
+export type SeoEntityKind = "brand" | "service" | "location" | "repair-case" | "technician";
 
 export type SeoPageMetadata = {
   title: string;
@@ -94,6 +94,16 @@ export type TechnicianProfilePreview = {
   name: string;
   role: string;
   serviceArea: string;
+  city?: string;
+  zipCodes?: string[];
   specialties: string[];
   summary: string;
+  verificationStatus?: string;
+  rating?: string;
+  responseTime?: string;
+  completedRepairs?: number;
+  yearsExperience?: number;
+  badges?: string[];
+  brandFocus?: string[];
+  repairCaseSlugs?: string[];
 };

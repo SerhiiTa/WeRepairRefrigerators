@@ -623,27 +623,66 @@ export const publicTechnicianPreviews: TechnicianProfilePreview[] = [
     name: "Marisol Reyes",
     role: "Refrigeration technician preview",
     serviceArea: "Houston Heights and central Houston",
+    city: "Houston",
+    zipCodes: ["77007", "77008", "77002"],
     specialties: ["Ice maker repair", "Water leaks", "French door refrigerators"],
     summary:
       "Mock technician profile preview for future public trust pages and technician-specific repair content.",
+    verificationStatus: "Verified Technician",
+    rating: "4.9 mock rating",
+    responseTime: "Same-day response window",
+    completedRepairs: 148,
+    yearsExperience: 7,
+    badges: ["Verified Technician", "Fast Response", "Ice Maker Specialist"],
+    brandFocus: ["Whirlpool", "Samsung", "KitchenAid"],
+    repairCaseSlugs: [
+      "whirlpool-ice-maker-leak-repair-heights",
+      "samsung-refrigerator-cooling-issue-sugar-land",
+    ],
   },
   {
     slug: "andre-lewis",
     name: "Andre Lewis",
     role: "Sealed-system technician preview",
     serviceArea: "Houston, Midtown, and Memorial",
+    city: "Houston",
+    zipCodes: ["77002", "77024", "77056"],
     specialties: ["Compressor diagnostics", "Sealed systems", "Built-in refrigerators"],
     summary:
       "Mock technician profile preview for future sealed-system service pages, repair case attribution, and trust content.",
+    verificationStatus: "Verified Technician",
+    rating: "5.0 mock rating",
+    responseTime: "Priority diagnostic window",
+    completedRepairs: 212,
+    yearsExperience: 11,
+    badges: ["Verified Technician", "Sealed System Specialist", "High-End Refrigeration"],
+    brandFocus: ["LG", "Sub-Zero", "Thermador"],
+    repairCaseSlugs: [
+      "lg-compressor-replacement-midtown-houston",
+      "sub-zero-built-in-refrigerator-not-cooling-houston",
+    ],
   },
   {
     slug: "nina-patel",
     name: "Nina Patel",
     role: "Premium appliance technician preview",
     serviceArea: "Katy, Richmond, and Sugar Land",
+    city: "Katy",
+    zipCodes: ["77494", "77406", "77479"],
     specialties: ["Sub-Zero", "Thermador", "Scotsman ice machines"],
     summary:
       "Mock technician profile preview for future brand-focused public pages and local service-area expansion.",
+    verificationStatus: "Verified Technician",
+    rating: "4.8 mock rating",
+    responseTime: "Next available premium-service window",
+    completedRepairs: 176,
+    yearsExperience: 9,
+    badges: ["Verified Technician", "High-End Refrigeration", "Sealed System Specialist"],
+    brandFocus: ["Sub-Zero", "Thermador", "Scotsman"],
+    repairCaseSlugs: [
+      "thermador-built-in-sealed-system-issue-katy",
+      "scotsman-ice-machine-repair-richmond",
+    ],
   },
 ];
 
@@ -737,4 +776,24 @@ export function getCasesByService(service: string) {
   return publicRepairCases.filter(
     (repairCase) => repairCase.service.toLowerCase() === service.toLowerCase(),
   );
+}
+
+export function getPublicTechnicians() {
+  return publicTechnicianPreviews;
+}
+
+export function getPublicTechnicianBySlug(slug: string) {
+  return publicTechnicianPreviews.find((technician) => technician.slug === slug);
+}
+
+export function getRepairCasesForTechnician(slug: string) {
+  const technician = getPublicTechnicianBySlug(slug);
+
+  if (!technician?.repairCaseSlugs) {
+    return [];
+  }
+
+  return technician.repairCaseSlugs
+    .map((repairCaseSlug) => getPublicRepairCaseBySlug(repairCaseSlug))
+    .filter((repairCase): repairCase is PublicRepairCase => Boolean(repairCase));
 }

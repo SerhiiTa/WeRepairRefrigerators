@@ -1,5 +1,6 @@
 import { LandingCtaButtons } from "@/components/public/landing/LandingCtaButtons";
 import { TrustBadges } from "@/components/public/landing/TrustBadges";
+import { PublicSiteHeader } from "@/components/public/PublicSiteHeader";
 import { CoolingAccent } from "@/components/public/visuals/CoolingAccent";
 import { RefrigerationBackground } from "@/components/public/visuals/RefrigerationBackground";
 import { RefrigeratorHeroGraphic } from "@/components/public/visuals/RefrigeratorHeroGraphic";
@@ -9,19 +10,8 @@ export function LandingHero() {
   return (
     <section className="relative overflow-hidden border-b border-blue-100 bg-gradient-to-b from-blue-50 via-white to-white">
       <RefrigerationBackground />
-      <div className="relative mx-auto grid max-w-7xl gap-10 px-5 pb-12 pt-5 sm:px-6 lg:grid-cols-[1fr_28rem] lg:items-center lg:pb-20">
-        <nav className="flex items-center justify-between lg:col-span-2">
-          <a href="#" className="text-base font-black tracking-tight text-slate-950">
-            WeRepairRefrigerators
-          </a>
-          <a
-            href="tel:+17135550134"
-            className="rounded-full border border-blue-200 bg-white px-4 py-2 text-sm font-bold text-blue-700 shadow-sm"
-          >
-            (713) 555-0134
-          </a>
-        </nav>
-
+      <PublicSiteHeader />
+      <div className="relative mx-auto grid max-w-7xl gap-10 px-5 pb-12 pt-6 sm:px-6 lg:grid-cols-[1fr_28rem] lg:items-center lg:pb-20">
         <div className="pt-8">
           <p className="inline-flex rounded-full border border-blue-200 bg-white px-4 py-2 text-sm font-bold text-blue-700 shadow-sm">
             Houston refrigerator repair

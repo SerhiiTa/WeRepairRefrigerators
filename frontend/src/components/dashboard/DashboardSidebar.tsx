@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { BrandLogo } from "@/components/BrandLogo";
 import { dashboardNavigationItems } from "@/config/dashboard-navigation";
 
 export function DashboardSidebar() {
@@ -10,10 +11,7 @@ export function DashboardSidebar() {
 
   return (
     <aside className="hidden w-72 shrink-0 border-r border-white/10 bg-slate-950 px-5 py-6 lg:block">
-      <Link href="/" className="block text-lg font-bold tracking-tight text-white">
-        WeRepairRefrigerators
-      </Link>
-      <p className="mt-2 text-sm leading-6 text-slate-400">Houston refrigerator repair MVP</p>
+      <BrandLogo variant="dark" />
 
       <nav aria-label="Dashboard navigation" className="mt-8 space-y-2">
         {dashboardNavigationItems.map((item) => {

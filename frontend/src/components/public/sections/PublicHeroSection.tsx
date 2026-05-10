@@ -1,3 +1,4 @@
+import { PublicSiteHeader } from "@/components/public/PublicSiteHeader";
 import { RefrigerationBackground } from "@/components/public/visuals/RefrigerationBackground";
 import { RefrigeratorHeroGraphic } from "@/components/public/visuals/RefrigeratorHeroGraphic";
 import { SnowflakeMotif } from "@/components/public/visuals/SnowflakeMotif";
@@ -26,10 +27,11 @@ export function PublicHeroSection({
       }
     >
       {isLight ? <RefrigerationBackground /> : null}
+      {isLight ? <PublicSiteHeader /> : null}
       <div
         className={
           isLight
-            ? "relative mx-auto grid max-w-7xl gap-10 px-6 py-14 sm:py-16 lg:grid-cols-[1fr_19rem] lg:items-center lg:py-20"
+            ? "relative mx-auto grid max-w-7xl gap-10 px-6 pb-14 pt-8 sm:pb-16 lg:grid-cols-[1fr_19rem] lg:items-center lg:pb-20"
             : "mx-auto max-w-7xl px-6 py-14 sm:py-16 lg:py-20"
         }
       >
