@@ -1,10 +1,14 @@
 import { LandingCtaButtons } from "@/components/public/landing/LandingCtaButtons";
 import { TrustBadges } from "@/components/public/landing/TrustBadges";
+import { CoolingAccent } from "@/components/public/visuals/CoolingAccent";
+import { RefrigerationBackground } from "@/components/public/visuals/RefrigerationBackground";
+import { RefrigeratorHeroGraphic } from "@/components/public/visuals/RefrigeratorHeroGraphic";
+import { SnowflakeMotif } from "@/components/public/visuals/SnowflakeMotif";
 
 export function LandingHero() {
   return (
     <section className="relative overflow-hidden border-b border-blue-100 bg-gradient-to-b from-blue-50 via-white to-white">
-      <div className="absolute inset-x-0 top-0 h-40 bg-[radial-gradient(circle_at_25%_10%,rgba(37,99,235,0.16),transparent_32%),radial-gradient(circle_at_82%_12%,rgba(14,165,233,0.12),transparent_28%)]" />
+      <RefrigerationBackground />
       <div className="relative mx-auto grid max-w-7xl gap-10 px-5 pb-12 pt-5 sm:px-6 lg:grid-cols-[1fr_28rem] lg:items-center lg:pb-20">
         <nav className="flex items-center justify-between lg:col-span-2">
           <a href="#" className="text-base font-black tracking-tight text-slate-950">
@@ -35,8 +39,12 @@ export function LandingHero() {
           </div>
         </div>
 
-        <div className="rounded-3xl border border-blue-100 bg-white p-5 shadow-2xl shadow-blue-950/10">
-          <div className="rounded-2xl border border-blue-100 bg-blue-50 p-5 text-slate-950">
+        <div className="relative">
+          <div className="absolute -right-2 -top-5 hidden sm:block">
+            <SnowflakeMotif size="lg" tone="strong" />
+          </div>
+          <RefrigeratorHeroGraphic />
+          <div className="mt-5 rounded-3xl border border-blue-100 bg-white/90 p-5 shadow-2xl shadow-blue-950/10 backdrop-blur">
             <div className="flex items-center justify-between gap-4">
               <div>
                 <p className="text-sm font-bold text-blue-700">Today’s service focus</p>
@@ -49,12 +57,13 @@ export function LandingHero() {
             <div className="mt-5 grid gap-3">
               {["Check airflow", "Inspect condenser", "Verify model details", "Explain next steps"].map(
                 (step) => (
-                  <div key={step} className="rounded-xl border border-blue-100 bg-white p-4">
+                  <div key={step} className="rounded-xl border border-blue-100 bg-blue-50/70 p-4">
                     {step}
                   </div>
                 ),
               )}
             </div>
+            <CoolingAccent className="mt-5" />
           </div>
           <div className="mt-4 rounded-2xl bg-blue-50 p-4 text-sm leading-6 text-slate-700">
             Diagnostic visit pricing and repair options are presented clearly before

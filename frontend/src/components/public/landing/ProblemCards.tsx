@@ -1,3 +1,5 @@
+import { ApplianceSilhouette } from "@/components/public/visuals/ApplianceSilhouette";
+
 const problems = [
   ["Not cooling", "Fresh-food or freezer sections are warming up."],
   ["Ice maker leaking", "Water under the refrigerator or ice bin issues."],
@@ -24,9 +26,7 @@ export function ProblemCards() {
             key={title}
             className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:border-blue-200 hover:shadow-lg hover:shadow-blue-950/5"
           >
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-lg font-black text-blue-700">
-              +
-            </div>
+            <ApplianceSilhouette />
             <h3 className="mt-5 text-xl font-black text-slate-950">{title}</h3>
             <p className="mt-3 leading-7 text-slate-600">{description}</p>
           </article>
