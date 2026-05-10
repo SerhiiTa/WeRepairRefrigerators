@@ -18,6 +18,7 @@ export type Brand = {
   name: string;
   description: string;
   summary: string;
+  applianceFocus?: string[];
 };
 
 export type Service = {
@@ -25,6 +26,8 @@ export type Service = {
   name: string;
   description: string;
   summary: string;
+  applianceTypes?: string[];
+  difficulty?: "standard" | "advanced" | "specialty";
 };
 
 export type Location = {
@@ -32,17 +35,30 @@ export type Location = {
   name: string;
   description: string;
   summary: string;
+  zipCodes?: string[];
+  serviceArea?: string;
 };
 
 export type PublicRepairCase = {
   slug: string;
   title: string;
   location: string;
+  city?: string;
+  serviceArea?: string;
+  zipCode?: string;
+  applianceType?: string;
   brand: string;
   service: string;
+  symptom?: string;
   issue: string;
   diagnosis: string;
   resolution: string;
+  photoPlaceholders?: {
+    label: string;
+    description: string;
+  }[];
+  faqIdeas?: string[];
+  internalLinks?: RelatedLink[];
 };
 
 export type PublicSeoItem = Brand | Service | Location;
@@ -71,4 +87,13 @@ export type AiContentBlock = {
   kind: AiContentBlockKind;
   title: string;
   body: string;
+};
+
+export type TechnicianProfilePreview = {
+  slug: string;
+  name: string;
+  role: string;
+  serviceArea: string;
+  specialties: string[];
+  summary: string;
 };
