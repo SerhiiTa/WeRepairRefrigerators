@@ -57,6 +57,7 @@ npm run build -- --webpack
 - Local Supabase verification helper at `/dashboard/dev/supabase-check`. It checks public env readiness, browser client initialization, auth session state, and the current user's profile row after the first migration is manually applied. It is not linked in navigation and is not production admin tooling.
 - Dashboard auth badge role/status display can now read the authenticated user's `public.profiles` row when available. This only changes the displayed role/status; it does not protect routes or hide dashboard features.
 - Route protection readiness helpers in `frontend/src/lib/auth/permissions.ts` now support typed checks for authenticated sessions, profile presence, active profile status, role membership, and dashboard access eligibility. Dashboard auth notices are visible for logged-out/demo mode, missing profiles, and pending/suspended/rejected profile statuses, but they are intentionally non-blocking.
+- Auth guard dry-run diagnostics in `frontend/src/lib/auth/access-decisions.ts` evaluate the current dashboard path, session/profile state, role, status, intended access level, and future redirect target without blocking or redirecting. The dashboard topbar displays the dry-run result for dashboard routes only.
 
 ## What to build next
 
@@ -65,7 +66,7 @@ Recommended next steps:
 1. Use `docs/BACKEND_ARCHITECTURE_PLAN.md`, `docs/AUTH_ROLES_PLAN.md`, `docs/SUPABASE_DATA_MODEL_PLAN.md`, `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md`, and `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md` to guide Supabase schema, auth, RLS, dispatch locking, community persistence, analytics, Stripe, and AI/RAG implementation.
 2. Follow `docs/SUPABASE_SETUP_GUIDE.md` before creating a Supabase project, configuring `frontend/.env.local`, or manually applying the first profiles/roles migration.
 3. Follow `docs/OWNER_ADMIN_PROMOTION_GUIDE.md` before manually promoting the owner/developer account. Do not add owner/admin promotion to public signup.
-4. Follow `docs/AUTH_MIDDLEWARE_PLAN.md`, then add a dry-run middleware or route-level guard before enforcing protected dashboard redirects.
+4. Review the current auth guard dry-run diagnostics, then follow `docs/AUTH_MIDDLEWARE_PLAN.md` before adding any enforcing middleware or redirects.
 5. Convert public intake and dashboard lead workflows into validated server-side mutations.
 6. Add real repair case persistence, uploads, and draft/edit states.
 7. Add dispatch locking for open jobs before any live technician claiming.
@@ -145,7 +146,9 @@ Read `docs/AUTH_MIDDLEWARE_PLAN.md` before adding middleware, route-level guards
 Ready now:
 
 - `frontend/src/lib/auth/permissions.ts` exposes typed helper checks for session presence, profile presence, active profile status, role membership, and dashboard access eligibility.
+- `frontend/src/lib/auth/access-decisions.ts` exposes `evaluateAccessDecision()` for dry-run route checks. The decision object includes `allowedNow`, `wouldRedirectLater`, `reason`, `recommendedRedirectTarget`, and `requiredAccessLevel`.
 - `DashboardAuthStatus` displays non-blocking dashboard notices when the user is logged out, a profile row is missing, or the profile status is pending, suspended, or rejected.
+- `DashboardAuthStatus` also displays the dry-run guard result for the active dashboard pathname.
 - Existing profile reads continue to use the browser anon client and user-scoped RLS policies only.
 
 Intentionally not enforced yet:
@@ -214,6 +217,7 @@ Next route-protection task:
 - `/dashboard/dev/supabase-check` is a local development verification page only. It uses the browser anon client, does not use service-role keys, does not create missing profiles, does not apply migrations, and does not protect routes.
 - Dashboard profile role/status display uses the browser anon client and user-owned profile read policy. It must remain display-only until protected routes, server authorization, and RLS are fully implemented.
 - Route protection readiness warnings in the dashboard are advisory only. They should help developers see future access states, but they do not block, redirect, or authorize access.
+- Auth guard dry-run diagnostics are advisory only. `allowedNow` remains non-blocking for current dashboard routes and `wouldRedirectLater` is only a preview of future enforcement behavior.
 - Owner/admin role promotion is manual documentation only. Do not add public signup paths or frontend controls that grant `company_owner` or `admin`.
 - The profiles/roles SQL migration is draft-only. Do not apply it without reviewing triggers, grants, RLS policies, role defaults, and admin update paths.
 - AI article, TechAdvisor, translation, and RAG features are mock-only until server-side API boundaries and privacy filters are implemented.

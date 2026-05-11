@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { evaluateAccessDecision } from "@/lib/auth/access-decisions";
 import {
   createDashboardIdentityState,
   DASHBOARD_IDENTITY_LOADING,
@@ -75,7 +77,15 @@ function formatProfileStatus(status: string): string {
     .join(" ");
 }
 
+function formatAccessLevel(level: string): string {
+  return level
+    .split("-")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 export function DashboardAuthStatus() {
+  const pathname = usePathname();
   const [identityState, setIdentityState] = useState<DashboardIdentityState>(() =>
     isSupabaseBrowserConfigured()
       ? DASHBOARD_IDENTITY_LOADING
@@ -177,6 +187,14 @@ export function DashboardAuthStatus() {
     identityState,
     profileSyncState,
   );
+  const accessDecision = evaluateAccessDecision({
+    pathname,
+    isAuthenticated: identityState.mode === "authenticated",
+    profilePresent: profileSyncState.status === "profile_found",
+    role: identityState.role,
+    status: profileSyncState.profileStatus,
+    isLoading: identityState.mode === "loading",
+  });
   const accessHighlights = [
     identityState.accessPreview.canAccessOpenJobs ? "Open jobs" : null,
     identityState.accessPreview.canAccessPrivateCommunity ? "Community" : null,
@@ -242,6 +260,31 @@ export function DashboardAuthStatus() {
           </p>
         </div>
       ) : null}
+
+      <div className="mt-3 rounded-md border border-white/10 bg-slate-950/35 px-3 py-2 text-xs text-slate-300">
+        <p className="font-black uppercase tracking-[0.16em] text-slate-100">
+          Auth guard dry run
+        </p>
+        <p className="mt-1 text-slate-400">
+          Allowed now:{" "}
+          <span className="font-bold text-slate-200">
+            {accessDecision.allowedNow ? "Yes" : "No"}
+          </span>
+          {" | "}
+          Required later:{" "}
+          <span className="font-bold text-slate-200">
+            {formatAccessLevel(accessDecision.requiredAccessLevel)}
+          </span>
+          {" | "}
+          {accessDecision.wouldRedirectLater
+            ? `Would redirect to ${accessDecision.recommendedRedirectTarget}`
+            : "No redirect expected"}
+        </p>
+        <p className="mt-1 text-slate-500">
+          {accessDecision.reason} Current dashboard access is still
+          non-blocking.
+        </p>
+      </div>
     </aside>
   );
 }
