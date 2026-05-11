@@ -18,6 +18,7 @@
 - Backend/RLS planning is documented in `docs/BACKEND_ARCHITECTURE_PLAN.md` and should be reviewed before adding Supabase, auth, persistence, dispatch, community, analytics, Stripe, or AI/RAG code.
 - Auth/role planning is documented in `docs/AUTH_ROLES_PLAN.md` and should be reviewed before adding login, signup, route protection, role-aware navigation, or role-based RLS policies.
 - Supabase data model planning is documented in `docs/SUPABASE_DATA_MODEL_PLAN.md` and should be reviewed before creating tables, migrations, storage policies, RLS policies, or persistence code.
+- RLS and permission architecture is documented in `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md` and should be reviewed before writing RLS policies, server mutations, admin tools, protected API routes, or storage access rules.
 
 ## AI content safety
 
@@ -42,6 +43,7 @@ Before adding authentication:
 Before adding database tables:
 
 - Review `docs/SUPABASE_DATA_MODEL_PLAN.md`.
+- Review `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md`.
 - Enable Row Level Security.
 - Write explicit RLS policies.
 - Test cross-user access boundaries.
@@ -49,6 +51,7 @@ Before adding database tables:
 - Avoid storing unnecessary customer personal information.
 - Separate public marketplace records from private dashboard CRM records and private technician community records.
 - Audit open job assignment, lead conversion, accepted solution, and reputation event mutations.
+- Use deny-by-default policies and add public read policies only for sanitized public tables or views.
 
 Before adding real-time messaging:
 

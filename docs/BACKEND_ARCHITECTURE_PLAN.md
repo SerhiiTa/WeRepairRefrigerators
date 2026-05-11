@@ -14,7 +14,7 @@ All current workflows are static or local UI state. There is no backend, authent
 
 The future backend should turn the current mock platform into a real SaaS marketplace while preserving public/dashboard/community boundaries.
 
-For table-level schema planning, use `docs/SUPABASE_DATA_MODEL_PLAN.md` before creating migrations, storage policies, or RLS policies.
+For table-level schema planning, use `docs/SUPABASE_DATA_MODEL_PLAN.md` before creating migrations, storage policies, or RLS policies. For permission policy planning, use `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md` before writing RLS policies, protected mutations, admin tools, or API routes.
 
 Planned backend capabilities:
 
@@ -97,6 +97,8 @@ Billing data includes Stripe customer IDs, subscription IDs, payment status, pai
 ## Proposed Supabase/Postgres Tables
 
 This section is the high-level backend table map. The more detailed table-by-table ownership, visibility, index, and RLS planning reference is `docs/SUPABASE_DATA_MODEL_PLAN.md`.
+
+The table-by-table SELECT/INSERT/UPDATE/DELETE policy reference is `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md`.
 
 ### profiles
 

@@ -43,12 +43,13 @@ npm run build -- --webpack
 - Backend architecture planning in `docs/BACKEND_ARCHITECTURE_PLAN.md`.
 - Auth and role-based access planning in `docs/AUTH_ROLES_PLAN.md`.
 - Supabase data model planning in `docs/SUPABASE_DATA_MODEL_PLAN.md`.
+- RLS and permission architecture planning in `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md`.
 
 ## What to build next
 
 Recommended next steps:
 
-1. Use `docs/BACKEND_ARCHITECTURE_PLAN.md`, `docs/AUTH_ROLES_PLAN.md`, and `docs/SUPABASE_DATA_MODEL_PLAN.md` to guide Supabase schema, auth, RLS, dispatch locking, community persistence, analytics, Stripe, and AI/RAG implementation.
+1. Use `docs/BACKEND_ARCHITECTURE_PLAN.md`, `docs/AUTH_ROLES_PLAN.md`, `docs/SUPABASE_DATA_MODEL_PLAN.md`, and `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md` to guide Supabase schema, auth, RLS, dispatch locking, community persistence, analytics, Stripe, and AI/RAG implementation.
 2. Add authentication and protected dashboard routes.
 3. Convert public intake and dashboard lead workflows into validated server-side mutations.
 4. Add real repair case persistence, uploads, and draft/edit states.
@@ -85,6 +86,15 @@ Read `docs/SUPABASE_DATA_MODEL_PLAN.md` before creating tables, migrations, stor
 - Ownership, visibility, indexes, and RLS notes for each table.
 - Separation between public SEO content, private customer data, technician dashboard data, company/team data, community knowledge data, and admin/audit data.
 - Phased persistence order from auth profiles through leads, jobs, repair cases, community, reputation, and payments later.
+
+## RLS planning reference
+
+Read `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md` before writing RLS policies, server mutations, admin tools, or protected API routes. It defines:
+
+- Deny-by-default, least-privilege, ownership, company, verification, and admin isolation principles.
+- Table-by-table SELECT/INSERT/UPDATE/DELETE strategy for core private tables.
+- Public marketplace, open jobs, private community, audit/admin, and future API security rules.
+- Open questions for community moderation, customer portal access, open job payment gates, and retention policies.
 
 ## Important routes
 
