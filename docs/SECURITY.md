@@ -15,6 +15,7 @@
 - Do not create public/indexable routes for private technician discussions or knowledge cases.
 - Do not expose customer phone numbers, emails, full addresses, payment details, or private notes in public or community views.
 - Do not add real-time messaging, persistence, AI calls, translation calls, notifications, or dispatch behavior until auth and backend boundaries are approved.
+- Backend/RLS planning is documented in `docs/BACKEND_ARCHITECTURE_PLAN.md` and should be reviewed before adding Supabase, auth, persistence, dispatch, community, analytics, Stripe, or AI/RAG code.
 
 ## AI content safety
 
@@ -26,6 +27,7 @@ AI TechAdvisor, multilingual previews, and discussion summaries are currently mo
 
 Before adding authentication:
 
+- Review `docs/BACKEND_ARCHITECTURE_PLAN.md`.
 - Choose the Supabase auth flow.
 - Define user roles.
 - Keep auth checks server-side where possible.

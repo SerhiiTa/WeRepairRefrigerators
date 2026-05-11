@@ -40,18 +40,30 @@ npm run build -- --webpack
 - Technician reputation and expert badge mock at `/dashboard/community/reputation`.
 - Reusable form, dashboard, public, state, empty/loading/error, community, analytics, open jobs, and reputation components.
 - Mock datasets in `frontend/src/data` and shared contracts in `frontend/src/types`.
+- Backend architecture planning in `docs/BACKEND_ARCHITECTURE_PLAN.md`.
 
 ## What to build next
 
 Recommended next steps:
 
-1. Plan Supabase schema and RLS policies before implementing persistence.
+1. Use `docs/BACKEND_ARCHITECTURE_PLAN.md` to guide Supabase schema, auth, RLS, dispatch locking, community persistence, analytics, Stripe, and AI/RAG implementation.
 2. Add authentication and protected dashboard routes.
 3. Convert public intake and dashboard lead workflows into validated server-side mutations.
 4. Add real repair case persistence, uploads, and draft/edit states.
 5. Add dispatch locking for open jobs before any live technician claiming.
 6. Add private technician community persistence, moderation, and permission checks.
 7. Add AI/translation boundaries server-side only, with manual review before publishing or indexing.
+
+## Backend planning reference
+
+Read `docs/BACKEND_ARCHITECTURE_PLAN.md` before starting backend work. It defines:
+
+- Planned user roles: customer, technician, expert technician, company owner, and admin.
+- Data boundaries for public SEO, customer leads, technician profiles, private CRM, technician community, AI/RAG knowledge, and billing.
+- Proposed Supabase/Postgres tables and ownership/visibility models.
+- RLS expectations for customers, technicians, company owners, admins, open jobs, and private community data.
+- Dispatch/open job locking plan.
+- Future community, analytics, Stripe, and AI/RAG implementation phases.
 
 ## Important routes
 
