@@ -33,6 +33,10 @@ export const dashboardNavigationItems: DashboardNavigationItem[] = [
     href: "/dashboard/community",
   },
   {
+    label: "Reputation",
+    href: "/dashboard/community/reputation",
+  },
+  {
     label: "AI Articles",
     href: "/dashboard/ai-articles",
   },
