@@ -46,6 +46,7 @@ npm run build -- --webpack
 - RLS and permission architecture planning in `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md`.
 - API and backend service architecture planning in `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md`.
 - Supabase setup guide in `docs/SUPABASE_SETUP_GUIDE.md` for creating a project, configuring local frontend env vars, reviewing/applying the first migration safely, and checking profile row creation.
+- Owner/admin promotion guide in `docs/OWNER_ADMIN_PROMOTION_GUIDE.md` for safely promoting one known owner/developer account by email in Supabase SQL Editor. Use `company_owner` with `active` status for routine development and reserve `admin` for short admin-specific testing.
 - Supabase client foundation in `frontend/src/lib/supabase` with defensive public env handling. No auth, route protection, database tables, or mock workflow replacement has been implemented yet.
 - Auth readiness helpers in `frontend/src/lib/auth` with planned roles, permission helpers, and null-safe session snapshots. These helpers are not wired into routes or UI yet.
 - Mock-safe public auth UI at `/login` and `/signup`. These pages can defensively call Supabase Auth when env vars are configured, but they do not create profiles, persist roles, protect routes, or change dashboard access yet.
@@ -61,12 +62,13 @@ Recommended next steps:
 
 1. Use `docs/BACKEND_ARCHITECTURE_PLAN.md`, `docs/AUTH_ROLES_PLAN.md`, `docs/SUPABASE_DATA_MODEL_PLAN.md`, `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md`, and `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md` to guide Supabase schema, auth, RLS, dispatch locking, community persistence, analytics, Stripe, and AI/RAG implementation.
 2. Follow `docs/SUPABASE_SETUP_GUIDE.md` before creating a Supabase project, configuring `frontend/.env.local`, or manually applying the first profiles/roles migration.
-3. Add authentication and protected dashboard routes.
-4. Convert public intake and dashboard lead workflows into validated server-side mutations.
-5. Add real repair case persistence, uploads, and draft/edit states.
-6. Add dispatch locking for open jobs before any live technician claiming.
-7. Add private technician community persistence, moderation, and permission checks.
-8. Add AI/translation boundaries server-side only, with manual review before publishing or indexing.
+3. Follow `docs/OWNER_ADMIN_PROMOTION_GUIDE.md` before manually promoting the owner/developer account. Do not add owner/admin promotion to public signup.
+4. Add authentication and protected dashboard routes.
+5. Convert public intake and dashboard lead workflows into validated server-side mutations.
+6. Add real repair case persistence, uploads, and draft/edit states.
+7. Add dispatch locking for open jobs before any live technician claiming.
+8. Add private technician community persistence, moderation, and permission checks.
+9. Add AI/translation boundaries server-side only, with manual review before publishing or indexing.
 
 ## Backend planning reference
 
@@ -120,6 +122,10 @@ Read `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md` before adding API routes, E
 
 Read `docs/SUPABASE_SETUP_GUIDE.md` before creating a Supabase project, filling `frontend/.env.local`, or applying the first profiles/roles migration. It explains where to find the project URL and anon key, why the service role key must never be used in the frontend, how to review `supabase/migrations/0001_profiles_roles.sql`, safe manual migration options, post-apply checks, signup/login testing, profile row verification, rollback caution, and production safety checks.
 
+## Owner/admin promotion reference
+
+Read `docs/OWNER_ADMIN_PROMOTION_GUIDE.md` before manually changing a project owner/developer role in `public.profiles`. It explains why owner/admin roles must never come from public signup, the difference between `technician`, `company_owner`, and `admin`, the recommended development role, SQL Editor promotion templates, verification queries, rollback SQL, and safety warnings.
+
 ## Important routes
 
 - `/`
@@ -171,6 +177,7 @@ Read `docs/SUPABASE_SETUP_GUIDE.md` before creating a Supabase project, filling 
 - Profile role/status helpers are readiness plumbing only. Real profile reads require `supabase/migrations/0001_profiles_roles.sql` to be reviewed/applied, and dashboard access still needs server checks, middleware or route protection, and RLS.
 - `/dashboard/dev/supabase-check` is a local development verification page only. It uses the browser anon client, does not use service-role keys, does not create missing profiles, does not apply migrations, and does not protect routes.
 - Dashboard profile role/status display uses the browser anon client and user-owned profile read policy. It must remain display-only until protected routes, server authorization, and RLS are fully implemented.
+- Owner/admin role promotion is manual documentation only. Do not add public signup paths or frontend controls that grant `company_owner` or `admin`.
 - The profiles/roles SQL migration is draft-only. Do not apply it without reviewing triggers, grants, RLS policies, role defaults, and admin update paths.
 - AI article, TechAdvisor, translation, and RAG features are mock-only until server-side API boundaries and privacy filters are implemented.
 - Open job acceptance is local UI state only. Production claiming requires server-side lock/assignment logic.
