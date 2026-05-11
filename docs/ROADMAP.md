@@ -26,6 +26,7 @@
   - Task 45: Draft Supabase profiles/roles migration. The SQL file exists for review but has not been applied to any database.
   - Task 46: Frontend profile role/status read helpers and typed `public.profiles` placeholder shape. Profile reads remain inactive until the profiles migration is reviewed/applied and helpers are intentionally not wired into route protection yet.
   - Task 47: Supabase setup guide for creating a project, configuring frontend env vars, reviewing/applying the first migration safely, and verifying profile row creation. Documentation only; no migration has been applied.
+  - Task 48: Local dashboard Supabase verification helper at `/dashboard/dev/supabase-check` for env/client/session/profile checks after manual migration setup. This is direct-URL development tooling only, not production admin tooling or route protection.
 
 ## Phase 2: Repair case workflow
 
@@ -49,6 +50,7 @@
 - Review `supabase/migrations/0001_profiles_roles.sql` before applying the first profiles/roles migration.
 - Follow `docs/SUPABASE_SETUP_GUIDE.md` before connecting a Supabase project or manually applying the first profiles/roles migration.
 - Use `frontend/src/lib/auth/profile.ts` as the future profile role/status sync starting point after migration `0001_profiles_roles.sql` is reviewed and applied. It currently falls back safely when Supabase, sessions, or the profiles table are unavailable.
+- Use `/dashboard/dev/supabase-check` only as a local verification helper after configuring Supabase env vars and manually applying the reviewed profiles migration. Do not expose it as production admin tooling.
 - Add Supabase authentication.
 - Create database tables for users, technician profiles, repair cases, parts, photos, and article drafts.
 - Add tables for marketplace leads, open jobs, technician availability, technician community discussions, messages, accepted solutions, knowledge cases, and reputation events.
