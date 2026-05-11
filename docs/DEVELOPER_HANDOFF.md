@@ -55,6 +55,7 @@ npm run build -- --webpack
 - Frontend profile role/status readiness in `frontend/src/lib/auth/profile.ts` and typed `public.profiles` placeholders in `frontend/src/lib/supabase/types.ts`. These helpers are fallback-safe and are not wired into route protection or mock workflows yet.
 - Local Supabase verification helper at `/dashboard/dev/supabase-check`. It checks public env readiness, browser client initialization, auth session state, and the current user's profile row after the first migration is manually applied. It is not linked in navigation and is not production admin tooling.
 - Dashboard auth badge role/status display can now read the authenticated user's `public.profiles` row when available. This only changes the displayed role/status; it does not protect routes or hide dashboard features.
+- Route protection readiness helpers in `frontend/src/lib/auth/permissions.ts` now support typed checks for authenticated sessions, profile presence, active profile status, role membership, and dashboard access eligibility. Dashboard auth notices are visible for logged-out/demo mode, missing profiles, and pending/suspended/rejected profile statuses, but they are intentionally non-blocking.
 
 ## What to build next
 
@@ -63,7 +64,7 @@ Recommended next steps:
 1. Use `docs/BACKEND_ARCHITECTURE_PLAN.md`, `docs/AUTH_ROLES_PLAN.md`, `docs/SUPABASE_DATA_MODEL_PLAN.md`, `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md`, and `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md` to guide Supabase schema, auth, RLS, dispatch locking, community persistence, analytics, Stripe, and AI/RAG implementation.
 2. Follow `docs/SUPABASE_SETUP_GUIDE.md` before creating a Supabase project, configuring `frontend/.env.local`, or manually applying the first profiles/roles migration.
 3. Follow `docs/OWNER_ADMIN_PROMOTION_GUIDE.md` before manually promoting the owner/developer account. Do not add owner/admin promotion to public signup.
-4. Add authentication and protected dashboard routes.
+4. Add server/middleware-backed protected dashboard routes using the existing route protection readiness helpers as UX support only.
 5. Convert public intake and dashboard lead workflows into validated server-side mutations.
 6. Add real repair case persistence, uploads, and draft/edit states.
 7. Add dispatch locking for open jobs before any live technician claiming.
@@ -126,6 +127,28 @@ Read `docs/SUPABASE_SETUP_GUIDE.md` before creating a Supabase project, filling 
 
 Read `docs/OWNER_ADMIN_PROMOTION_GUIDE.md` before manually changing a project owner/developer role in `public.profiles`. It explains why owner/admin roles must never come from public signup, the difference between `technician`, `company_owner`, and `admin`, the recommended development role, SQL Editor promotion templates, verification queries, rollback SQL, and safety warnings.
 
+## Route protection readiness
+
+Ready now:
+
+- `frontend/src/lib/auth/permissions.ts` exposes typed helper checks for session presence, profile presence, active profile status, role membership, and dashboard access eligibility.
+- `DashboardAuthStatus` displays non-blocking dashboard notices when the user is logged out, a profile row is missing, or the profile status is pending, suspended, or rejected.
+- Existing profile reads continue to use the browser anon client and user-scoped RLS policies only.
+
+Intentionally not enforced yet:
+
+- No dashboard redirects.
+- No middleware.
+- No server-side route gates.
+- No role-aware navigation hiding.
+- No profile creation from the frontend.
+
+Next route-protection task:
+
+- Add middleware or server-side route checks for `/dashboard` after the desired redirect behavior is approved.
+- Keep `/dashboard/dev/supabase-check` reachable by direct URL for local setup verification unless a separate development-only access pattern is introduced.
+- Continue treating frontend permission helpers as UX support only; Supabase RLS and server checks must enforce production access.
+
 ## Important routes
 
 - `/`
@@ -177,6 +200,7 @@ Read `docs/OWNER_ADMIN_PROMOTION_GUIDE.md` before manually changing a project ow
 - Profile role/status helpers are readiness plumbing only. Real profile reads require `supabase/migrations/0001_profiles_roles.sql` to be reviewed/applied, and dashboard access still needs server checks, middleware or route protection, and RLS.
 - `/dashboard/dev/supabase-check` is a local development verification page only. It uses the browser anon client, does not use service-role keys, does not create missing profiles, does not apply migrations, and does not protect routes.
 - Dashboard profile role/status display uses the browser anon client and user-owned profile read policy. It must remain display-only until protected routes, server authorization, and RLS are fully implemented.
+- Route protection readiness warnings in the dashboard are advisory only. They should help developers see future access states, but they do not block, redirect, or authorize access.
 - Owner/admin role promotion is manual documentation only. Do not add public signup paths or frontend controls that grant `company_owner` or `admin`.
 - The profiles/roles SQL migration is draft-only. Do not apply it without reviewing triggers, grants, RLS policies, role defaults, and admin update paths.
 - AI article, TechAdvisor, translation, and RAG features are mock-only until server-side API boundaries and privacy filters are implemented.

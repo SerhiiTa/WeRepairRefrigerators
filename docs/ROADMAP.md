@@ -29,6 +29,7 @@
   - Task 48: Local dashboard Supabase verification helper at `/dashboard/dev/supabase-check` for env/client/session/profile checks after manual migration setup. This is direct-URL development tooling only, not production admin tooling or route protection.
   - Task 49: Dashboard auth badge now displays the authenticated user's `public.profiles` role/status when available. This is display-only role sync; dashboard routes remain mock-safe and unprotected.
   - Task 50: Owner/admin promotion guide for safely promoting a known development account by email in Supabase SQL Editor. Documentation only; no SQL was applied and no frontend behavior changed.
+  - Task 51: Route protection foundation with typed auth/profile guard helpers and non-blocking dashboard notices for logged-out, missing-profile, pending, suspended, or rejected states. No redirects, middleware, route gating, migrations, or mock workflow changes yet.
 
 ## Phase 2: Repair case workflow
 
@@ -55,6 +56,8 @@
 - Use `/dashboard/dev/supabase-check` only as a local verification helper after configuring Supabase env vars and manually applying the reviewed profiles migration. Do not expose it as production admin tooling.
 - Dashboard role/status display can read from `public.profiles` when available, but it is still UX-only. Do not treat it as route protection or authorization.
 - Use `docs/OWNER_ADMIN_PROMOTION_GUIDE.md` before manually promoting the owner/developer account. Prefer `company_owner` with `active` status for routine development; reserve `admin` for short admin-specific testing.
+- Use the route protection readiness helpers in `frontend/src/lib/auth/permissions.ts` for future guard implementation. They currently support typed checks such as authenticated session presence, profile presence, active profile status, role membership, and dashboard access eligibility.
+- Dashboard auth notices now surface logged-out/demo mode, missing profile rows, and inactive profile statuses, but these warnings are intentionally non-blocking. The next route protection task should add server/middleware redirects only after the desired rollout behavior is approved.
 - Add Supabase authentication.
 - Create database tables for users, technician profiles, repair cases, parts, photos, and article drafts.
 - Add tables for marketplace leads, open jobs, technician availability, technician community discussions, messages, accepted solutions, knowledge cases, and reputation events.

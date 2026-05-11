@@ -1,5 +1,24 @@
 import { isVerifiedTechnicianRole } from "./roles";
-import type { AppRole, PermissionSubject } from "./types";
+import type {
+  AppRole,
+  AuthProfileStatus,
+  AuthSessionSnapshot,
+  PermissionSubject,
+} from "./types";
+
+type ProfilePresenceSubject =
+  | {
+      id: string | null;
+    }
+  | null
+  | undefined;
+
+type ProfileStatusSubject =
+  | {
+      status: AuthProfileStatus;
+    }
+  | null
+  | undefined;
 
 function getSubjectRole(subject: PermissionSubject | null): AppRole {
   if (!subject) {
@@ -11,6 +30,31 @@ function getSubjectRole(subject: PermissionSubject | null): AppRole {
   }
 
   return subject.role;
+}
+
+export function isAuthenticated(
+  session: AuthSessionSnapshot | null | undefined,
+): session is AuthSessionSnapshot {
+  return Boolean(session?.user.id);
+}
+
+export function hasProfile(
+  profile: ProfilePresenceSubject,
+): profile is { id: string } {
+  return typeof profile?.id === "string" && profile.id.length > 0;
+}
+
+export function isActiveProfile(profile: ProfileStatusSubject): boolean {
+  return profile?.status === "active" || profile?.status === "verified";
+}
+
+export function hasRole(
+  subject: PermissionSubject | null | undefined,
+  roles: AppRole | readonly AppRole[],
+): boolean {
+  const allowedRoles = Array.isArray(roles) ? roles : [roles];
+
+  return allowedRoles.includes(getSubjectRole(subject ?? null));
 }
 
 function hasVerifiedTechnicianAccess(subject: PermissionSubject | null): boolean {
@@ -26,15 +70,13 @@ function hasVerifiedTechnicianAccess(subject: PermissionSubject | null): boolean
 }
 
 export function canAccessDashboard(subject: PermissionSubject | null): boolean {
-  const role = getSubjectRole(subject);
-
-  return (
-    role === "technician" ||
-    role === "verified_technician" ||
-    role === "expert_technician" ||
-    role === "company_owner" ||
-    role === "admin"
-  );
+  return hasRole(subject, [
+    "technician",
+    "verified_technician",
+    "expert_technician",
+    "company_owner",
+    "admin",
+  ]);
 }
 
 export function canAccessOpenJobs(subject: PermissionSubject | null): boolean {

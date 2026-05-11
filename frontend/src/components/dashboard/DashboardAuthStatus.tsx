@@ -12,6 +12,8 @@ import {
   getCurrentUserProfile,
   mapProfileToDashboardIdentity,
 } from "@/lib/auth/profile";
+import { isActiveProfile } from "@/lib/auth/permissions";
+import type { AuthProfileStatus } from "@/lib/auth/types";
 import {
   getSupabaseBrowserClient,
   isSupabaseBrowserConfigured,
@@ -21,15 +23,24 @@ type ProfileSyncState =
   | {
       status: "not_checked";
       label: string;
+      profileStatus: null;
     }
   | {
       status: "profile_found";
       label: string;
+      profileStatus: AuthProfileStatus;
     }
   | {
       status: "profile_missing";
       label: string;
+      profileStatus: null;
     };
+
+type RouteProtectionNotice = {
+  tone: "info" | "warning" | "danger";
+  title: string;
+  description: string;
+};
 
 const modeCopy: Record<
   DashboardIdentityState["mode"],
@@ -77,6 +88,7 @@ export function DashboardAuthStatus() {
     useState<ProfileSyncState>({
       status: "not_checked",
       label: "Profile not checked",
+      profileStatus: null,
     });
 
   useEffect(() => {
@@ -105,6 +117,7 @@ export function DashboardAuthStatus() {
         setProfileSyncState({
           status: "profile_found",
           label: `Profile status: ${formatProfileStatus(result.profile.status)}`,
+          profileStatus: result.profile.status,
         });
         return;
       }
@@ -119,6 +132,7 @@ export function DashboardAuthStatus() {
         setProfileSyncState({
           status: "profile_missing",
           label: "Profile not found",
+          profileStatus: null,
         });
         return;
       }
@@ -135,6 +149,7 @@ export function DashboardAuthStatus() {
           result.status === "supabase_unavailable"
             ? "Profile not checked"
             : "Profile not checked until login",
+        profileStatus: null,
       });
     }
 
@@ -146,6 +161,7 @@ export function DashboardAuthStatus() {
       setProfileSyncState({
         status: "not_checked",
         label: "Profile not checked",
+        profileStatus: null,
       });
       void refreshIdentity();
     }).data.subscription;
@@ -157,6 +173,10 @@ export function DashboardAuthStatus() {
   }, []);
 
   const copy = modeCopy[identityState.mode];
+  const routeProtectionNotice = getRouteProtectionNotice(
+    identityState,
+    profileSyncState,
+  );
   const accessHighlights = [
     identityState.accessPreview.canAccessOpenJobs ? "Open jobs" : null,
     identityState.accessPreview.canAccessPrivateCommunity ? "Community" : null,
@@ -175,7 +195,9 @@ export function DashboardAuthStatus() {
           </p>
           <p className="mt-1 text-xs text-current/70">
             Role: {identityState.roleLabel}
-            {accessHighlights.length > 0 ? ` | Preview: ${accessHighlights.join(", ")}` : ""}
+            {accessHighlights.length > 0
+              ? ` | Preview: ${accessHighlights.join(", ")}`
+              : ""}
           </p>
           {identityState.mode === "authenticated" ? (
             <p className="mt-1 text-xs text-current/70">
@@ -201,6 +223,70 @@ export function DashboardAuthStatus() {
           </div>
         )}
       </div>
+
+      {routeProtectionNotice ? (
+        <div
+          className={`mt-3 rounded-md border px-3 py-2 text-xs ${
+            routeProtectionNotice.tone === "danger"
+              ? "border-rose-300/25 bg-rose-300/10 text-rose-100"
+              : routeProtectionNotice.tone === "warning"
+                ? "border-amber-300/25 bg-amber-300/10 text-amber-100"
+                : "border-cyan-300/20 bg-cyan-300/10 text-cyan-100"
+          }`}
+        >
+          <p className="font-black uppercase tracking-[0.16em]">
+            {routeProtectionNotice.title}
+          </p>
+          <p className="mt-1 text-current/75">
+            {routeProtectionNotice.description}
+          </p>
+        </div>
+      ) : null}
     </aside>
   );
+}
+
+function getRouteProtectionNotice(
+  identityState: DashboardIdentityState,
+  profileSyncState: ProfileSyncState,
+): RouteProtectionNotice | null {
+  if (identityState.mode === "guest_demo") {
+    return {
+      tone: "info",
+      title: "Demo access",
+      description:
+        "Dashboard routes remain open in this mock-safe phase. Log in to test role and profile-aware UI before route protection is enforced.",
+    };
+  }
+
+  if (identityState.mode === "authenticated") {
+    if (profileSyncState.status === "profile_missing") {
+      return {
+        tone: "warning",
+        title: "Profile missing",
+        description:
+          "A session exists, but no matching profile row was found. The dashboard stays available for now; production access will require a valid profile.",
+      };
+    }
+
+    if (
+      profileSyncState.status === "profile_found" &&
+      !isActiveProfile({ status: profileSyncState.profileStatus })
+    ) {
+      const isSuspendedOrRejected =
+        profileSyncState.profileStatus === "suspended" ||
+        profileSyncState.profileStatus === "rejected";
+
+      return {
+        tone: isSuspendedOrRejected ? "danger" : "warning",
+        title: `${formatProfileStatus(profileSyncState.profileStatus)} profile`,
+        description:
+          profileSyncState.profileStatus === "pending"
+            ? "This profile is pending. Future protected dashboard access may be limited until approval or verification is complete."
+            : "This profile status should not receive production dashboard access until reviewed. Current access is still mock-safe and non-blocking.",
+      };
+    }
+  }
+
+  return null;
 }
