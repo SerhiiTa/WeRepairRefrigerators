@@ -18,6 +18,7 @@
   - Task 37: Auth and role-based access planning for public visitors, customers, technicians, verified technicians, expert technicians, company owners, and admins.
   - Task 38: Supabase data model planning for profiles, companies, service requests, leads, jobs, open jobs, repair cases, community, reputation, public profiles, and audit logs.
   - Task 39: RLS and permission architecture planning for table policies, public/private boundaries, company isolation, open jobs, community, audit, and future API security.
+  - Task 40: API and backend service architecture planning for thin backend layers, API domains, uploads, AI, realtime, payments, scaling, security, and observability.
 
 ## Phase 2: Repair case workflow
 
@@ -33,6 +34,7 @@
 - Use `docs/AUTH_ROLES_PLAN.md` as the implementation planning reference before adding auth, middleware, protected dashboard routes, role-aware navigation, or RLS role policies.
 - Use `docs/SUPABASE_DATA_MODEL_PLAN.md` as the schema planning reference before creating tables, migrations, storage policies, or RLS policies.
 - Use `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md` as the permission planning reference before writing RLS policies, server mutations, admin tools, or protected API routes.
+- Use `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md` as the service/API planning reference before adding API routes, Edge Functions, upload flows, webhooks, AI endpoints, realtime channels, or background jobs.
 - Add Supabase authentication.
 - Create database tables for users, technician profiles, repair cases, parts, photos, and article drafts.
 - Add tables for marketplace leads, open jobs, technician availability, technician community discussions, messages, accepted solutions, knowledge cases, and reputation events.
@@ -78,6 +80,14 @@ RLS planning order:
 4. Add verified-technician policies for open jobs and private community.
 5. Add admin-only policies for audit logs, role changes, verification, and moderation.
 6. Add tests for cross-user, cross-company, and public/private leakage before production.
+
+API/backend service order:
+
+1. Start with thin server-side validation around public intake and profile/bootstrap workflows.
+2. Add protected mutations for leads, jobs, repair cases, and open job claiming.
+3. Add signed upload flows and private storage policies.
+4. Add webhook processing for Stripe only when billing is approved.
+5. Add realtime, queue, AI, and dedicated services only after core persistence and permissions are stable.
 
 ## Phase 4: AI SEO article generation
 

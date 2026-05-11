@@ -19,6 +19,7 @@
 - Auth/role planning is documented in `docs/AUTH_ROLES_PLAN.md` and should be reviewed before adding login, signup, route protection, role-aware navigation, or role-based RLS policies.
 - Supabase data model planning is documented in `docs/SUPABASE_DATA_MODEL_PLAN.md` and should be reviewed before creating tables, migrations, storage policies, RLS policies, or persistence code.
 - RLS and permission architecture is documented in `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md` and should be reviewed before writing RLS policies, server mutations, admin tools, protected API routes, or storage access rules.
+- API/backend service planning is documented in `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md` and should be reviewed before adding API routes, Edge Functions, upload flows, webhooks, AI endpoints, realtime channels, or background jobs.
 
 ## AI content safety
 
@@ -62,6 +63,7 @@ Before adding real-time messaging:
 
 Before adding uploads:
 
+- Review `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md`.
 - Restrict file types.
 - Restrict file sizes.
 - Store files in private buckets unless public access is required.
@@ -70,6 +72,7 @@ Before adding uploads:
 
 Before adding AI generation:
 
+- Review `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md`.
 - Keep model API keys server-side.
 - Rate limit generation requests.
 - Log draft status and reviewer approval.

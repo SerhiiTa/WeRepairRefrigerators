@@ -44,12 +44,13 @@ npm run build -- --webpack
 - Auth and role-based access planning in `docs/AUTH_ROLES_PLAN.md`.
 - Supabase data model planning in `docs/SUPABASE_DATA_MODEL_PLAN.md`.
 - RLS and permission architecture planning in `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md`.
+- API and backend service architecture planning in `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md`.
 
 ## What to build next
 
 Recommended next steps:
 
-1. Use `docs/BACKEND_ARCHITECTURE_PLAN.md`, `docs/AUTH_ROLES_PLAN.md`, `docs/SUPABASE_DATA_MODEL_PLAN.md`, and `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md` to guide Supabase schema, auth, RLS, dispatch locking, community persistence, analytics, Stripe, and AI/RAG implementation.
+1. Use `docs/BACKEND_ARCHITECTURE_PLAN.md`, `docs/AUTH_ROLES_PLAN.md`, `docs/SUPABASE_DATA_MODEL_PLAN.md`, `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md`, and `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md` to guide Supabase schema, auth, RLS, dispatch locking, community persistence, analytics, Stripe, and AI/RAG implementation.
 2. Add authentication and protected dashboard routes.
 3. Convert public intake and dashboard lead workflows into validated server-side mutations.
 4. Add real repair case persistence, uploads, and draft/edit states.
@@ -95,6 +96,15 @@ Read `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md` before writing RLS policies, ser
 - Table-by-table SELECT/INSERT/UPDATE/DELETE strategy for core private tables.
 - Public marketplace, open jobs, private community, audit/admin, and future API security rules.
 - Open questions for community moderation, customer portal access, open job payment gates, and retention policies.
+
+## API/backend service planning reference
+
+Read `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md` before adding API routes, Edge Functions, upload flows, webhooks, AI endpoints, realtime channels, or background jobs. It defines:
+
+- Thin-backend philosophy and progressive extraction strategy.
+- Backend layers for Next.js, Supabase Database/Auth/Storage/Realtime, Edge Functions, AI, queues, and future services.
+- API domain boundaries for auth, profiles, onboarding, requests, leads, jobs, repair cases, uploads, community, reputation, admin, payments, and AI workflows.
+- Upload, AI, realtime, payments, scaling, security, monitoring, and observability planning.
 
 ## Important routes
 

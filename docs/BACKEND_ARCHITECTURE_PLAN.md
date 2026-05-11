@@ -14,7 +14,7 @@ All current workflows are static or local UI state. There is no backend, authent
 
 The future backend should turn the current mock platform into a real SaaS marketplace while preserving public/dashboard/community boundaries.
 
-For table-level schema planning, use `docs/SUPABASE_DATA_MODEL_PLAN.md` before creating migrations, storage policies, or RLS policies. For permission policy planning, use `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md` before writing RLS policies, protected mutations, admin tools, or API routes.
+For table-level schema planning, use `docs/SUPABASE_DATA_MODEL_PLAN.md` before creating migrations, storage policies, or RLS policies. For permission policy planning, use `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md` before writing RLS policies, protected mutations, admin tools, or API routes. For service/API boundary planning, use `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md` before adding API routes, Edge Functions, uploads, webhooks, AI endpoints, realtime, or background jobs.
 
 Planned backend capabilities:
 
@@ -26,6 +26,7 @@ Planned backend capabilities:
 - Server-side mutations for leads, repair cases, open job claiming, community replies, accepted solutions, reputation events, and payments.
 - AI/RAG later, server-side only, with privacy filtering and manual review.
 - Stripe later for subscriptions, paid leads, premium placement, expert community access, and payout-compatible records.
+- Thin backend first, with dedicated services, queues, realtime, and heavy AI processing extracted only after core persistence and permission boundaries are stable.
 
 ## User Roles
 
