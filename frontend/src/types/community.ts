@@ -75,3 +75,22 @@ export type CommunityFilters = {
   language: "All languages" | CommunityLanguage;
   priority: "All priorities" | CommunityDiscussionPriority;
 };
+
+export type RepairHelpRequestDraft = {
+  applianceType: string;
+  brand: string;
+  modelNumber: string;
+  serialNumber: string;
+  symptom: string;
+  customerComplaint: string;
+  whatWasChecked: string;
+  suspectedCause: string;
+  errorCodes: string;
+  partsAlreadyReplaced: string;
+  urgency: CommunityDiscussionPriority | "";
+  language: CommunityLanguage | "";
+  serviceArea: string;
+  visibility: CommunityVisibility;
+  allowAISummaryPreview: boolean;
+  allowTranslatedPreview: boolean;
+};
