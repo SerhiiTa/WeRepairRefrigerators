@@ -10,6 +10,8 @@ WeRepairRefrigerators is currently a frontend-first Next.js App Router MVP. The 
 
 All current workflows are static or local UI state. There is no backend, authentication, database persistence, file storage, live dispatch, realtime chat, Stripe, AI API, translation API, or vector/RAG system connected yet.
 
+Task 41 added the first practical Supabase client foundation in `frontend/src/lib/supabase`. These helpers only create typed Supabase clients when `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are configured, return `null` when missing, and do not change current mock-only app behavior.
+
 ## Backend Goals
 
 The future backend should turn the current mock platform into a real SaaS marketplace while preserving public/dashboard/community boundaries.
@@ -21,6 +23,7 @@ Planned backend capabilities:
 - Supabase Postgres as the source of truth.
 - Supabase Auth for customer, technician, company owner, and admin identity.
 - Role-based permissions backed by Row Level Security.
+- Existing frontend Supabase helpers should remain lightweight until auth, RLS, and persistence work begins.
 - Supabase Storage for private repair photos, appliance labels, technician assets, and future public images.
 - Realtime only after auth, RLS, moderation, and rate limits are in place.
 - Server-side mutations for leads, repair cases, open job claiming, community replies, accepted solutions, reputation events, and payments.

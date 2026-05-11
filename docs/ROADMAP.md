@@ -19,6 +19,7 @@
   - Task 38: Supabase data model planning for profiles, companies, service requests, leads, jobs, open jobs, repair cases, community, reputation, public profiles, and audit logs.
   - Task 39: RLS and permission architecture planning for table policies, public/private boundaries, company isolation, open jobs, community, audit, and future API security.
   - Task 40: API and backend service architecture planning for thin backend layers, API domains, uploads, AI, realtime, payments, scaling, security, and observability.
+  - Task 41: Supabase client foundation with defensive env handling and typed placeholders. No auth, tables, route protection, or mock workflow replacement yet.
 
 ## Phase 2: Repair case workflow
 
@@ -35,6 +36,7 @@
 - Use `docs/SUPABASE_DATA_MODEL_PLAN.md` as the schema planning reference before creating tables, migrations, storage policies, or RLS policies.
 - Use `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md` as the permission planning reference before writing RLS policies, server mutations, admin tools, or protected API routes.
 - Use `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md` as the service/API planning reference before adding API routes, Edge Functions, upload flows, webhooks, AI endpoints, realtime channels, or background jobs.
+- Use the existing `frontend/src/lib/supabase` helpers as the starting point for future client/server Supabase access. They are intentionally inert when public env vars are missing.
 - Add Supabase authentication.
 - Create database tables for users, technician profiles, repair cases, parts, photos, and article drafts.
 - Add tables for marketplace leads, open jobs, technician availability, technician community discussions, messages, accepted solutions, knowledge cases, and reputation events.

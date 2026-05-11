@@ -45,6 +45,7 @@ npm run build -- --webpack
 - Supabase data model planning in `docs/SUPABASE_DATA_MODEL_PLAN.md`.
 - RLS and permission architecture planning in `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md`.
 - API and backend service architecture planning in `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md`.
+- Supabase client foundation in `frontend/src/lib/supabase` with defensive public env handling. No auth, route protection, database tables, or mock workflow replacement has been implemented yet.
 
 ## What to build next
 
@@ -137,11 +138,13 @@ Read `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md` before adding API routes, E
 - `frontend/src/data/mock-reputation.ts` and `frontend/src/types/reputation.ts`
 - `frontend/src/lib/mock-repair-cases.ts` and `frontend/src/types/repair-case.ts`
 - `frontend/src/lib/public-seo-data.ts` and `frontend/src/types/public-seo.ts`
+- `frontend/src/lib/supabase/client.ts`, `frontend/src/lib/supabase/server.ts`, `frontend/src/lib/supabase/env.ts`, and `frontend/src/lib/supabase/types.ts`
 
 ## Integration boundaries
 
 - Public routes must not read private dashboard repair cases or community data.
 - Technician community routes must remain dashboard-only and require auth before production.
+- Supabase helpers currently return `null` when `NEXT_PUBLIC_SUPABASE_URL` or `NEXT_PUBLIC_SUPABASE_ANON_KEY` are missing, so the mock-only app can continue building without live backend configuration.
 - AI article, TechAdvisor, translation, and RAG features are mock-only until server-side API boundaries and privacy filters are implemented.
 - Open job acceptance is local UI state only. Production claiming requires server-side lock/assignment logic.
 - Lead conversion previews do not create real repair case data yet.
