@@ -15,6 +15,7 @@ import {
   publicSymptoms,
 } from "@/lib/public-seo-data";
 import { buildSeoPageMetadata, toNextMetadata } from "@/lib/seo-utils";
+import { buildScheduleServiceHref } from "@/lib/schedule-service";
 
 type BrandPageProps = {
   params: Promise<{
@@ -96,6 +97,7 @@ export default async function BrandPage({ params }: BrandPageProps) {
       <PublicCtaSection
         title={`Schedule ${brand.name} refrigerator repair in Houston.`}
         description="Use public guidance to understand the symptom, then bring in a qualified refrigerator technician for diagnosis and repair."
+        primaryHref={buildScheduleServiceHref({ brand: brand.name })}
         variant="light"
       />
     </main>

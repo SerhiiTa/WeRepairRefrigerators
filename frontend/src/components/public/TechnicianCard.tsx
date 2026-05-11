@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { TechnicianTrustStats } from "@/components/public/TechnicianTrustStats";
+import { buildScheduleServiceHref } from "@/lib/schedule-service";
 import type { TechnicianProfilePreview } from "@/types/public-seo";
 
 type TechnicianCardProps = {
@@ -47,12 +48,12 @@ export function TechnicianCard({ technician }: TechnicianCardProps) {
           >
             View Profile
           </Link>
-          <button
-            type="button"
+          <Link
+            href={buildScheduleServiceHref({ technician: technician.slug })}
             className="inline-flex min-h-12 items-center justify-center rounded-full border border-blue-200 bg-white px-5 py-3 text-sm font-black text-blue-800 shadow-sm"
           >
             Request This Technician
-          </button>
+          </Link>
         </div>
       </div>
     </article>

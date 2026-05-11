@@ -30,6 +30,7 @@ export function PublicSiteHeader({ className = "" }: PublicSiteHeaderProps) {
             ["Technicians", "/technicians"],
             ["Find Technician", "/find-technician"],
             ["Repair Cases", "/repair-cases"],
+            ["Schedule Service", "/schedule-service"],
           ].map(([label, href]) => (
             <Link
               key={href}

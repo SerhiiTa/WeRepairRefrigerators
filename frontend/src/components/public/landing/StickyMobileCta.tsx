@@ -11,7 +11,7 @@ export function StickyMobileCta() {
           Call now
         </a>
         <Link
-          href="/services/refrigerator-repair"
+          href="/schedule-service"
           className="flex min-h-12 items-center justify-center rounded-xl border border-slate-300 text-sm font-black text-slate-900"
         >
           Schedule

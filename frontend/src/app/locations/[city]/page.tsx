@@ -13,6 +13,7 @@ import {
 } from "@/lib/public-seo-data";
 import { PublicRepairProcess } from "@/components/public/sections/PublicRepairProcess";
 import { buildSeoPageMetadata, toNextMetadata } from "@/lib/seo-utils";
+import { buildScheduleServiceHref } from "@/lib/schedule-service";
 
 type LocationPageProps = {
   params: Promise<{
@@ -53,6 +54,8 @@ export default async function LocationPage({ params }: LocationPageProps) {
     notFound();
   }
 
+  const locationZip = "zipCodes" in location ? location.zipCodes?.[0] : undefined;
+
   return (
     <main className="min-h-screen bg-white text-slate-950">
       <PublicPageHeader
@@ -91,6 +94,7 @@ export default async function LocationPage({ params }: LocationPageProps) {
       <PublicCtaSection
         title={`Refrigerator repair guidance for ${location.name}.`}
         description="Find location-specific repair information and move toward service when a refrigerator needs a professional diagnosis."
+        primaryHref={buildScheduleServiceHref({ zip: locationZip })}
         variant="light"
       />
     </main>

@@ -3,14 +3,15 @@
 import { useMemo, useState } from "react";
 
 import { TechnicianDiscoveryCard } from "@/components/public/TechnicianDiscoveryCard";
-import { TechnicianLeadRequestPanel } from "@/components/public/TechnicianLeadRequestPanel";
 import { getTechnicianAvailabilityContext } from "@/data/mock-technician-availability";
 import {
   getTechniciansByService,
   getTechniciansBySpecialty,
   getTechniciansByZip,
 } from "@/lib/public-seo-data";
+import { buildScheduleServiceHref } from "@/lib/schedule-service";
 import type { TechnicianProfilePreview } from "@/types/public-seo";
+import Link from "next/link";
 
 type TechnicianZipDiscoveryProps = {
   technicians: TechnicianProfilePreview[];
@@ -55,9 +56,6 @@ export function TechnicianZipDiscovery({ technicians }: TechnicianZipDiscoveryPr
   const [zipCode, setZipCode] = useState("77024");
   const [service, setService] = useState("Any service");
   const [specialty, setSpecialty] = useState("Any brand or specialty");
-  const [selectedTechnician, setSelectedTechnician] =
-    useState<TechnicianProfilePreview | null>(null);
-  const [isLeadSubmitted, setIsLeadSubmitted] = useState(false);
 
   const normalizedZip = zipCode.trim();
 
@@ -142,10 +140,6 @@ export function TechnicianZipDiscovery({ technicians }: TechnicianZipDiscoveryPr
                 <TechnicianDiscoveryCard
                   availability={getTechnicianAvailabilityContext(technician, normalizedZip)}
                   key={technician.slug}
-                  onRequestTechnician={(selected) => {
-                    setSelectedTechnician(selected);
-                    setIsLeadSubmitted(false);
-                  }}
                   technician={technician}
                   searchedZip={normalizedZip}
                 />
@@ -186,15 +180,26 @@ export function TechnicianZipDiscovery({ technicians }: TechnicianZipDiscoveryPr
             </div>
           </section>
 
-          <TechnicianLeadRequestPanel
-            isSubmitted={isLeadSubmitted}
-            onReset={() => setIsLeadSubmitted(false)}
-            onSubmitSuccess={() => setIsLeadSubmitted(true)}
-            service={service}
-            specialty={specialty}
-            technician={selectedTechnician}
-            zipCode={normalizedZip}
-          />
+          <section className="rounded-3xl border border-blue-100 bg-white p-6 shadow-sm shadow-blue-950/5">
+            <p className="text-sm font-black uppercase tracking-[0.2em] text-blue-700">
+              Unified request flow
+            </p>
+            <h2 className="mt-2 text-2xl font-black text-slate-950">Ready to request service?</h2>
+            <p className="mt-3 leading-7 text-slate-600">
+              Use the shared schedule flow to prepare a mock request with ZIP, service, brand, and
+              technician context.
+            </p>
+            <Link
+              href={buildScheduleServiceHref({
+                zip: normalizedZip,
+                service: service === "Any service" ? undefined : service,
+                brand: specialty === "Any brand or specialty" ? undefined : specialty,
+              })}
+              className="mt-5 inline-flex min-h-12 w-full items-center justify-center rounded-full bg-blue-700 px-5 py-3 text-sm font-black text-white shadow-lg shadow-blue-700/20 transition hover:bg-blue-800"
+            >
+              Schedule Service
+            </Link>
+          </section>
 
           {!hasExactZip ? (
             <section className="rounded-3xl border border-amber-100 bg-amber-50 p-6">

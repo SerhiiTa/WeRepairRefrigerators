@@ -15,6 +15,7 @@ import {
   publicFaqs,
 } from "@/lib/public-seo-data";
 import { buildSeoPageMetadata, toNextMetadata } from "@/lib/seo-utils";
+import { buildScheduleServiceHref } from "@/lib/schedule-service";
 
 type TechnicianPageProps = {
   params: Promise<{
@@ -109,24 +110,24 @@ export default async function TechnicianPage({ params }: TechnicianPageProps) {
               Mock actions only. Live availability and booking are not connected yet.
             </p>
             <div className="mt-5 grid gap-3">
-              <button
-                type="button"
+              <Link
+                href={buildScheduleServiceHref({ technician: technician.slug })}
                 className="rounded-full bg-blue-700 px-5 py-3 text-sm font-black text-white shadow-lg shadow-blue-700/20"
               >
                 Request This Technician
-              </button>
+              </Link>
               <Link
                 href="/repair-cases"
                 className="rounded-full border border-blue-200 bg-white px-5 py-3 text-center text-sm font-black text-blue-800 shadow-sm"
               >
                 View Repair Cases
               </Link>
-              <button
-                type="button"
+              <Link
+                href={buildScheduleServiceHref({ technician: technician.slug })}
                 className="rounded-full border border-blue-200 bg-white px-5 py-3 text-sm font-black text-blue-800 shadow-sm"
               >
                 Check Availability
-              </button>
+              </Link>
             </div>
           </section>
           <TechnicianServiceAreas technician={technician} />
@@ -137,7 +138,7 @@ export default async function TechnicianPage({ params }: TechnicianPageProps) {
         title={`Request ${technician.name} for refrigerator repair.`}
         description="Request, availability, and dispatch controls are mock-only placeholders until booking and account workflows are approved."
         variant="light"
-        primaryHref="/technicians"
+        primaryHref={buildScheduleServiceHref({ technician: technician.slug })}
         primaryLabel="Request This Technician"
         secondaryHref="/repair-cases"
         secondaryLabel="View Repair Cases"

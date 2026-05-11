@@ -3,6 +3,7 @@
 import Link from "next/link";
 
 import { TechnicianTrustStats } from "@/components/public/TechnicianTrustStats";
+import { buildScheduleServiceHref } from "@/lib/schedule-service";
 import type { TechnicianProfilePreview } from "@/types/public-seo";
 import type {
   AvailabilityStatus,
@@ -14,7 +15,6 @@ type TechnicianDiscoveryCardProps = {
   technician: TechnicianProfilePreview;
   searchedZip: string;
   availability: TechnicianAvailabilityContext | null;
-  onRequestTechnician?: (technician: TechnicianProfilePreview) => void;
 };
 
 const availabilityClasses: Record<AvailabilityStatus, string> = {
@@ -34,7 +34,6 @@ export function TechnicianDiscoveryCard({
   technician,
   searchedZip,
   availability,
-  onRequestTechnician,
 }: TechnicianDiscoveryCardProps) {
   const hasExactZip = searchedZip ? technician.zipCodes?.includes(searchedZip) : false;
 
@@ -111,13 +110,15 @@ export function TechnicianDiscoveryCard({
           >
             View Profile
           </Link>
-          <button
-            type="button"
-            onClick={() => onRequestTechnician?.(technician)}
+          <Link
+            href={buildScheduleServiceHref({
+              technician: technician.slug,
+              zip: searchedZip,
+            })}
             className="inline-flex min-h-12 items-center justify-center rounded-full border border-blue-200 bg-white px-5 py-3 text-sm font-black text-blue-800 shadow-sm"
           >
             Request Service
-          </button>
+          </Link>
         </div>
       </div>
     </article>

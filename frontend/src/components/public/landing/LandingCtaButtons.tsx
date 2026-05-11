@@ -14,7 +14,7 @@ export function LandingCtaButtons({ className = "" }: LandingCtaButtonsProps) {
         Call now
       </a>
       <Link
-        href="/services/refrigerator-repair"
+        href="/schedule-service"
         className="inline-flex min-h-12 items-center justify-center rounded-xl border border-slate-300 bg-white px-6 py-3 text-sm font-bold text-slate-900 transition hover:border-blue-300 hover:bg-blue-50"
       >
         Schedule service

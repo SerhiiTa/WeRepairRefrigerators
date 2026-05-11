@@ -13,6 +13,7 @@ import {
 } from "@/lib/public-seo-data";
 import { PublicRepairProcess } from "@/components/public/sections/PublicRepairProcess";
 import { buildSeoPageMetadata, toNextMetadata } from "@/lib/seo-utils";
+import { buildScheduleServiceHref } from "@/lib/schedule-service";
 
 type ServicePageProps = {
   params: Promise<{
@@ -91,6 +92,7 @@ export default async function ServicePage({ params }: ServicePageProps) {
       <PublicCtaSection
         title={`Need ${service.name.toLowerCase()} in Houston?`}
         description="Review the repair category, compare related pages, and schedule service when the appliance needs hands-on diagnosis."
+        primaryHref={buildScheduleServiceHref({ service: service.slug })}
         variant="light"
       />
     </main>

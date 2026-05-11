@@ -13,7 +13,7 @@ type PublicCtaSectionProps = {
 export function PublicCtaSection({
   title = "Built for privacy-first refrigerator repair content.",
   description = "WeRepairRefrigerators keeps public SEO pages focused on brands, symptoms, locations, and technical summaries instead of customer personal data.",
-  primaryHref = "/services/refrigerator-repair",
+  primaryHref = "/schedule-service",
   primaryLabel = "Schedule refrigerator service",
   secondaryHref = "/repair-cases",
   secondaryLabel = "View repair examples",
