@@ -13,6 +13,14 @@ export const dashboardNavigationItems: DashboardNavigationItem[] = [
     href: "/dashboard/repair-cases",
   },
   {
+    label: "Leads",
+    href: "/dashboard/leads",
+  },
+  {
+    label: "Coverage",
+    href: "/dashboard/coverage",
+  },
+  {
     label: "AI Articles",
     href: "/dashboard/ai-articles",
   },

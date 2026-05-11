@@ -28,6 +28,7 @@ export function PublicSiteHeader({ className = "" }: PublicSiteHeaderProps) {
             ["Brands", "/brands"],
             ["Locations", "/locations"],
             ["Technicians", "/technicians"],
+            ["Find Technician", "/find-technician"],
             ["Repair Cases", "/repair-cases"],
           ].map(([label, href]) => (
             <Link

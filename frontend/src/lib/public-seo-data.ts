@@ -624,7 +624,7 @@ export const publicTechnicianPreviews: TechnicianProfilePreview[] = [
     role: "Refrigeration technician preview",
     serviceArea: "Houston Heights and central Houston",
     city: "Houston",
-    zipCodes: ["77007", "77008", "77002"],
+    zipCodes: ["77007", "77008", "77002", "77043"],
     specialties: ["Ice maker repair", "Water leaks", "French door refrigerators"],
     summary:
       "Mock technician profile preview for future public trust pages and technician-specific repair content.",
@@ -646,7 +646,7 @@ export const publicTechnicianPreviews: TechnicianProfilePreview[] = [
     role: "Sealed-system technician preview",
     serviceArea: "Houston, Midtown, and Memorial",
     city: "Houston",
-    zipCodes: ["77002", "77024", "77056"],
+    zipCodes: ["77002", "77024", "77056", "77079", "77043"],
     specialties: ["Compressor diagnostics", "Sealed systems", "Built-in refrigerators"],
     summary:
       "Mock technician profile preview for future sealed-system service pages, repair case attribution, and trust content.",
@@ -668,7 +668,7 @@ export const publicTechnicianPreviews: TechnicianProfilePreview[] = [
     role: "Premium appliance technician preview",
     serviceArea: "Katy, Richmond, and Sugar Land",
     city: "Katy",
-    zipCodes: ["77494", "77406", "77479"],
+    zipCodes: ["77494", "77406", "77479", "77441"],
     specialties: ["Sub-Zero", "Thermador", "Scotsman ice machines"],
     summary:
       "Mock technician profile preview for future brand-focused public pages and local service-area expansion.",
@@ -796,4 +796,56 @@ export function getRepairCasesForTechnician(slug: string) {
   return technician.repairCaseSlugs
     .map((repairCaseSlug) => getPublicRepairCaseBySlug(repairCaseSlug))
     .filter((repairCase): repairCase is PublicRepairCase => Boolean(repairCase));
+}
+
+export function getTechniciansByZip(zipCode: string) {
+  const normalizedZip = zipCode.trim();
+
+  if (!normalizedZip) {
+    return publicTechnicianPreviews;
+  }
+
+  return publicTechnicianPreviews.filter((technician) =>
+    technician.zipCodes?.includes(normalizedZip),
+  );
+}
+
+export function getTechniciansByService(service: string, technicians = publicTechnicianPreviews) {
+  if (!service || service === "Any service") {
+    return technicians;
+  }
+
+  const normalizedService = service.toLowerCase();
+
+  return technicians.filter((technician) =>
+    [...technician.specialties, ...(technician.brandFocus ?? [])].some((item) => {
+      const normalizedItem = item.toLowerCase();
+
+      return (
+        normalizedItem.includes(normalizedService) ||
+        normalizedService.includes(normalizedItem) ||
+        (normalizedService.includes("built-in") && normalizedItem.includes("built-in")) ||
+        (normalizedService.includes("sealed") && normalizedItem.includes("sealed")) ||
+        (normalizedService.includes("ice machine") && normalizedItem.includes("scotsman")) ||
+        (normalizedService.includes("refrigerator") && normalizedItem.includes("refrigerator"))
+      );
+    }),
+  );
+}
+
+export function getTechniciansBySpecialty(
+  specialty: string,
+  technicians = publicTechnicianPreviews,
+) {
+  if (!specialty || specialty === "Any brand or specialty") {
+    return technicians;
+  }
+
+  const normalizedSpecialty = specialty.toLowerCase();
+
+  return technicians.filter((technician) =>
+    [...technician.specialties, ...(technician.brandFocus ?? [])].some((item) =>
+      item.toLowerCase().includes(normalizedSpecialty),
+    ),
+  );
 }
