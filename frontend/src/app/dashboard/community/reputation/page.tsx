@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { DashboardNotice } from "@/components/dashboard/DashboardNotice";
 import { ReputationOverview } from "@/components/dashboard/ReputationOverview";
 import { getTechnicianReputation } from "@/data/mock-reputation";
 
@@ -30,11 +31,11 @@ export default function CommunityReputationPage() {
           </Link>
         </div>
 
-        <div className="mt-5 rounded-md border border-cyan-300/20 bg-cyan-300/10 p-4">
-          <p className="text-sm font-bold text-cyan-100">
+        <div className="mt-5">
+          <DashboardNotice>
             Scores, badges, filters, and rankings are static mock data only. No real technician
             ranking, payment, dispatch, moderation, or persistence logic is implemented.
-          </p>
+          </DashboardNotice>
         </div>
       </section>
 

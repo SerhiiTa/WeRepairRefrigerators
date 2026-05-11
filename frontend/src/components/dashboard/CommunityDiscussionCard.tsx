@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { StatusBadge } from "@/components/StatusBadge";
 import { CommunityLanguageBadge } from "@/components/dashboard/CommunityLanguageBadge";
 import type { CommunityDiscussion, CommunityDiscussionPriority, CommunityDiscussionStatus } from "@/types/community";
@@ -47,13 +49,21 @@ export function CommunityDiscussionCard({
           <p className="mt-2 text-sm leading-6 text-slate-400">{discussion.symptom}</p>
         </div>
 
-        <button
-          className="rounded-md bg-cyan-300 px-4 py-3 text-sm font-bold text-slate-950 transition hover:bg-cyan-200"
-          onClick={() => onSelect(discussion.id)}
-          type="button"
-        >
-          Open Discussion
-        </button>
+        <div className="grid gap-2 sm:grid-cols-2 lg:min-w-72">
+          <button
+            className="rounded-md border border-white/15 px-4 py-3 text-sm font-bold text-white transition hover:border-cyan-300 hover:bg-white/5"
+            onClick={() => onSelect(discussion.id)}
+            type="button"
+          >
+            Preview Summary
+          </button>
+          <Link
+            className="rounded-md bg-cyan-300 px-4 py-3 text-center text-sm font-bold text-slate-950 transition hover:bg-cyan-200"
+            href={`/dashboard/community/${discussion.id}`}
+          >
+            Open Discussion
+          </Link>
+        </div>
       </div>
 
       <dl className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">

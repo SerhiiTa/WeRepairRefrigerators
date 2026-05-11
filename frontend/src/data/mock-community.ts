@@ -215,6 +215,10 @@ export function getCommunityDiscussions() {
   return mockCommunityDiscussions;
 }
 
+export function getCommunityDiscussionById(discussionId: string) {
+  return mockCommunityDiscussions.find((discussion) => discussion.id === discussionId);
+}
+
 export function getCommunityMessagesByDiscussion(discussionId: string) {
   return mockCommunityMessages.filter((message) => message.discussionId === discussionId);
 }

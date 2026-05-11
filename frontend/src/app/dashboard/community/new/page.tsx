@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { DashboardNotice } from "@/components/dashboard/DashboardNotice";
 import { RepairHelpRequestForm } from "@/components/dashboard/RepairHelpRequestForm";
 
 export default function NewCommunityHelpRequestPage() {
@@ -27,11 +28,11 @@ export default function NewCommunityHelpRequestPage() {
           </Link>
         </div>
 
-        <div className="mt-5 rounded-md border border-amber-300/20 bg-amber-300/10 p-4">
-          <p className="text-sm font-bold text-amber-100">
+        <div className="mt-5">
+          <DashboardNotice tone="amber">
             Do not enter customer names, phone numbers, emails, full addresses, payment details, or
             private customer notes. Serial numbers are treated as private/internal only.
-          </p>
+          </DashboardNotice>
         </div>
       </section>
 

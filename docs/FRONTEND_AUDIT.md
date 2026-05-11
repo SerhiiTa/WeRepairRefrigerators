@@ -404,3 +404,35 @@ None of these states persist after refresh.
 - No real AI, translation, or vector/RAG pipeline.
 - No production moderation, permissions, or audit logging for technician community content.
 - No real payment, subscription, payout, or paid lead system.
+
+## Task 35 Cleanup Audit
+
+Cleanup performed:
+
+- Added `frontend/src/components/dashboard/DashboardNotice.tsx` as a small reusable dashboard notice primitive for mock-only, privacy, and warning copy.
+- Replaced repeated amber/cyan/emerald notice wrappers in recent dashboard pages and boards with `DashboardNotice`.
+- Confirmed dashboard navigation uses centralized `frontend/src/config/dashboard-navigation.ts`.
+- Confirmed recent dashboard routes are reachable from navigation or contextual links, including analytics, open jobs, community, reputation, leads, coverage, repair cases, AI articles, technicians, and settings.
+
+Consistency findings:
+
+- Recent mock systems consistently use shared `StatusBadge`, `MetricCard`, `EmptyState`, dashboard cards, and filter layouts.
+- Recent mock data uses explicit IDs, status fields, visibility fields, and public-safe first-name/ZIP/service-area patterns.
+- Technician community and reputation data are dashboard-only and not used by public SEO routes.
+- Local-only state patterns are clearly contained in client components.
+
+Issues intentionally not changed:
+
+- Dashboard page headers still repeat radial card styling across multiple routes. A future `DashboardPageHeader` component would reduce duplication, but extracting it now would touch many stable pages.
+- Filter controls repeat select-label styling across analytics, leads, coverage, open jobs, community, and reputation. A future dashboard filter primitive could help once backend query contracts are known.
+- Several domain-specific cards repeat small stat/detail block markup. Consolidating into generic card/detail primitives should wait until backend data shapes settle.
+- `DashboardTopbar` is still generic and not page-aware. Page-specific topbar metadata can be revisited with authenticated dashboard layout work.
+- Mock datasets intentionally use human-readable relative timestamps in places. Production should normalize on ISO timestamps from the backend.
+
+Backend-readiness notes:
+
+- Keep public marketplace, dashboard CRM, and technician community data boundaries separate when adding Supabase.
+- Add auth and RLS before enabling dashboard/community data persistence.
+- Convert local-only actions such as lead conversion, open job claiming, discussion replies, accepted solutions, and reputation events into validated server-side mutations.
+- Add server-side dispatch locking before live open job claiming.
+- Keep AI/translation/RAG pipelines server-side and privacy-filtered.

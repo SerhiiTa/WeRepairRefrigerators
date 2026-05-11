@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { CommunityOverview } from "@/components/dashboard/CommunityOverview";
+import { DashboardNotice } from "@/components/dashboard/DashboardNotice";
 import {
   getCommunityDiscussions,
   getCommunityKnowledgeCases,
@@ -33,11 +34,11 @@ export default function CommunityPage() {
             Create Help Request
           </Link>
         </div>
-        <div className="mt-5 rounded-md border border-emerald-300/20 bg-emerald-300/10 p-4">
-          <p className="text-sm font-bold text-emerald-100">
+        <div className="mt-5">
+          <DashboardNotice tone="emerald">
             This area is designed to stay private, non-indexed, and available only to verified
             technicians.
-          </p>
+          </DashboardNotice>
         </div>
       </section>
 

@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 
 import { MetricCard } from "@/components/MetricCard";
+import { DashboardNotice } from "@/components/dashboard/DashboardNotice";
 import { ExpertBadgeGrid } from "@/components/dashboard/ExpertBadgeGrid";
 import { ReputationFilters } from "@/components/dashboard/ReputationFilters";
 import { TechnicianLeaderboard } from "@/components/dashboard/TechnicianLeaderboard";
@@ -106,12 +107,10 @@ export function ReputationOverview({ technicians }: ReputationOverviewProps) {
         />
       </section>
 
-      <section className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 p-5">
-        <p className="text-sm font-bold text-emerald-100">
-          Reputation metrics are designed for internal technician collaboration and are not publicly
-          indexed.
-        </p>
-      </section>
+      <DashboardNotice tone="emerald">
+        Reputation metrics are designed for internal technician collaboration and are not publicly
+        indexed.
+      </DashboardNotice>
 
       <ReputationFilters
         applianceOptions={applianceOptions}
