@@ -50,6 +50,7 @@ npm run build -- --webpack
 - Mock-safe public auth UI at `/login` and `/signup`. These pages can defensively call Supabase Auth when env vars are configured, but they do not create profiles, persist roles, protect routes, or change dashboard access yet.
 - Dashboard auth-awareness in the dashboard topbar. It can show Supabase unavailable, guest/demo mode, or authenticated email/placeholder role, but it does not protect routes or hide functionality yet.
 - Draft Supabase profiles/roles migration at `supabase/migrations/0001_profiles_roles.sql`. It has not been applied and must be reviewed before use.
+- Frontend profile role/status readiness in `frontend/src/lib/auth/profile.ts` and typed `public.profiles` placeholders in `frontend/src/lib/supabase/types.ts`. These helpers are fallback-safe and are not wired into route protection or mock workflows yet.
 
 ## What to build next
 
@@ -145,7 +146,7 @@ Read `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md` before adding API routes, E
 - `frontend/src/lib/mock-repair-cases.ts` and `frontend/src/types/repair-case.ts`
 - `frontend/src/lib/public-seo-data.ts` and `frontend/src/types/public-seo.ts`
 - `frontend/src/lib/supabase/client.ts`, `frontend/src/lib/supabase/server.ts`, `frontend/src/lib/supabase/env.ts`, and `frontend/src/lib/supabase/types.ts`
-- `frontend/src/lib/auth/types.ts`, `frontend/src/lib/auth/roles.ts`, `frontend/src/lib/auth/permissions.ts`, `frontend/src/lib/auth/session.ts`, and `frontend/src/lib/auth/dashboard-identity.ts`
+- `frontend/src/lib/auth/types.ts`, `frontend/src/lib/auth/roles.ts`, `frontend/src/lib/auth/permissions.ts`, `frontend/src/lib/auth/session.ts`, `frontend/src/lib/auth/profile.ts`, and `frontend/src/lib/auth/dashboard-identity.ts`
 - `frontend/src/components/public/AuthForm.tsx`
 - `frontend/src/components/dashboard/DashboardAuthStatus.tsx`
 - `supabase/migrations/0001_profiles_roles.sql`
@@ -158,6 +159,7 @@ Read `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md` before adding API routes, E
 - Auth readiness helpers are UX/plumbing only. Future route protection must still use server checks and Supabase RLS before any dashboard or community data becomes real.
 - Login/signup pages are public and mock-safe. Role intent is UI-only until the profiles table and role persistence are implemented.
 - Dashboard auth-awareness is informational only. Dashboard routes remain accessible in demo mode until middleware/server checks, profile sync, and RLS are implemented.
+- Profile role/status helpers are readiness plumbing only. Real profile reads require `supabase/migrations/0001_profiles_roles.sql` to be reviewed/applied, and dashboard access still needs server checks, middleware or route protection, and RLS.
 - The profiles/roles SQL migration is draft-only. Do not apply it without reviewing triggers, grants, RLS policies, role defaults, and admin update paths.
 - AI article, TechAdvisor, translation, and RAG features are mock-only until server-side API boundaries and privacy filters are implemented.
 - Open job acceptance is local UI state only. Production claiming requires server-side lock/assignment logic.

@@ -23,6 +23,7 @@
 - Auth readiness helpers exist in `frontend/src/lib/auth`, but they are not a security boundary. Future production access must be enforced with server-side checks and Supabase RLS.
 - Public `/login` and `/signup` pages are mock-safe UI only. They must not be treated as route protection, role persistence, or production account security until profiles, RLS, and server checks exist.
 - Dashboard auth-awareness is informational only. Showing a session, email, or placeholder role in the dashboard does not protect any route or authorize access to private data.
+- Frontend profile role/status helpers are not authorization controls. They must only become active UX inputs after the reviewed profiles migration exists, and production access must still be enforced server-side and through RLS.
 - `supabase/migrations/0001_profiles_roles.sql` is a draft migration only. Review it before applying; do not treat it as production-ready RLS until tested.
 
 ## AI content safety
@@ -41,6 +42,7 @@ Before adding authentication:
 - Define user roles.
 - Reuse the planned app role vocabulary from `frontend/src/lib/auth/types.ts`.
 - Treat signup role intent as non-authoritative until it is persisted and validated server-side.
+- Treat profile role/status reads as advisory UI state until server-side authorization and RLS are implemented.
 - Keep auth checks server-side where possible.
 - Add protected dashboard routes.
 - Do not rely on dashboard auth-awareness UI as an authorization control.
