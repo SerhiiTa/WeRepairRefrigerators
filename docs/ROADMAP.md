@@ -16,6 +16,7 @@
 - Completed planning:
   - Task 36: Backend architecture planning for Supabase/Auth/Postgres, RLS, dispatch locking, private community persistence, analytics, Stripe, and AI/RAG phases.
   - Task 37: Auth and role-based access planning for public visitors, customers, technicians, verified technicians, expert technicians, company owners, and admins.
+  - Task 38: Supabase data model planning for profiles, companies, service requests, leads, jobs, open jobs, repair cases, community, reputation, public profiles, and audit logs.
 
 ## Phase 2: Repair case workflow
 
@@ -29,6 +30,7 @@
 
 - Use `docs/BACKEND_ARCHITECTURE_PLAN.md` as the implementation planning reference before creating backend code.
 - Use `docs/AUTH_ROLES_PLAN.md` as the implementation planning reference before adding auth, middleware, protected dashboard routes, role-aware navigation, or RLS role policies.
+- Use `docs/SUPABASE_DATA_MODEL_PLAN.md` as the schema planning reference before creating tables, migrations, storage policies, or RLS policies.
 - Add Supabase authentication.
 - Create database tables for users, technician profiles, repair cases, parts, photos, and article drafts.
 - Add tables for marketplace leads, open jobs, technician availability, technician community discussions, messages, accepted solutions, knowledge cases, and reputation events.
@@ -54,6 +56,17 @@ Auth planning order:
 3. Gate open jobs and private community routes to verified technicians or higher.
 4. Add company-owner team scoping.
 5. Add admin verification, moderation, and audit tooling.
+
+Supabase data model order:
+
+1. `profiles`, roles, auth status, and audit foundations.
+2. `service_requests` and `leads`.
+3. `jobs` and `open_jobs` with assignment/claiming rules.
+4. `repair_cases` and `repair_case_photos`.
+5. `technician_profiles`, `companies`, `company_members`, and `public_profiles`.
+6. `community_posts`, `community_replies`, and `accepted_solutions`.
+7. `reputation_events` and `technician_badges`.
+8. Payments/subscriptions after marketplace workflows are stable.
 
 ## Phase 4: AI SEO article generation
 

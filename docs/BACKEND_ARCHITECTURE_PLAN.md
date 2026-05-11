@@ -14,6 +14,8 @@ All current workflows are static or local UI state. There is no backend, authent
 
 The future backend should turn the current mock platform into a real SaaS marketplace while preserving public/dashboard/community boundaries.
 
+For table-level schema planning, use `docs/SUPABASE_DATA_MODEL_PLAN.md` before creating migrations, storage policies, or RLS policies.
+
 Planned backend capabilities:
 
 - Supabase Postgres as the source of truth.
@@ -93,6 +95,8 @@ AI/RAG knowledge data includes approved private knowledge cases, embeddings, sum
 Billing data includes Stripe customer IDs, subscription IDs, payment status, paid lead records, premium placement records, payout compatibility fields, and audit references. Do not store raw card data.
 
 ## Proposed Supabase/Postgres Tables
+
+This section is the high-level backend table map. The more detailed table-by-table ownership, visibility, index, and RLS planning reference is `docs/SUPABASE_DATA_MODEL_PLAN.md`.
 
 ### profiles
 
