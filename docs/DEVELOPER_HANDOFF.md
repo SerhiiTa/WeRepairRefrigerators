@@ -53,6 +53,7 @@ npm run build -- --webpack
 - Draft Supabase profiles/roles migration at `supabase/migrations/0001_profiles_roles.sql`. It has not been applied and must be reviewed before use.
 - Frontend profile role/status readiness in `frontend/src/lib/auth/profile.ts` and typed `public.profiles` placeholders in `frontend/src/lib/supabase/types.ts`. These helpers are fallback-safe and are not wired into route protection or mock workflows yet.
 - Local Supabase verification helper at `/dashboard/dev/supabase-check`. It checks public env readiness, browser client initialization, auth session state, and the current user's profile row after the first migration is manually applied. It is not linked in navigation and is not production admin tooling.
+- Dashboard auth badge role/status display can now read the authenticated user's `public.profiles` row when available. This only changes the displayed role/status; it does not protect routes or hide dashboard features.
 
 ## What to build next
 
@@ -169,6 +170,7 @@ Read `docs/SUPABASE_SETUP_GUIDE.md` before creating a Supabase project, filling 
 - Dashboard auth-awareness is informational only. Dashboard routes remain accessible in demo mode until middleware/server checks, profile sync, and RLS are implemented.
 - Profile role/status helpers are readiness plumbing only. Real profile reads require `supabase/migrations/0001_profiles_roles.sql` to be reviewed/applied, and dashboard access still needs server checks, middleware or route protection, and RLS.
 - `/dashboard/dev/supabase-check` is a local development verification page only. It uses the browser anon client, does not use service-role keys, does not create missing profiles, does not apply migrations, and does not protect routes.
+- Dashboard profile role/status display uses the browser anon client and user-owned profile read policy. It must remain display-only until protected routes, server authorization, and RLS are fully implemented.
 - The profiles/roles SQL migration is draft-only. Do not apply it without reviewing triggers, grants, RLS policies, role defaults, and admin update paths.
 - AI article, TechAdvisor, translation, and RAG features are mock-only until server-side API boundaries and privacy filters are implemented.
 - Open job acceptance is local UI state only. Production claiming requires server-side lock/assignment logic.

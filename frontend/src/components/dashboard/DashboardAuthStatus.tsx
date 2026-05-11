@@ -8,11 +8,28 @@ import {
   DASHBOARD_IDENTITY_LOADING,
   type DashboardIdentityState,
 } from "@/lib/auth/dashboard-identity";
-import { createAuthSessionSnapshot, getBrowserAuthSession } from "@/lib/auth/session";
+import {
+  getCurrentUserProfile,
+  mapProfileToDashboardIdentity,
+} from "@/lib/auth/profile";
 import {
   getSupabaseBrowserClient,
   isSupabaseBrowserConfigured,
 } from "@/lib/supabase/client";
+
+type ProfileSyncState =
+  | {
+      status: "not_checked";
+      label: string;
+    }
+  | {
+      status: "profile_found";
+      label: string;
+    }
+  | {
+      status: "profile_missing";
+      label: string;
+    };
 
 const modeCopy: Record<
   DashboardIdentityState["mode"],
@@ -35,10 +52,17 @@ const modeCopy: Record<
   },
   authenticated: {
     label: "Authenticated",
-    helper: "Role is a placeholder until profiles sync is implemented.",
+    helper: "Profile role is shown when the profiles row is available.",
     classes: "border-emerald-300/20 bg-emerald-300/10 text-emerald-100",
   },
 };
+
+function formatProfileStatus(status: string): string {
+  return status
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
 
 export function DashboardAuthStatus() {
   const [identityState, setIdentityState] = useState<DashboardIdentityState>(() =>
@@ -49,6 +73,11 @@ export function DashboardAuthStatus() {
           supabaseAvailable: false,
         }),
   );
+  const [profileSyncState, setProfileSyncState] =
+    useState<ProfileSyncState>({
+      status: "not_checked",
+      label: "Profile not checked",
+    });
 
   useEffect(() => {
     let isMounted = true;
@@ -58,27 +87,67 @@ export function DashboardAuthStatus() {
       return;
     }
 
-    getBrowserAuthSession().then((session) => {
+    async function refreshIdentity() {
+      const result = await getCurrentUserProfile();
+
       if (!isMounted) {
+        return;
+      }
+
+      if (result.status === "profile_ready") {
+        setIdentityState(
+          mapProfileToDashboardIdentity({
+            profile: result.profile,
+            session: result.session,
+            supabaseAvailable: true,
+          }),
+        );
+        setProfileSyncState({
+          status: "profile_found",
+          label: `Profile status: ${formatProfileStatus(result.profile.status)}`,
+        });
+        return;
+      }
+
+      if (result.status === "profile_unavailable") {
+        setIdentityState(
+          createDashboardIdentityState({
+            session: result.session,
+            supabaseAvailable: true,
+          }),
+        );
+        setProfileSyncState({
+          status: "profile_missing",
+          label: "Profile not found",
+        });
         return;
       }
 
       setIdentityState(
         createDashboardIdentityState({
-          session,
-          supabaseAvailable: true,
+          session: null,
+          supabaseAvailable: result.status !== "supabase_unavailable",
         }),
       );
-    });
+      setProfileSyncState({
+        status: "not_checked",
+        label:
+          result.status === "supabase_unavailable"
+            ? "Profile not checked"
+            : "Profile not checked until login",
+      });
+    }
+
+    void refreshIdentity();
 
     const supabase = getSupabaseBrowserClient();
-    const subscription = supabase?.auth.onAuthStateChange((_event, session) => {
-      setIdentityState(
-        createDashboardIdentityState({
-          session: createAuthSessionSnapshot(session),
-          supabaseAvailable: true,
-        }),
-      );
+    const subscription = supabase?.auth.onAuthStateChange(() => {
+      setIdentityState(DASHBOARD_IDENTITY_LOADING);
+      setProfileSyncState({
+        status: "not_checked",
+        label: "Profile not checked",
+      });
+      void refreshIdentity();
     }).data.subscription;
 
     return () => {
@@ -108,6 +177,11 @@ export function DashboardAuthStatus() {
             Role: {identityState.roleLabel}
             {accessHighlights.length > 0 ? ` | Preview: ${accessHighlights.join(", ")}` : ""}
           </p>
+          {identityState.mode === "authenticated" ? (
+            <p className="mt-1 text-xs text-current/70">
+              {profileSyncState.label}
+            </p>
+          ) : null}
         </div>
 
         {identityState.mode === "authenticated" ? null : (
