@@ -25,6 +25,7 @@
   - Task 44: Dashboard auth-awareness showing Supabase unavailable, guest/demo mode, or authenticated email/placeholder role. No route protection, middleware, tables, or mock workflow replacement yet.
   - Task 45: Draft Supabase profiles/roles migration. The SQL file exists for review but has not been applied to any database.
   - Task 46: Frontend profile role/status read helpers and typed `public.profiles` placeholder shape. Profile reads remain inactive until the profiles migration is reviewed/applied and helpers are intentionally not wired into route protection yet.
+  - Task 47: Supabase setup guide for creating a project, configuring frontend env vars, reviewing/applying the first migration safely, and verifying profile row creation. Documentation only; no migration has been applied.
 
 ## Phase 2: Repair case workflow
 
@@ -46,6 +47,7 @@
 - Use `/login` and `/signup` as the future auth UI starting point. Role intent remains UI-only until profile persistence exists.
 - Use dashboard auth-awareness as a temporary visibility layer only. Real access control still requires profiles, server checks, middleware or route protection, and RLS.
 - Review `supabase/migrations/0001_profiles_roles.sql` before applying the first profiles/roles migration.
+- Follow `docs/SUPABASE_SETUP_GUIDE.md` before connecting a Supabase project or manually applying the first profiles/roles migration.
 - Use `frontend/src/lib/auth/profile.ts` as the future profile role/status sync starting point after migration `0001_profiles_roles.sql` is reviewed and applied. It currently falls back safely when Supabase, sessions, or the profiles table are unavailable.
 - Add Supabase authentication.
 - Create database tables for users, technician profiles, repair cases, parts, photos, and article drafts.
