@@ -20,6 +20,7 @@
 - Supabase data model planning is documented in `docs/SUPABASE_DATA_MODEL_PLAN.md` and should be reviewed before creating tables, migrations, storage policies, RLS policies, or persistence code.
 - RLS and permission architecture is documented in `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md` and should be reviewed before writing RLS policies, server mutations, admin tools, protected API routes, or storage access rules.
 - API/backend service planning is documented in `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md` and should be reviewed before adding API routes, Edge Functions, upload flows, webhooks, AI endpoints, realtime channels, or background jobs.
+- Auth readiness helpers exist in `frontend/src/lib/auth`, but they are not a security boundary. Future production access must be enforced with server-side checks and Supabase RLS.
 
 ## AI content safety
 
@@ -35,6 +36,7 @@ Before adding authentication:
 - Review `docs/AUTH_ROLES_PLAN.md`.
 - Choose the Supabase auth flow.
 - Define user roles.
+- Reuse the planned app role vocabulary from `frontend/src/lib/auth/types.ts`.
 - Keep auth checks server-side where possible.
 - Add protected dashboard routes.
 - Require authentication before enabling technician community, reputation, open job claiming, live dispatch, or private knowledge base access.
