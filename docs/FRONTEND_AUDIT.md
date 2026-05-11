@@ -293,3 +293,114 @@ Cleanup recommendations:
 ## Summary
 
 The frontend is in a healthy early-MVP state: clear App Router routes, a reusable dashboard shell, focused shared components, and a complete mock repair case form. The next major frontend effort should be connecting the existing dashboard navigation to real placeholder routes, adding repair case list/detail pages, and consolidating repeated page header, navigation, card, and button patterns before adding Supabase or AI functionality.
+
+## Task 29-34 Update
+
+This addendum reflects the current implemented frontend after marketplace analytics, open jobs, technician community, repair help request, discussion detail, and reputation mock systems were added.
+
+### New Dashboard Routes
+
+Current dashboard route additions:
+
+- `/dashboard/analytics`: marketplace lead source analytics mock.
+- `/dashboard/open-jobs`: open marketplace job board mock.
+- `/dashboard/community`: private technician community and knowledge base preview.
+- `/dashboard/community/new`: repair help request creation mock.
+- `/dashboard/community/[discussionId]`: technician discussion detail mock.
+- `/dashboard/community/reputation`: technician reputation and expert badge mock.
+- `/dashboard/coverage`: technician availability/workload coverage preview.
+- `/dashboard/leads`: marketplace lead inbox.
+- `/dashboard/leads/preview`: dashboard preview bridge from public intake.
+
+All of these routes are mock/demo-only and use static data or local component state.
+
+### Analytics And Open Jobs Architecture
+
+Analytics files:
+
+- `frontend/src/app/dashboard/analytics/page.tsx`
+- `frontend/src/components/dashboard/AnalyticsOverview.tsx`
+- `frontend/src/components/dashboard/LeadSourceBreakdown.tsx`
+- `frontend/src/components/dashboard/TechnicianPerformanceBoard.tsx`
+- `frontend/src/components/dashboard/ZipDemandBoard.tsx`
+- `frontend/src/data/mock-analytics.ts`
+- `frontend/src/types/analytics.ts`
+
+Open jobs files:
+
+- `frontend/src/app/dashboard/open-jobs/page.tsx`
+- `frontend/src/components/dashboard/OpenJobsBoard.tsx`
+- `frontend/src/components/dashboard/OpenJobCard.tsx`
+- `frontend/src/components/dashboard/OpenJobFilters.tsx`
+- `frontend/src/components/dashboard/OpenJobStats.tsx`
+- `frontend/src/data/mock-open-jobs.ts`
+- `frontend/src/types/open-jobs.ts`
+
+Open job acceptance is local client state only. It does not persist, lock, notify, dispatch, or create repair cases.
+
+### Technician Community Components
+
+Community files:
+
+- `frontend/src/app/dashboard/community/page.tsx`
+- `frontend/src/app/dashboard/community/new/page.tsx`
+- `frontend/src/app/dashboard/community/[discussionId]/page.tsx`
+- `frontend/src/components/dashboard/CommunityOverview.tsx`
+- `frontend/src/components/dashboard/CommunityDiscussionCard.tsx`
+- `frontend/src/components/dashboard/CommunityFilters.tsx`
+- `frontend/src/components/dashboard/CommunityLanguageBadge.tsx`
+- `frontend/src/components/dashboard/CommunityAISummaryPreview.tsx`
+- `frontend/src/components/dashboard/CommunityKnowledgeCaseCard.tsx`
+- `frontend/src/components/dashboard/RepairHelpRequestForm.tsx`
+- `frontend/src/components/dashboard/RepairHelpRequestPreview.tsx`
+- `frontend/src/components/dashboard/DiscussionThread.tsx`
+- `frontend/src/components/dashboard/DiscussionMessageCard.tsx`
+- `frontend/src/components/dashboard/AcceptedSolutionCard.tsx`
+- `frontend/src/components/dashboard/DiscussionSidebar.tsx`
+- `frontend/src/components/dashboard/DiscussionAISummaryPanel.tsx`
+- `frontend/src/data/mock-community.ts`
+- `frontend/src/types/community.ts`
+
+Community behavior is dashboard-only and private-by-design. Discussion replies can be appended locally on detail pages, but refresh clears them. Multilingual previews and AI summaries are static mock text.
+
+### Reputation Components
+
+Reputation files:
+
+- `frontend/src/app/dashboard/community/reputation/page.tsx`
+- `frontend/src/components/dashboard/ReputationOverview.tsx`
+- `frontend/src/components/dashboard/ReputationFilters.tsx`
+- `frontend/src/components/dashboard/TechnicianLeaderboard.tsx`
+- `frontend/src/components/dashboard/TechnicianExpertCard.tsx`
+- `frontend/src/components/dashboard/ExpertBadgeGrid.tsx`
+- `frontend/src/components/dashboard/TechnicianSpecialtyBadge.tsx`
+- `frontend/src/data/mock-reputation.ts`
+- `frontend/src/types/reputation.ts`
+
+The reputation system is static and mock-only. Filtering and sorting are local client behavior and should not be treated as real ranking, verification, or payment eligibility logic.
+
+### Mock State Patterns
+
+Current local-only state patterns:
+
+- AI workflow selected repair case and review status.
+- Lead inbox status overrides and conversion preview state.
+- Open job accept/assigned state.
+- Repair help request live preview and local submit success state.
+- Discussion detail local reply append state.
+- Reputation leaderboard filters and sorting.
+
+None of these states persist after refresh.
+
+### Remaining Frontend Gaps
+
+- No authentication or protected dashboard routes.
+- No Supabase/database persistence.
+- No server actions or route handlers for mutations.
+- No real uploads.
+- No live chat/WebSockets.
+- No real analytics tracking.
+- No dispatch locking or notifications.
+- No real AI, translation, or vector/RAG pipeline.
+- No production moderation, permissions, or audit logging for technician community content.
+- No real payment, subscription, payout, or paid lead system.

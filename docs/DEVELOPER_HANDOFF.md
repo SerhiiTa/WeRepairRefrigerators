@@ -2,9 +2,9 @@
 
 ## Overview
 
-WeRepairRefrigerators is a Houston-first SaaS MVP for refrigerator repair technicians and service business owners. The current app is a frontend-only Next.js App Router project with a public homepage, dashboard shell, and repair case creation UI.
+WeRepairRefrigerators is a Houston-first refrigerator repair marketplace and SaaS MVP for customers, technicians, and service business owners. The current app is a frontend-only Next.js App Router project with a public SEO/customer marketplace, internal dashboard CRM, and private technician community mock workflows.
 
-The app currently uses mock data only. There is no authentication, Supabase integration, database, real upload handling, or AI generation yet.
+The app currently uses mock/static data and local UI state only. There is no authentication, Supabase integration, database, real upload handling, real dispatch, real-time chat, payment logic, AI generation, or translation API yet.
 
 ## How to run the project
 
@@ -25,24 +25,73 @@ npm run build -- --webpack
 
 ## What has been built
 
-- Public dark SaaS homepage
-- Dashboard shell at `/dashboard`
-- Sidebar, topbar, and content area
-- Placeholder dashboard metrics and repair case table
-- Repair case creation form at `/dashboard/repair-cases/new`
-- Reusable form components
-- Mock photo upload placeholders
-- Mock SEO metadata preview
+- Public customer-facing homepage.
+- Public routes for brands, services, locations, public repair cases, technicians, ZIP discovery, and `/schedule-service`.
+- Dashboard shell at `/dashboard` with shared sidebar/topbar and centralized navigation.
+- Repair case list, creation, and detail preview flows.
+- Dashboard AI workflow mock at `/dashboard/ai-articles`.
+- Marketplace lead inbox, lead conversion preview, and dashboard lead preview.
+- Technician coverage board and mock availability system.
+- Marketplace analytics dashboard at `/dashboard/analytics`.
+- Open Job Board mock at `/dashboard/open-jobs`.
+- Technician Community / Knowledge Base at `/dashboard/community`.
+- Repair help request creation at `/dashboard/community/new`.
+- Technician discussion detail route at `/dashboard/community/[discussionId]`.
+- Technician reputation and expert badge mock at `/dashboard/community/reputation`.
+- Reusable form, dashboard, public, state, empty/loading/error, community, analytics, open jobs, and reputation components.
+- Mock datasets in `frontend/src/data` and shared contracts in `frontend/src/types`.
 
 ## What to build next
 
 Recommended next steps:
 
-1. Add `/dashboard/repair-cases` list route.
-2. Add `/dashboard/repair-cases/[id]` preview route.
-3. Add client-side or server-side validation strategy for repair case creation.
-4. Add mock state transitions for draft, reviewed, repaired, and article draft.
-5. Plan Supabase schema before implementing persistence.
+1. Plan Supabase schema and RLS policies before implementing persistence.
+2. Add authentication and protected dashboard routes.
+3. Convert public intake and dashboard lead workflows into validated server-side mutations.
+4. Add real repair case persistence, uploads, and draft/edit states.
+5. Add dispatch locking for open jobs before any live technician claiming.
+6. Add private technician community persistence, moderation, and permission checks.
+7. Add AI/translation boundaries server-side only, with manual review before publishing or indexing.
+
+## Important routes
+
+- `/`
+- `/find-technician`
+- `/schedule-service`
+- `/brands`, `/brands/[brand]`
+- `/services`, `/services/[service]`
+- `/locations`, `/locations/[city]`
+- `/repair-cases`, `/repair-cases/[slug]`
+- `/technicians`, `/technicians/[slug]`
+- `/dashboard`
+- `/dashboard/repair-cases`, `/dashboard/repair-cases/new`, `/dashboard/repair-cases/[id]`
+- `/dashboard/leads`, `/dashboard/leads/preview`
+- `/dashboard/coverage`
+- `/dashboard/analytics`
+- `/dashboard/open-jobs`
+- `/dashboard/ai-articles`
+- `/dashboard/community`, `/dashboard/community/new`, `/dashboard/community/[discussionId]`, `/dashboard/community/reputation`
+- `/dashboard/technicians`
+- `/dashboard/settings`
+
+## Important mock data and types
+
+- `frontend/src/data/mock-leads.ts` and `frontend/src/types/lead.ts`
+- `frontend/src/data/mock-analytics.ts` and `frontend/src/types/analytics.ts`
+- `frontend/src/data/mock-open-jobs.ts` and `frontend/src/types/open-jobs.ts`
+- `frontend/src/data/mock-technician-availability.ts` and `frontend/src/types/technician-availability.ts`
+- `frontend/src/data/mock-community.ts` and `frontend/src/types/community.ts`
+- `frontend/src/data/mock-reputation.ts` and `frontend/src/types/reputation.ts`
+- `frontend/src/lib/mock-repair-cases.ts` and `frontend/src/types/repair-case.ts`
+- `frontend/src/lib/public-seo-data.ts` and `frontend/src/types/public-seo.ts`
+
+## Integration boundaries
+
+- Public routes must not read private dashboard repair cases or community data.
+- Technician community routes must remain dashboard-only and require auth before production.
+- AI article, TechAdvisor, translation, and RAG features are mock-only until server-side API boundaries and privacy filters are implemented.
+- Open job acceptance is local UI state only. Production claiming requires server-side lock/assignment logic.
+- Lead conversion previews do not create real repair case data yet.
 
 ## Rules for contributing
 
@@ -60,6 +109,8 @@ Recommended next steps:
 - Do not run global commands without approval.
 - Run lint and build before reporting frontend changes.
 - Report all changed files at the end of each task.
+- Keep public marketplace, dashboard CRM, and private technician community concerns separated.
+- Clearly label mock/demo-only workflows and avoid implying live dispatch, persistence, AI, translation, or payments.
 
 ## Current caution
 

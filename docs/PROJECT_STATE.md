@@ -24,20 +24,27 @@ The MVP is focused on Houston only and refrigerator repair only. The first produ
 
 ## Current completed features
 
-- Modern dark SaaS homepage for WeRepairRefrigerators
-- `/dashboard` route with reusable dashboard shell
-- Dashboard sidebar, topbar, and content area
-- Dashboard placeholders for overview, repair cases, AI articles, technicians, and settings
-- Placeholder repair cases table
-- `/dashboard/repair-cases/new` route
-- Multi-section repair case creation form UI
-- Reusable form components for labels, sections, inputs, text areas, selects, and radio groups
-- Mock photo upload placeholders
-- Mock SEO metadata preview
+- Public customer-facing marketplace homepage with light refrigerator service branding.
+- Public SEO route foundation for brands, services, locations, public repair cases, technicians, ZIP-based technician discovery, and unified `/schedule-service` intake.
+- Reusable public SEO metadata utilities, internal linking helpers, public content data, and refrigeration visual identity components.
+- `/dashboard` route with reusable dashboard shell, route-level dashboard layout, sidebar, topbar, and centralized dashboard navigation.
+- Repair case list, creation, and detail/preview flows with shared mock repair case types/data.
+- Privacy-first repair case creation form with optional private/admin-only fields, appliance label extraction mock, photo placeholders, and SEO preview.
+- Dashboard AI workflow mock showing repair case selection, privacy transform, SEO article draft preview, image prompts, Telegram intake mock, voice-note mock, and review/publish status steps.
+- Marketplace lead inbox at `/dashboard/leads`, mock conversion preview, and `/dashboard/leads/preview` bridge from public intake to dashboard lead preview.
+- Mock technician coverage/availability board at `/dashboard/coverage`.
+- Marketplace analytics dashboard at `/dashboard/analytics` with static lead source, ZIP, brand, appliance, technician, and conversion metrics.
+- Open Job Board at `/dashboard/open-jobs` for mock unassigned marketplace jobs, client-side accept behavior, and assigned/open status preview.
+- Private technician community dashboard at `/dashboard/community` with repair discussions, multilingual preview data, AI summary previews, and private knowledge case previews.
+- Repair help request creation mock at `/dashboard/community/new` with live discussion preview and AI-ready structured summary preview.
+- Technician discussion detail route at `/dashboard/community/[discussionId]` with message thread, accepted answer, translated previews, AI summary panel, and local-only reply mock.
+- Technician reputation and expert badge mock at `/dashboard/community/reputation` with leaderboard filters, expert levels, badge rarity, and private trust metrics.
+- Shared dashboard components for lead cards, conversion preview, analytics boards, open job cards/filters/stats, community cards/filters, discussion detail panels, and reputation/leaderboard UI.
+- Mock datasets and shared types for leads, analytics, open jobs, technician availability, community discussions, and technician reputation.
 
 ## Current in-progress feature
 
-Repair case workflow UI. The creation form exists, but it does not yet save data, validate submissions, upload photos, or generate previews from real case data.
+The product is in a frontend-first mock workflow phase. Marketplace CRM, technician community, AI workflow, and public SEO systems exist as static/local UI only. No data is persisted and no live backend, auth, AI, translation, dispatch, notification, or payment system is connected.
 
 ## What is not built yet
 
@@ -48,10 +55,49 @@ Repair case workflow UI. The creation form exists, but it does not yet save data
 - Real repair case persistence
 - Real photo uploads
 - Technician profile CRUD
-- AI SEO article generation
-- Public SEO repair pages
+- Real AI SEO article generation
+- Real AI TechAdvisor assistant
+- Real multilingual AI translation
+- Real vector/RAG knowledge base
+- Real-time technician chat or WebSocket messaging
+- Live dispatch, job locking, notifications, or technician mobile workflow
+- Real analytics tracking
+- Real lead persistence or conversion into database repair cases
+- Public publishing workflow for AI-generated pages
 - Payments or subscriptions
+- Stripe monetization, paid leads, subscriptions, or technician payouts
 - Production deployment
+
+## Implemented mock marketplace systems
+
+The following marketplace systems are implemented as frontend-only mock UI:
+
+- Public technician discovery and `/schedule-service` intake.
+- Mock marketplace lead inbox and lead conversion preview.
+- Mock dashboard lead preview bridge from public intake.
+- Mock technician availability and coverage board.
+- Mock marketplace analytics dashboard.
+- Mock Open Job Board where open jobs can be accepted in local state only.
+
+## Planned future marketplace backend behavior
+
+Open Job Board for Technicians is planned as a production marketplace workflow:
+
+1. A customer submits a request without selecting a technician.
+2. The request becomes an open marketplace job.
+3. Matching technicians can see the job based on ZIP/service-area coverage, specialty, workload, and availability.
+4. The first qualified technician may accept the job.
+5. Accepted jobs become assigned and can later convert into repair cases.
+
+Future implementation considerations:
+
+- ZIP and service-area matching.
+- Specialty filtering for appliance type, brand, and repair category.
+- Workload and availability filtering.
+- Temporary job locking while a technician reviews or accepts an open job.
+- Assigned status transitions for open, locked, accepted, assigned, declined, expired, and converted jobs.
+- Future technician mobile workflow for accepting and managing open jobs in the field.
+- Future Stripe payout compatibility for accepted/completed marketplace jobs.
 
 ## Current folder structure
 
@@ -67,15 +113,27 @@ WeRepairRefrigerators/
     ├── src/
     │   ├── app/
     │   │   ├── dashboard/
-    │   │   │   ├── page.tsx
-    │   │   │   └── repair-cases/
-    │   │   │       └── new/
-    │   │   │           └── page.tsx
+    │   │   │   ├── analytics/
+    │   │   │   ├── community/
+    │   │   │   ├── coverage/
+    │   │   │   ├── leads/
+    │   │   │   ├── open-jobs/
+    │   │   │   ├── repair-cases/
+    │   │   │   └── page.tsx
+    │   │   ├── brands/
+    │   │   ├── find-technician/
     │   │   ├── globals.css
     │   │   ├── layout.tsx
+    │   │   ├── locations/
+    │   │   ├── repair-cases/
+    │   │   ├── schedule-service/
+    │   │   ├── services/
+    │   │   ├── technicians/
     │   │   └── page.tsx
     │   └── components/
     │       ├── dashboard/
+    │       ├── public/
+    │       ├── ui/
     │       ├── FormField.tsx
     │       ├── FormSection.tsx
     │       ├── MetricCard.tsx
@@ -84,6 +142,10 @@ WeRepairRefrigerators/
     │       ├── StatusBadge.tsx
     │       ├── TextArea.tsx
     │       └── TextInput.tsx
+    │   ├── config/
+    │   ├── data/
+    │   ├── lib/
+    │   └── types/
     ├── package.json
     └── AGENTS.md
 ```
