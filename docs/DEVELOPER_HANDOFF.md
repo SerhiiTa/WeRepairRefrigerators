@@ -41,12 +41,13 @@ npm run build -- --webpack
 - Reusable form, dashboard, public, state, empty/loading/error, community, analytics, open jobs, and reputation components.
 - Mock datasets in `frontend/src/data` and shared contracts in `frontend/src/types`.
 - Backend architecture planning in `docs/BACKEND_ARCHITECTURE_PLAN.md`.
+- Auth and role-based access planning in `docs/AUTH_ROLES_PLAN.md`.
 
 ## What to build next
 
 Recommended next steps:
 
-1. Use `docs/BACKEND_ARCHITECTURE_PLAN.md` to guide Supabase schema, auth, RLS, dispatch locking, community persistence, analytics, Stripe, and AI/RAG implementation.
+1. Use `docs/BACKEND_ARCHITECTURE_PLAN.md` and `docs/AUTH_ROLES_PLAN.md` to guide Supabase schema, auth, RLS, dispatch locking, community persistence, analytics, Stripe, and AI/RAG implementation.
 2. Add authentication and protected dashboard routes.
 3. Convert public intake and dashboard lead workflows into validated server-side mutations.
 4. Add real repair case persistence, uploads, and draft/edit states.
@@ -64,6 +65,16 @@ Read `docs/BACKEND_ARCHITECTURE_PLAN.md` before starting backend work. It define
 - RLS expectations for customers, technicians, company owners, admins, open jobs, and private community data.
 - Dispatch/open job locking plan.
 - Future community, analytics, Stripe, and AI/RAG implementation phases.
+
+## Auth planning reference
+
+Read `docs/AUTH_ROLES_PLAN.md` before starting auth work. It defines:
+
+- Planned app roles: public visitor, customer, technician, verified technician, expert technician, company owner, and admin.
+- Route/feature access expectations for public marketplace, dashboard CRM, open jobs, repair cases, analytics, and private community routes.
+- Technician signup, onboarding, and verification flow.
+- Route protection strategy for dashboard, community, open jobs, company/team, and admin surfaces.
+- RLS role mapping and navigation visibility expectations.
 
 ## Important routes
 

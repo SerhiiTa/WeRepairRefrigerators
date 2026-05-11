@@ -15,6 +15,7 @@
   - Task 34: Technician Reputation and Expert Badges mock.
 - Completed planning:
   - Task 36: Backend architecture planning for Supabase/Auth/Postgres, RLS, dispatch locking, private community persistence, analytics, Stripe, and AI/RAG phases.
+  - Task 37: Auth and role-based access planning for public visitors, customers, technicians, verified technicians, expert technicians, company owners, and admins.
 
 ## Phase 2: Repair case workflow
 
@@ -27,6 +28,7 @@
 ## Phase 3: Supabase auth/database
 
 - Use `docs/BACKEND_ARCHITECTURE_PLAN.md` as the implementation planning reference before creating backend code.
+- Use `docs/AUTH_ROLES_PLAN.md` as the implementation planning reference before adding auth, middleware, protected dashboard routes, role-aware navigation, or RLS role policies.
 - Add Supabase authentication.
 - Create database tables for users, technician profiles, repair cases, parts, photos, and article drafts.
 - Add tables for marketplace leads, open jobs, technician availability, technician community discussions, messages, accepted solutions, knowledge cases, and reputation events.
@@ -44,6 +46,14 @@ Recommended backend implementation order:
 6. Privacy-safe analytics events and aggregate dashboard views.
 7. Stripe subscriptions, paid leads, premium placement, and payout-compatible audit records.
 8. Server-side AI, translation, and RAG for approved private knowledge and reviewed public SEO drafts.
+
+Auth planning order:
+
+1. Create profiles, roles, statuses, and basic dashboard protection.
+2. Add technician onboarding and verification status.
+3. Gate open jobs and private community routes to verified technicians or higher.
+4. Add company-owner team scoping.
+5. Add admin verification, moderation, and audit tooling.
 
 ## Phase 4: AI SEO article generation
 

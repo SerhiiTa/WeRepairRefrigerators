@@ -16,6 +16,7 @@
 - Do not expose customer phone numbers, emails, full addresses, payment details, or private notes in public or community views.
 - Do not add real-time messaging, persistence, AI calls, translation calls, notifications, or dispatch behavior until auth and backend boundaries are approved.
 - Backend/RLS planning is documented in `docs/BACKEND_ARCHITECTURE_PLAN.md` and should be reviewed before adding Supabase, auth, persistence, dispatch, community, analytics, Stripe, or AI/RAG code.
+- Auth/role planning is documented in `docs/AUTH_ROLES_PLAN.md` and should be reviewed before adding login, signup, route protection, role-aware navigation, or role-based RLS policies.
 
 ## AI content safety
 
@@ -28,11 +29,14 @@ AI TechAdvisor, multilingual previews, and discussion summaries are currently mo
 Before adding authentication:
 
 - Review `docs/BACKEND_ARCHITECTURE_PLAN.md`.
+- Review `docs/AUTH_ROLES_PLAN.md`.
 - Choose the Supabase auth flow.
 - Define user roles.
 - Keep auth checks server-side where possible.
 - Add protected dashboard routes.
 - Require authentication before enabling technician community, reputation, open job claiming, live dispatch, or private knowledge base access.
+- Gate private community, reputation, and open jobs to verified technicians or higher.
+- Audit role changes and technician verification status changes.
 
 Before adding database tables:
 
