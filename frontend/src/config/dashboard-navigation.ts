@@ -17,8 +17,20 @@ export const dashboardNavigationItems: DashboardNavigationItem[] = [
     href: "/dashboard/leads",
   },
   {
+    label: "Open Jobs",
+    href: "/dashboard/open-jobs",
+  },
+  {
     label: "Coverage",
     href: "/dashboard/coverage",
+  },
+  {
+    label: "Analytics",
+    href: "/dashboard/analytics",
+  },
+  {
+    label: "Community",
+    href: "/dashboard/community",
   },
   {
     label: "AI Articles",
