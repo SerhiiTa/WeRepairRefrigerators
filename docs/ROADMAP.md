@@ -21,6 +21,7 @@
   - Task 40: API and backend service architecture planning for thin backend layers, API domains, uploads, AI, realtime, payments, scaling, security, and observability.
   - Task 41: Supabase client foundation with defensive env handling and typed placeholders. No auth, tables, route protection, or mock workflow replacement yet.
   - Task 42: Auth readiness helpers for planned roles, permission checks, and null-safe session snapshots. No login UI, route protection, middleware, or mock workflow replacement yet.
+  - Task 43: Mock-safe login/signup UI pages with defensive Supabase Auth calls. No profile persistence, route protection, middleware, tables, or mock workflow replacement yet.
 
 ## Phase 2: Repair case workflow
 
@@ -39,6 +40,7 @@
 - Use `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md` as the service/API planning reference before adding API routes, Edge Functions, upload flows, webhooks, AI endpoints, realtime channels, or background jobs.
 - Use the existing `frontend/src/lib/supabase` helpers as the starting point for future client/server Supabase access. They are intentionally inert when public env vars are missing.
 - Use the existing `frontend/src/lib/auth` helpers as the starting point for future role-aware UI and route protection, but do not treat frontend permission helpers as the production security boundary.
+- Use `/login` and `/signup` as the future auth UI starting point. Role intent remains UI-only until profile persistence exists.
 - Add Supabase authentication.
 - Create database tables for users, technician profiles, repair cases, parts, photos, and article drafts.
 - Add tables for marketplace leads, open jobs, technician availability, technician community discussions, messages, accepted solutions, knowledge cases, and reputation events.

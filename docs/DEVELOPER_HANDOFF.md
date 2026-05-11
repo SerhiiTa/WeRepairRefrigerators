@@ -47,6 +47,7 @@ npm run build -- --webpack
 - API and backend service architecture planning in `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md`.
 - Supabase client foundation in `frontend/src/lib/supabase` with defensive public env handling. No auth, route protection, database tables, or mock workflow replacement has been implemented yet.
 - Auth readiness helpers in `frontend/src/lib/auth` with planned roles, permission helpers, and null-safe session snapshots. These helpers are not wired into routes or UI yet.
+- Mock-safe public auth UI at `/login` and `/signup`. These pages can defensively call Supabase Auth when env vars are configured, but they do not create profiles, persist roles, protect routes, or change dashboard access yet.
 
 ## What to build next
 
@@ -113,6 +114,8 @@ Read `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md` before adding API routes, E
 - `/`
 - `/find-technician`
 - `/schedule-service`
+- `/login`
+- `/signup`
 - `/brands`, `/brands/[brand]`
 - `/services`, `/services/[service]`
 - `/locations`, `/locations/[city]`
@@ -141,6 +144,7 @@ Read `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md` before adding API routes, E
 - `frontend/src/lib/public-seo-data.ts` and `frontend/src/types/public-seo.ts`
 - `frontend/src/lib/supabase/client.ts`, `frontend/src/lib/supabase/server.ts`, `frontend/src/lib/supabase/env.ts`, and `frontend/src/lib/supabase/types.ts`
 - `frontend/src/lib/auth/types.ts`, `frontend/src/lib/auth/roles.ts`, `frontend/src/lib/auth/permissions.ts`, and `frontend/src/lib/auth/session.ts`
+- `frontend/src/components/public/AuthForm.tsx`
 
 ## Integration boundaries
 
@@ -148,6 +152,7 @@ Read `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md` before adding API routes, E
 - Technician community routes must remain dashboard-only and require auth before production.
 - Supabase helpers currently return `null` when `NEXT_PUBLIC_SUPABASE_URL` or `NEXT_PUBLIC_SUPABASE_ANON_KEY` are missing, so the mock-only app can continue building without live backend configuration.
 - Auth readiness helpers are UX/plumbing only. Future route protection must still use server checks and Supabase RLS before any dashboard or community data becomes real.
+- Login/signup pages are public and mock-safe. Role intent is UI-only until the profiles table and role persistence are implemented.
 - AI article, TechAdvisor, translation, and RAG features are mock-only until server-side API boundaries and privacy filters are implemented.
 - Open job acceptance is local UI state only. Production claiming requires server-side lock/assignment logic.
 - Lead conversion previews do not create real repair case data yet.
