@@ -23,6 +23,7 @@
   - Task 42: Auth readiness helpers for planned roles, permission checks, and null-safe session snapshots. No login UI, route protection, middleware, or mock workflow replacement yet.
   - Task 43: Mock-safe login/signup UI pages with defensive Supabase Auth calls. No profile persistence, route protection, middleware, tables, or mock workflow replacement yet.
   - Task 44: Dashboard auth-awareness showing Supabase unavailable, guest/demo mode, or authenticated email/placeholder role. No route protection, middleware, tables, or mock workflow replacement yet.
+  - Task 45: Draft Supabase profiles/roles migration. The SQL file exists for review but has not been applied to any database.
 
 ## Phase 2: Repair case workflow
 
@@ -43,6 +44,7 @@
 - Use the existing `frontend/src/lib/auth` helpers as the starting point for future role-aware UI and route protection, but do not treat frontend permission helpers as the production security boundary.
 - Use `/login` and `/signup` as the future auth UI starting point. Role intent remains UI-only until profile persistence exists.
 - Use dashboard auth-awareness as a temporary visibility layer only. Real access control still requires profiles, server checks, middleware or route protection, and RLS.
+- Review `supabase/migrations/0001_profiles_roles.sql` before applying the first profiles/roles migration.
 - Add Supabase authentication.
 - Create database tables for users, technician profiles, repair cases, parts, photos, and article drafts.
 - Add tables for marketplace leads, open jobs, technician availability, technician community discussions, messages, accepted solutions, knowledge cases, and reputation events.

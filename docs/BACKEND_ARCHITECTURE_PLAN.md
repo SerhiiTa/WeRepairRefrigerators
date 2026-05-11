@@ -12,6 +12,8 @@ All current workflows are static or local UI state. There is no backend, authent
 
 Task 41 added the first practical Supabase client foundation in `frontend/src/lib/supabase`. These helpers only create typed Supabase clients when `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are configured, return `null` when missing, and do not change current mock-only app behavior.
 
+Task 45 added a review-only migration draft at `supabase/migrations/0001_profiles_roles.sql` for profile roles, profile status, `public.profiles`, auth user profile creation, updated timestamps, and draft RLS policies. It has not been applied to any database.
+
 ## Backend Goals
 
 The future backend should turn the current mock platform into a real SaaS marketplace while preserving public/dashboard/community boundaries.
@@ -324,6 +326,7 @@ Stripe should own payment instruments, invoices, disputes, and card data. The ap
 ### Phase 1: Supabase foundation
 
 - Create Supabase project.
+- Review and apply the draft profiles/roles migration only after confirming role defaults, trigger safety, grants, and RLS behavior.
 - Add `profiles`.
 - Add authentication.
 - Add roles and permission checks.

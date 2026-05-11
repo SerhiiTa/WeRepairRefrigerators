@@ -23,6 +23,7 @@
 - Auth readiness helpers exist in `frontend/src/lib/auth`, but they are not a security boundary. Future production access must be enforced with server-side checks and Supabase RLS.
 - Public `/login` and `/signup` pages are mock-safe UI only. They must not be treated as route protection, role persistence, or production account security until profiles, RLS, and server checks exist.
 - Dashboard auth-awareness is informational only. Showing a session, email, or placeholder role in the dashboard does not protect any route or authorize access to private data.
+- `supabase/migrations/0001_profiles_roles.sql` is a draft migration only. Review it before applying; do not treat it as production-ready RLS until tested.
 
 ## AI content safety
 
@@ -51,6 +52,7 @@ Before adding database tables:
 
 - Review `docs/SUPABASE_DATA_MODEL_PLAN.md`.
 - Review `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md`.
+- Review the draft profiles/roles migration before applying it to a real Supabase project.
 - Enable Row Level Security.
 - Write explicit RLS policies.
 - Test cross-user access boundaries.

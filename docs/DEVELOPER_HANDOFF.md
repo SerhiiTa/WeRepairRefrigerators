@@ -49,6 +49,7 @@ npm run build -- --webpack
 - Auth readiness helpers in `frontend/src/lib/auth` with planned roles, permission helpers, and null-safe session snapshots. These helpers are not wired into routes or UI yet.
 - Mock-safe public auth UI at `/login` and `/signup`. These pages can defensively call Supabase Auth when env vars are configured, but they do not create profiles, persist roles, protect routes, or change dashboard access yet.
 - Dashboard auth-awareness in the dashboard topbar. It can show Supabase unavailable, guest/demo mode, or authenticated email/placeholder role, but it does not protect routes or hide functionality yet.
+- Draft Supabase profiles/roles migration at `supabase/migrations/0001_profiles_roles.sql`. It has not been applied and must be reviewed before use.
 
 ## What to build next
 
@@ -147,6 +148,7 @@ Read `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md` before adding API routes, E
 - `frontend/src/lib/auth/types.ts`, `frontend/src/lib/auth/roles.ts`, `frontend/src/lib/auth/permissions.ts`, `frontend/src/lib/auth/session.ts`, and `frontend/src/lib/auth/dashboard-identity.ts`
 - `frontend/src/components/public/AuthForm.tsx`
 - `frontend/src/components/dashboard/DashboardAuthStatus.tsx`
+- `supabase/migrations/0001_profiles_roles.sql`
 
 ## Integration boundaries
 
@@ -156,6 +158,7 @@ Read `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md` before adding API routes, E
 - Auth readiness helpers are UX/plumbing only. Future route protection must still use server checks and Supabase RLS before any dashboard or community data becomes real.
 - Login/signup pages are public and mock-safe. Role intent is UI-only until the profiles table and role persistence are implemented.
 - Dashboard auth-awareness is informational only. Dashboard routes remain accessible in demo mode until middleware/server checks, profile sync, and RLS are implemented.
+- The profiles/roles SQL migration is draft-only. Do not apply it without reviewing triggers, grants, RLS policies, role defaults, and admin update paths.
 - AI article, TechAdvisor, translation, and RAG features are mock-only until server-side API boundaries and privacy filters are implemented.
 - Open job acceptance is local UI state only. Production claiming requires server-side lock/assignment logic.
 - Lead conversion previews do not create real repair case data yet.
