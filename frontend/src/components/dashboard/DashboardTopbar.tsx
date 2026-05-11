@@ -6,6 +6,8 @@ import { usePathname } from "next/navigation";
 import { BrandLogo } from "@/components/BrandLogo";
 import { dashboardNavigationItems } from "@/config/dashboard-navigation";
 
+import { DashboardAuthStatus } from "./DashboardAuthStatus";
+
 export function DashboardTopbar() {
   const pathname = usePathname();
 
@@ -47,6 +49,10 @@ export function DashboardTopbar() {
             Houston MVP
           </span>
         </div>
+      </div>
+
+      <div className="mt-4">
+        <DashboardAuthStatus />
       </div>
 
       <nav aria-label="Mobile dashboard navigation" className="mt-4 flex gap-2 overflow-x-auto lg:hidden">

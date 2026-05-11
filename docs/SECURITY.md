@@ -22,6 +22,7 @@
 - API/backend service planning is documented in `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md` and should be reviewed before adding API routes, Edge Functions, upload flows, webhooks, AI endpoints, realtime channels, or background jobs.
 - Auth readiness helpers exist in `frontend/src/lib/auth`, but they are not a security boundary. Future production access must be enforced with server-side checks and Supabase RLS.
 - Public `/login` and `/signup` pages are mock-safe UI only. They must not be treated as route protection, role persistence, or production account security until profiles, RLS, and server checks exist.
+- Dashboard auth-awareness is informational only. Showing a session, email, or placeholder role in the dashboard does not protect any route or authorize access to private data.
 
 ## AI content safety
 
@@ -41,6 +42,7 @@ Before adding authentication:
 - Treat signup role intent as non-authoritative until it is persisted and validated server-side.
 - Keep auth checks server-side where possible.
 - Add protected dashboard routes.
+- Do not rely on dashboard auth-awareness UI as an authorization control.
 - Require authentication before enabling technician community, reputation, open job claiming, live dispatch, or private knowledge base access.
 - Gate private community, reputation, and open jobs to verified technicians or higher.
 - Audit role changes and technician verification status changes.
