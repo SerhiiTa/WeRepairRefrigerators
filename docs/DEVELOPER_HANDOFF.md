@@ -47,6 +47,7 @@ npm run build -- --webpack
 - API and backend service architecture planning in `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md`.
 - Supabase setup guide in `docs/SUPABASE_SETUP_GUIDE.md` for creating a project, configuring local frontend env vars, reviewing/applying the first migration safely, and checking profile row creation.
 - Owner/admin promotion guide in `docs/OWNER_ADMIN_PROMOTION_GUIDE.md` for safely promoting one known owner/developer account by email in Supabase SQL Editor. Use `company_owner` with `active` status for routine development and reserve `admin` for short admin-specific testing.
+- Auth middleware and safe redirect strategy planning in `docs/AUTH_MIDDLEWARE_PLAN.md`. It defines public routes, dashboard route groups, profile/status handling, redirect targets, dev helper treatment, phased enforcement, and rollback guidance.
 - Supabase client foundation in `frontend/src/lib/supabase` with defensive public env handling. No auth, route protection, database tables, or mock workflow replacement has been implemented yet.
 - Auth readiness helpers in `frontend/src/lib/auth` with planned roles, permission helpers, and null-safe session snapshots. These helpers are not wired into routes or UI yet.
 - Mock-safe public auth UI at `/login` and `/signup`. These pages can defensively call Supabase Auth when env vars are configured, but they do not create profiles, persist roles, protect routes, or change dashboard access yet.
@@ -64,7 +65,7 @@ Recommended next steps:
 1. Use `docs/BACKEND_ARCHITECTURE_PLAN.md`, `docs/AUTH_ROLES_PLAN.md`, `docs/SUPABASE_DATA_MODEL_PLAN.md`, `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md`, and `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md` to guide Supabase schema, auth, RLS, dispatch locking, community persistence, analytics, Stripe, and AI/RAG implementation.
 2. Follow `docs/SUPABASE_SETUP_GUIDE.md` before creating a Supabase project, configuring `frontend/.env.local`, or manually applying the first profiles/roles migration.
 3. Follow `docs/OWNER_ADMIN_PROMOTION_GUIDE.md` before manually promoting the owner/developer account. Do not add owner/admin promotion to public signup.
-4. Add server/middleware-backed protected dashboard routes using the existing route protection readiness helpers as UX support only.
+4. Follow `docs/AUTH_MIDDLEWARE_PLAN.md`, then add a dry-run middleware or route-level guard before enforcing protected dashboard redirects.
 5. Convert public intake and dashboard lead workflows into validated server-side mutations.
 6. Add real repair case persistence, uploads, and draft/edit states.
 7. Add dispatch locking for open jobs before any live technician claiming.
@@ -126,6 +127,18 @@ Read `docs/SUPABASE_SETUP_GUIDE.md` before creating a Supabase project, filling 
 ## Owner/admin promotion reference
 
 Read `docs/OWNER_ADMIN_PROMOTION_GUIDE.md` before manually changing a project owner/developer role in `public.profiles`. It explains why owner/admin roles must never come from public signup, the difference between `technician`, `company_owner`, and `admin`, the recommended development role, SQL Editor promotion templates, verification queries, rollback SQL, and safety warnings.
+
+## Auth middleware planning reference
+
+Read `docs/AUTH_MIDDLEWARE_PLAN.md` before adding middleware, route-level guards, redirects, route protection, or role-gated dashboard navigation. It defines:
+
+- Public routes that must stay crawlable.
+- Dashboard routes that later require authentication.
+- Routes that later require active profile status, verified technician status, company owner, or admin.
+- Redirect targets for logged-out, missing-profile, pending, suspended/rejected, and unauthorized-role states.
+- Dev helper route handling for `/dashboard/dev/supabase-check`.
+- A phased rollout from soft notices to dry-run decisions to selected route protection.
+- Rollback steps if middleware causes broken access or redirect loops.
 
 ## Route protection readiness
 
