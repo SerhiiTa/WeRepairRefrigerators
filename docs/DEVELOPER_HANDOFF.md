@@ -43,6 +43,7 @@ npm run build -- --webpack
 - Backend architecture planning in `docs/BACKEND_ARCHITECTURE_PLAN.md`.
 - Auth and role-based access planning in `docs/AUTH_ROLES_PLAN.md`.
 - Supabase data model planning in `docs/SUPABASE_DATA_MODEL_PLAN.md`.
+- Real marketplace/CRM data model planning in `docs/REAL_DATA_MODEL_PLAN.md` for service requests, leads, jobs, assignments, repair cases, customer addressing, pricing, open jobs, service areas, and future AI article drafts.
 - RLS and permission architecture planning in `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md`.
 - API and backend service architecture planning in `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md`.
 - Supabase setup guide in `docs/SUPABASE_SETUP_GUIDE.md` for creating a project, configuring local frontend env vars, reviewing/applying the first migration safely, and checking profile row creation.
@@ -102,6 +103,19 @@ Read `docs/SUPABASE_DATA_MODEL_PLAN.md` before creating tables, migrations, stor
 - Ownership, visibility, indexes, and RLS notes for each table.
 - Separation between public SEO content, private customer data, technician dashboard data, company/team data, community knowledge data, and admin/audit data.
 - Phased persistence order from auth profiles through leads, jobs, repair cases, community, reputation, and payments later.
+
+## Real marketplace data model reference
+
+Read `docs/REAL_DATA_MODEL_PLAN.md` before creating migrations for live marketplace or CRM persistence. It defines:
+
+- Core entities for `service_requests`, `leads`, `jobs`, `job_assignments`, `repair_cases`, `repair_case_photos`, `repair_case_notes`, `technician_profiles`, `companies`, `pricing_rules`, `service_areas`, and `ai_article_drafts`.
+- Customer address handling fields and staged visibility rules before and after technician acceptance.
+- Marketplace workflow from public intake to service call estimate, open job, assignment, full customer detail unlock, repair case, and AI article draft.
+- Flexible service call pricing for standard appliance repair, built-in refrigeration, commercial work, emergency/after-hours, travel surcharge, and company overrides.
+- Repair case fields for symptoms, diagnosis, root cause, parts, labor, private notes, customer-safe notes, AI-ready notes, voice transcription, and SEO support.
+- Ownership and RLS expectations for customers, technicians, company owners, admins, and open marketplace previews.
+- A phased migration rollout: Phase 1 service requests/leads/jobs/repair cases, Phase 2 assignments/pricing/companies/open jobs, Phase 3 photos/notes/voice/scheduling/AI drafts.
+- Future-proofing guidance for HVAC, plumbing, electrical, smart home, locksmith, emergency dispatch, and contractor teams.
 
 ## RLS planning reference
 
@@ -218,6 +232,7 @@ Next route-protection task:
 - Dashboard profile role/status display uses the browser anon client and user-owned profile read policy. It must remain display-only until protected routes, server authorization, and RLS are fully implemented.
 - Route protection readiness warnings in the dashboard are advisory only. They should help developers see future access states, but they do not block, redirect, or authorize access.
 - Auth guard dry-run diagnostics are advisory only. `allowedNow` remains non-blocking for current dashboard routes and `wouldRedirectLater` is only a preview of future enforcement behavior.
+- Real customer address, lead, job, and repair case persistence should follow `docs/REAL_DATA_MODEL_PLAN.md`. Before technician acceptance, expose only city/ZIP/service area, appliance details, issue summary, preferred window, and estimated value; unlock full customer contact/address only after assignment.
 - Owner/admin role promotion is manual documentation only. Do not add public signup paths or frontend controls that grant `company_owner` or `admin`.
 - The profiles/roles SQL migration is draft-only. Do not apply it without reviewing triggers, grants, RLS policies, role defaults, and admin update paths.
 - AI article, TechAdvisor, translation, and RAG features are mock-only until server-side API boundaries and privacy filters are implemented.

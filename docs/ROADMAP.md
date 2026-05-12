@@ -32,6 +32,7 @@
   - Task 51: Route protection foundation with typed auth/profile guard helpers and non-blocking dashboard notices for logged-out, missing-profile, pending, suspended, or rejected states. No redirects, middleware, route gating, migrations, or mock workflow changes yet.
   - Task 52: Auth middleware and safe redirect strategy planning. Documentation only; no middleware, redirects, route blocking, migrations, or behavior changes yet.
   - Task 53: Auth guard dry-run diagnostics for dashboard routes. Access decisions are evaluated and displayed without redirects, blocking, middleware enforcement, service-role usage, migrations, or public page changes.
+  - Task 54: Real data model planning for service requests, leads, jobs, assignments, repair cases, customer addressing, pricing, open jobs, and future AI article drafts. Documentation only; no migrations, SQL, tables, or frontend behavior changes.
 
 ## Phase 2: Repair case workflow
 
@@ -62,6 +63,7 @@
 - Dashboard auth notices now surface logged-out/demo mode, missing profile rows, and inactive profile statuses, but these warnings are intentionally non-blocking. The next route protection task should add server/middleware redirects only after the desired rollout behavior is approved.
 - Use `docs/AUTH_MIDDLEWARE_PLAN.md` before adding middleware, route-level guards, redirects, role-gated navigation, or dashboard enforcement. Start with dry-run route decisions before blocking access.
 - Use `frontend/src/lib/auth/access-decisions.ts` as the current dry-run access decision helper. It classifies public, dashboard-auth, active-profile, verified-technician, company-owner, and admin route requirements and returns non-blocking redirect previews only.
+- Use `docs/REAL_DATA_MODEL_PLAN.md` before creating real migrations for service requests, leads, jobs, job assignments, repair cases, pricing rules, service areas, customer address handling, open jobs, or AI article drafts.
 - Add Supabase authentication.
 - Create database tables for users, technician profiles, repair cases, parts, photos, and article drafts.
 - Add tables for marketplace leads, open jobs, technician availability, technician community discussions, messages, accepted solutions, knowledge cases, and reputation events.
@@ -91,13 +93,12 @@ Auth planning order:
 Supabase data model order:
 
 1. `profiles`, roles, auth status, and audit foundations.
-2. `service_requests` and `leads`.
-3. `jobs` and `open_jobs` with assignment/claiming rules.
-4. `repair_cases` and `repair_case_photos`.
-5. `technician_profiles`, `companies`, `company_members`, and `public_profiles`.
-6. `community_posts`, `community_replies`, and `accepted_solutions`.
-7. `reputation_events` and `technician_badges`.
-8. Payments/subscriptions after marketplace workflows are stable.
+2. `service_requests`, `leads`, basic `jobs`, and basic `repair_cases`.
+3. `job_assignments`, `open_jobs`, `pricing_rules`, `service_areas`, `companies`, and `technician_profiles`.
+4. `repair_case_photos`, `repair_case_notes`, AI-ready notes, voice/transcription support, and `ai_article_drafts`.
+5. `community_posts`, `community_replies`, and `accepted_solutions`.
+6. `reputation_events` and `technician_badges`.
+7. Payments/subscriptions after marketplace workflows are stable.
 
 RLS planning order:
 
