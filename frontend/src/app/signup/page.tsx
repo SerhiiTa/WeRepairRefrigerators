@@ -8,7 +8,7 @@ import { RefrigerationBackground } from "@/components/public/visuals/Refrigerati
 export const metadata: Metadata = {
   title: "Sign Up | WeRepairRefrigerators",
   description:
-    "Mock-safe signup page for future WeRepairRefrigerators customer and technician accounts.",
+    "Create a WeRepairRefrigerators account for Supabase Auth QA and future marketplace access.",
 };
 
 export default function SignupPage() {
@@ -23,22 +23,22 @@ export default function SignupPage() {
               Account preview
             </p>
             <h2 className="mt-4 text-4xl font-black tracking-tight text-slate-950 sm:text-5xl">
-              Customer and technician accounts are being staged carefully.
+              Create an account for the connected Supabase auth flow.
             </h2>
             <p className="mt-5 text-lg leading-8 text-slate-600">
-              Signup can call Supabase Auth when configured, but role intent is only a
-              UI signal until the profiles table, verification workflow, and RLS policies
-              are implemented.
+              Signup sends customer or technician intent to Supabase metadata so
+              the profiles trigger can create the expected role/status. Route
+              protection and production permissions still come later.
             </p>
             <div className="mt-8 grid gap-3 text-sm font-bold text-slate-600 sm:grid-cols-3">
               <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
                 Public marketplace stays open.
               </div>
               <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
-                Dashboard remains demo-accessible.
+                Dashboard remains non-blocking.
               </div>
               <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
-                Profiles and roles come later.
+                Profiles show role/status after login.
               </div>
             </div>
             <Link

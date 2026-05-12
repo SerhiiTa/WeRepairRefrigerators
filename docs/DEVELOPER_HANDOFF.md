@@ -4,7 +4,7 @@
 
 WeRepairRefrigerators is a Houston-first refrigerator repair marketplace and SaaS MVP for customers, technicians, and service business owners. The current app is a frontend-only Next.js App Router project with a public SEO/customer marketplace, internal dashboard CRM, and private technician community mock workflows.
 
-The app currently uses mock/static data and local UI state only. There is no authentication, Supabase integration, database, real upload handling, real dispatch, real-time chat, payment logic, AI generation, or translation API yet.
+The app still uses mock/static marketplace, CRM, and community data. Supabase Auth and the `public.profiles` foundation are connected for local development, but there is no real marketplace persistence, upload handling, dispatch, real-time chat, payment logic, AI generation, or translation API yet.
 
 ## How to run the project
 
@@ -22,6 +22,20 @@ Useful verification commands:
 npm run lint
 npm run build -- --webpack
 ```
+
+For phone testing on the same local network, use a production build/start flow. Do not rely on `next dev` for iPhone auth QA because the webpack HMR websocket may fail on iPhone Safari and make auth/debug UI appear stuck.
+
+```bash
+npm run build -- --webpack
+npm run start -- -H 0.0.0.0 -p 3001
+```
+
+Then test:
+
+- Desktop: `http://localhost:3001/login`
+- Phone: `http://10.0.0.67:3001/login`
+
+Supabase Auth redirect URLs should include both the localhost URLs and the local network IP URLs. See `docs/SUPABASE_SETUP_GUIDE.md` for the full checklist.
 
 ## What has been built
 
@@ -44,6 +58,7 @@ npm run build -- --webpack
 - Auth and role-based access planning in `docs/AUTH_ROLES_PLAN.md`.
 - Supabase data model planning in `docs/SUPABASE_DATA_MODEL_PLAN.md`.
 - Real marketplace/CRM data model planning in `docs/REAL_DATA_MODEL_PLAN.md` for service requests, leads, jobs, assignments, repair cases, customer addressing, pricing, open jobs, service areas, and future AI article drafts.
+- Review-only marketplace core migration draft at `supabase/migrations/0002_real_marketplace_core_draft.sql` for `service_requests`, `leads`, `jobs`, and `repair_cases`. It has not been applied and does not contain final RLS policies.
 - RLS and permission architecture planning in `docs/RLS_PERMISSION_ARCHITECTURE_PLAN.md`.
 - API and backend service architecture planning in `docs/API_BACKEND_SERVICE_ARCHITECTURE_PLAN.md`.
 - Supabase setup guide in `docs/SUPABASE_SETUP_GUIDE.md` for creating a project, configuring local frontend env vars, reviewing/applying the first migration safely, and checking profile row creation.
@@ -53,6 +68,8 @@ npm run build -- --webpack
 - Auth readiness helpers in `frontend/src/lib/auth` with planned roles, permission helpers, and null-safe session snapshots. These helpers are not wired into routes or UI yet.
 - Mock-safe public auth UI at `/login` and `/signup`. These pages can defensively call Supabase Auth when env vars are configured, but they do not create profiles, persist roles, protect routes, or change dashboard access yet.
 - Dashboard auth-awareness in the dashboard topbar. It can show Supabase unavailable, guest/demo mode, or authenticated email/placeholder role, but it does not protect routes or hide functionality yet.
+- Auth QA visibility appears on login/signup and dashboard surfaces. Login redirects to `/dashboard` after success, logout controls are available in auth status panels, profile reads have timeout messaging, and production-mode mobile local-network testing is documented in `docs/SUPABASE_SETUP_GUIDE.md`.
+- Login/signup and dashboard auth status are cleaned up for normal use. The Supabase browser client uses default browser storage when available, a complete memory storage fallback only when localStorage access fails, and login forces a fresh session check before redirecting to `/dashboard`.
 - Draft Supabase profiles/roles migration at `supabase/migrations/0001_profiles_roles.sql`. It has not been applied and must be reviewed before use.
 - Frontend profile role/status readiness in `frontend/src/lib/auth/profile.ts` and typed `public.profiles` placeholders in `frontend/src/lib/supabase/types.ts`. These helpers are fallback-safe and are not wired into route protection or mock workflows yet.
 - Local Supabase verification helper at `/dashboard/dev/supabase-check`. It checks public env readiness, browser client initialization, auth session state, and the current user's profile row after the first migration is manually applied. It is not linked in navigation and is not production admin tooling.
@@ -68,11 +85,12 @@ Recommended next steps:
 2. Follow `docs/SUPABASE_SETUP_GUIDE.md` before creating a Supabase project, configuring `frontend/.env.local`, or manually applying the first profiles/roles migration.
 3. Follow `docs/OWNER_ADMIN_PROMOTION_GUIDE.md` before manually promoting the owner/developer account. Do not add owner/admin promotion to public signup.
 4. Review the current auth guard dry-run diagnostics, then follow `docs/AUTH_MIDDLEWARE_PLAN.md` before adding any enforcing middleware or redirects.
-5. Convert public intake and dashboard lead workflows into validated server-side mutations.
-6. Add real repair case persistence, uploads, and draft/edit states.
-7. Add dispatch locking for open jobs before any live technician claiming.
-8. Add private technician community persistence, moderation, and permission checks.
-9. Add AI/translation boundaries server-side only, with manual review before publishing or indexing.
+5. Review `supabase/migrations/0002_real_marketplace_core_draft.sql` and design table-specific RLS policies for service requests, leads, jobs, and repair cases before applying any marketplace schema.
+6. Convert public intake and dashboard lead workflows into validated server-side mutations.
+7. Add real repair case persistence, uploads, and draft/edit states.
+8. Add dispatch locking for open jobs before any live technician claiming.
+9. Add private technician community persistence, moderation, and permission checks.
+10. Add AI/translation boundaries server-side only, with manual review before publishing or indexing.
 
 ## Backend planning reference
 
@@ -218,6 +236,7 @@ Next route-protection task:
 - `frontend/src/components/public/AuthForm.tsx`
 - `frontend/src/components/dashboard/DashboardAuthStatus.tsx`
 - `supabase/migrations/0001_profiles_roles.sql`
+- `supabase/migrations/0002_real_marketplace_core_draft.sql`
 
 ## Integration boundaries
 
@@ -228,11 +247,12 @@ Next route-protection task:
 - Login/signup pages are public and mock-safe. Role intent is UI-only until the profiles table and role persistence are implemented.
 - Dashboard auth-awareness is informational only. Dashboard routes remain accessible in demo mode until middleware/server checks, profile sync, and RLS are implemented.
 - Profile role/status helpers are readiness plumbing only. Real profile reads require `supabase/migrations/0001_profiles_roles.sql` to be reviewed/applied, and dashboard access still needs server checks, middleware or route protection, and RLS.
-- `/dashboard/dev/supabase-check` is a local development verification page only. It uses the browser anon client, does not use service-role keys, does not create missing profiles, does not apply migrations, and does not protect routes.
+- `/dashboard/dev/supabase-check` is a local development verification page only. It uses the browser anon client, does not use service-role keys, does not create missing profiles, does not apply migrations, and does not protect routes. Temporary mobile-auth debug pages have been removed.
 - Dashboard profile role/status display uses the browser anon client and user-owned profile read policy. It must remain display-only until protected routes, server authorization, and RLS are fully implemented.
 - Route protection readiness warnings in the dashboard are advisory only. They should help developers see future access states, but they do not block, redirect, or authorize access.
 - Auth guard dry-run diagnostics are advisory only. `allowedNow` remains non-blocking for current dashboard routes and `wouldRedirectLater` is only a preview of future enforcement behavior.
 - Real customer address, lead, job, and repair case persistence should follow `docs/REAL_DATA_MODEL_PLAN.md`. Before technician acceptance, expose only city/ZIP/service area, appliance details, issue summary, preferred window, and estimated value; unlock full customer contact/address only after assignment.
+- The Task 55 marketplace migration is review-only. The real database should still be treated as profiles-only until `0002_real_marketplace_core_draft.sql` is reviewed, RLS policies are designed/tested, and the user explicitly approves applying it.
 - Owner/admin role promotion is manual documentation only. Do not add public signup paths or frontend controls that grant `company_owner` or `admin`.
 - The profiles/roles SQL migration is draft-only. Do not apply it without reviewing triggers, grants, RLS policies, role defaults, and admin update paths.
 - AI article, TechAdvisor, translation, and RAG features are mock-only until server-side API boundaries and privacy filters are implemented.

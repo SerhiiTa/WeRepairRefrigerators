@@ -36,6 +36,16 @@ type ProfileSyncState =
       status: "profile_missing";
       label: string;
       profileStatus: null;
+    }
+  | {
+      status: "profile_timeout";
+      label: string;
+      profileStatus: null;
+    }
+  | {
+      status: "profile_error";
+      label: string;
+      profileStatus: null;
     };
 
 type RouteProtectionNotice = {
@@ -50,7 +60,7 @@ const modeCopy: Record<
 > = {
   loading: {
     label: "Checking session",
-    helper: "Loading auth state...",
+    helper: "Loading auth state. This will time out if Supabase is unreachable.",
     classes: "border-slate-700 bg-slate-900/80 text-slate-300",
   },
   supabase_unavailable: {
@@ -69,6 +79,8 @@ const modeCopy: Record<
     classes: "border-emerald-300/20 bg-emerald-300/10 text-emerald-100",
   },
 };
+
+const PROFILE_LOAD_TIMEOUT_MS = 8000;
 
 function formatProfileStatus(status: string): string {
   return status
@@ -100,6 +112,7 @@ export function DashboardAuthStatus() {
       label: "Profile not checked",
       profileStatus: null,
     });
+  const [isSigningOut, setIsSigningOut] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -110,57 +123,82 @@ export function DashboardAuthStatus() {
     }
 
     async function refreshIdentity() {
-      const result = await getCurrentUserProfile();
-
-      if (!isMounted) {
-        return;
-      }
-
-      if (result.status === "profile_ready") {
-        setIdentityState(
-          mapProfileToDashboardIdentity({
-            profile: result.profile,
-            session: result.session,
-            supabaseAvailable: true,
-          }),
+      try {
+        const result = await withTimeout(
+          getCurrentUserProfile(),
+          PROFILE_LOAD_TIMEOUT_MS,
         );
-        setProfileSyncState({
-          status: "profile_found",
-          label: `Profile status: ${formatProfileStatus(result.profile.status)}`,
-          profileStatus: result.profile.status,
-        });
-        return;
-      }
 
-      if (result.status === "profile_unavailable") {
+        if (!isMounted) {
+          return;
+        }
+
+        if (result.status === "profile_ready") {
+          setIdentityState(
+            mapProfileToDashboardIdentity({
+              profile: result.profile,
+              session: result.session,
+              supabaseAvailable: true,
+            }),
+          );
+          setProfileSyncState({
+            status: "profile_found",
+            label: `Profile status: ${formatProfileStatus(result.profile.status)}`,
+            profileStatus: result.profile.status,
+          });
+          return;
+        }
+
+        if (result.status === "profile_unavailable") {
+          setIdentityState(
+            createDashboardIdentityState({
+              session: result.session,
+              supabaseAvailable: true,
+            }),
+          );
+          setProfileSyncState({
+            status: "profile_missing",
+            label: "Profile not found",
+            profileStatus: null,
+          });
+          return;
+        }
+
         setIdentityState(
           createDashboardIdentityState({
-            session: result.session,
+            session: null,
+            supabaseAvailable: result.status !== "supabase_unavailable",
+          }),
+        );
+        setProfileSyncState({
+          status: "not_checked",
+          label:
+            result.status === "supabase_unavailable"
+              ? "Profile not checked"
+              : "Profile not checked until login",
+          profileStatus: null,
+        });
+      } catch (error) {
+        if (!isMounted) {
+          return;
+        }
+
+        setIdentityState(
+          createDashboardIdentityState({
+            session: null,
             supabaseAvailable: true,
           }),
         );
         setProfileSyncState({
-          status: "profile_missing",
-          label: "Profile not found",
+          status:
+            error instanceof Error &&
+            error.message === "Profile loading timeout"
+              ? "profile_timeout"
+              : "profile_error",
+          label: getProfileLoadFailureLabel(error),
           profileStatus: null,
         });
-        return;
       }
-
-      setIdentityState(
-        createDashboardIdentityState({
-          session: null,
-          supabaseAvailable: result.status !== "supabase_unavailable",
-        }),
-      );
-      setProfileSyncState({
-        status: "not_checked",
-        label:
-          result.status === "supabase_unavailable"
-            ? "Profile not checked"
-            : "Profile not checked until login",
-        profileStatus: null,
-      });
     }
 
     void refreshIdentity();
@@ -181,6 +219,29 @@ export function DashboardAuthStatus() {
       subscription?.unsubscribe();
     };
   }, []);
+
+  async function handleLogout() {
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      return;
+    }
+
+    setIsSigningOut(true);
+    await supabase.auth.signOut();
+    setIsSigningOut(false);
+    setIdentityState(
+      createDashboardIdentityState({
+        session: null,
+        supabaseAvailable: true,
+      }),
+    );
+    setProfileSyncState({
+      status: "not_checked",
+      label: "Profile not checked until login",
+      profileStatus: null,
+    });
+  }
 
   const copy = modeCopy[identityState.mode];
   const routeProtectionNotice = getRouteProtectionNotice(
@@ -224,7 +285,16 @@ export function DashboardAuthStatus() {
           ) : null}
         </div>
 
-        {identityState.mode === "authenticated" ? null : (
+        {identityState.mode === "authenticated" ? (
+          <button
+            type="button"
+            onClick={handleLogout}
+            disabled={isSigningOut}
+            className="rounded-md border border-current/20 px-3 py-2 text-xs font-black transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isSigningOut ? "Logging out..." : "Log out"}
+          </button>
+        ) : (
           <div className="flex shrink-0 gap-2">
             <Link
               href="/login"
@@ -261,6 +331,16 @@ export function DashboardAuthStatus() {
         </div>
       ) : null}
 
+      {profileSyncState.status === "profile_timeout" ||
+      profileSyncState.status === "profile_error" ? (
+        <div className="mt-3 rounded-md border border-amber-300/25 bg-amber-300/10 px-3 py-2 text-xs text-amber-100">
+          <p className="font-black uppercase tracking-[0.16em]">
+            Auth state warning
+          </p>
+          <p className="mt-1 text-current/80">{profileSyncState.label}</p>
+        </div>
+      ) : null}
+
       <div className="mt-3 rounded-md border border-white/10 bg-slate-950/35 px-3 py-2 text-xs text-slate-300">
         <p className="font-black uppercase tracking-[0.16em] text-slate-100">
           Auth guard dry run
@@ -287,6 +367,32 @@ export function DashboardAuthStatus() {
       </div>
     </aside>
   );
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      window.setTimeout(() => {
+        reject(new Error("Profile loading timeout"));
+      }, timeoutMs);
+    }),
+  ]);
+}
+
+function getProfileLoadFailureLabel(error: unknown): string {
+  if (error instanceof Error && error.message === "Profile loading timeout") {
+    return "Profile loading timed out. Dashboard remains available, but Supabase session/profile reads may be blocked on this network or local IP.";
+  }
+
+  if (error instanceof Error && error.message) {
+    return `Auth state error: ${error.message}`;
+  }
+
+  return "Auth state error: Unable to read session/profile state.";
 }
 
 function getRouteProtectionNotice(

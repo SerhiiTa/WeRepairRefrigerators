@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { AuthStatusPanel } from "@/components/public/AuthStatusPanel";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type AuthMode = "login" | "signup";
@@ -42,6 +44,7 @@ const statusToneClasses: Record<AuthStatusTone, string> = {
 };
 
 export function AuthForm({ mode }: AuthFormProps) {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [roleIntent, setRoleIntent] = useState<RoleIntent>("customer");
@@ -49,10 +52,16 @@ export function AuthForm({ mode }: AuthFormProps) {
   const [status, setStatus] = useState<AuthStatus>({
     tone: "info",
     message:
-      "This auth screen is mock-safe. Dashboard routes are still open demo pages until route protection and profiles are implemented.",
+      "Supabase Auth is connected when local env vars are configured. Dashboard routes remain non-blocking until route protection is enabled.",
   });
 
   const isSignup = mode === "signup";
+  const authRequestResult =
+    status.tone === "success"
+      ? "success"
+      : status.tone === "error"
+        ? "error"
+        : "not attempted";
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -71,41 +80,86 @@ export function AuthForm({ mode }: AuthFormProps) {
     }
 
     if (isSignup) {
-      // Role persistence is intentionally not implemented until the profiles table exists.
-      const { error } = await supabase.auth.signUp({
-        email,
-        password,
-      });
-
-      setStatus(
-        error
-          ? {
-              tone: "error",
-              message: error.message,
-            }
-          : {
-              tone: "success",
-              message: `Signup request sent. ${roleIntent} role intent is UI-only until profile persistence is added.`,
+      try {
+        const { error } = await supabase.auth.signUp({
+          email,
+          password,
+          // The profiles trigger may copy role_intent into public.profiles.
+          // Route access still depends on later server checks/RLS, not this UI value.
+          options: {
+            emailRedirectTo: `${window.location.origin}/login`,
+            data: {
+              role_intent: roleIntent,
             },
-      );
+          },
+        });
+
+        setStatus(
+          error
+            ? {
+                tone: "error",
+                message: getFriendlyAuthErrorMessage(error.message),
+              }
+            : {
+                tone: "success",
+                message:
+                  "Signup request completed. Check email confirmation if your Supabase project requires it, then log in.",
+              },
+        );
+      } catch (error) {
+        setStatus({
+          tone: "error",
+          message: getFriendlyAuthErrorMessage(error),
+        });
+      }
     } else {
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+      try {
+        const { error } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
 
-      setStatus(
-        error
-          ? {
+        if (error) {
+          setStatus({
+            tone: "error",
+            message: getFriendlyAuthErrorMessage(error.message),
+          });
+        } else {
+          const sessionResult = await withTimeout(
+            supabase.auth.getSession(),
+            6000,
+          );
+
+          if (sessionResult.error) {
+            setStatus({
               tone: "error",
-              message: error.message,
-            }
-          : {
-              tone: "success",
+              message: getFriendlyAuthErrorMessage(sessionResult.error.message),
+            });
+            return;
+          }
+
+          if (!sessionResult.data.session) {
+            setStatus({
+              tone: "error",
               message:
-                "Login request completed. Dashboard access is not gated yet in this mock-safe phase.",
-            },
-      );
+                "Login returned successfully, but Safari did not hydrate a session yet. Clear Safari Website Data for this local IP and try again.",
+            });
+            return;
+          }
+
+          setStatus({
+            tone: "success",
+            message: "Login complete. Opening the dashboard...",
+          });
+          router.replace("/dashboard");
+          router.refresh();
+        }
+      } catch (error) {
+        setStatus({
+          tone: "error",
+          message: getFriendlyAuthErrorMessage(error),
+        });
+      }
     }
 
     setIsSubmitting(false);
@@ -124,8 +178,9 @@ export function AuthForm({ mode }: AuthFormProps) {
           {isSignup ? "Start your WeRepairRefrigerators account." : "Log in to your account."}
         </h1>
         <p className="mt-4 leading-7 text-slate-600">
-          Auth UI is ready for Supabase, but profile records, roles, route protection,
-          and dashboard gating are intentionally not active yet.
+          Use your Supabase account to test real session detection, profile role
+          display, and mobile login. Dashboard access stays non-blocking until
+          route protection is enabled.
         </p>
       </div>
 
@@ -212,6 +267,60 @@ export function AuthForm({ mode }: AuthFormProps) {
           {isSignup ? "Log in" : "Sign up"}
         </Link>
       </p>
+
+      <AuthStatusPanel
+        authRequestResult={authRequestResult}
+        className="mt-6"
+      />
     </form>
   );
+}
+
+function getFriendlyAuthErrorMessage(error: unknown): string {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : "Unable to reach Supabase Auth. Check the network connection and local env vars.";
+  const lowerMessage = message.toLowerCase();
+
+  if (
+    lowerMessage.includes("invalid login") ||
+    lowerMessage.includes("invalid credentials")
+  ) {
+    return "Wrong email or password. Check the credentials and try again.";
+  }
+
+  if (lowerMessage.includes("email not confirmed")) {
+    return "Email is not confirmed yet. Confirm the account from the Supabase email link, then log in again.";
+  }
+
+  if (lowerMessage.includes("session check timeout")) {
+    return "Login succeeded, but the browser session check timed out. On iPhone/Safari, clear Website Data for this local IP and confirm Supabase redirect URLs include the local network origin.";
+  }
+
+  if (
+    lowerMessage.includes("failed to fetch") ||
+    lowerMessage.includes("network") ||
+    lowerMessage.includes("fetch")
+  ) {
+    return "Network or Supabase connection error. Confirm the dev server URL, Supabase project URL, anon key, and mobile network access.";
+  }
+
+  return message;
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      window.setTimeout(() => {
+        reject(new Error("Session check timeout"));
+      }, timeoutMs);
+    }),
+  ]);
 }

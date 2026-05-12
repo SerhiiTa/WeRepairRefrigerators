@@ -8,7 +8,7 @@ import { RefrigerationBackground } from "@/components/public/visuals/Refrigerati
 export const metadata: Metadata = {
   title: "Login | WeRepairRefrigerators",
   description:
-    "Mock-safe login page for the future WeRepairRefrigerators customer and technician platform.",
+    "Log in to test Supabase Auth and dashboard role visibility for WeRepairRefrigerators.",
 };
 
 export default function LoginPage() {
@@ -23,12 +23,12 @@ export default function LoginPage() {
               Account access
             </p>
             <h2 className="mt-4 text-4xl font-black tracking-tight text-slate-950 sm:text-5xl">
-              Future dashboard access, without changing today&apos;s demo routes.
+              Log in and confirm your dashboard session clearly.
             </h2>
             <p className="mt-5 text-lg leading-8 text-slate-600">
-              This page is ready for Supabase Auth calls when environment variables are
-              configured. Dashboard routes remain mock-open until profiles, RLS, and route
-              protection are implemented.
+              Supabase Auth is connected for local QA. After login, the dashboard
+              will show your session, email, profile role, and profile status while
+              route protection remains non-blocking.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <Link

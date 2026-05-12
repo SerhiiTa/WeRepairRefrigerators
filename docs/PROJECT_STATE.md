@@ -19,7 +19,7 @@ The MVP is focused on Houston only and refrigerator repair only. The first produ
 - Tailwind CSS
 - ESLint
 - React
-- Supabase planned later for authentication and database
+- Supabase client/auth foundation with `public.profiles` applied in development
 - AI article generation planned later
 
 ## Current completed features
@@ -41,16 +41,29 @@ The MVP is focused on Houston only and refrigerator repair only. The first produ
 - Technician reputation and expert badge mock at `/dashboard/community/reputation` with leaderboard filters, expert levels, badge rarity, and private trust metrics.
 - Shared dashboard components for lead cards, conversion preview, analytics boards, open job cards/filters/stats, community cards/filters, discussion detail panels, and reputation/leaderboard UI.
 - Mock datasets and shared types for leads, analytics, open jobs, technician availability, community discussions, and technician reputation.
+- Review-only Supabase migration draft for first real marketplace tables: `supabase/migrations/0002_real_marketplace_core_draft.sql`.
+- Improved auth QA visibility for login/signup and dashboard, including session/profile status display, logout controls, login-to-dashboard redirect, and profile loading timeout messaging.
+- Clean Supabase Auth QA flow for login/signup and dashboard status, with production-mode local network testing guidance for iPhone/mobile devices.
 
 ## Current in-progress feature
 
-The product is in a frontend-first mock workflow phase. Marketplace CRM, technician community, AI workflow, and public SEO systems exist as static/local UI only. No data is persisted and no live backend, auth, AI, translation, dispatch, notification, or payment system is connected.
+The product is transitioning from frontend-first mock workflows into reviewed backend planning. Supabase Auth and `public.profiles` exist for local development after the manually applied first migration, but marketplace CRM, technician community, AI workflow, and public SEO systems still use static/local UI data only. No real leads, jobs, repair cases, dispatch, notification, AI, translation, or payment persistence is connected.
+
+## Current Supabase persistence status
+
+- `supabase/migrations/0001_profiles_roles.sql` has been applied manually for the current development project.
+- The real database should be treated as containing only the profiles/auth foundation right now.
+- `supabase/migrations/0002_real_marketplace_core_draft.sql` is a Task 55 review-only draft for `service_requests`, `leads`, `jobs`, and `repair_cases`.
+- Task 55 did not apply SQL, connect to Supabase, create real tables, or change frontend behavior.
+- Task 55A improves auth visibility only. It does not apply migrations, change Supabase database schema, or enforce route protection.
+- Task 55B-55G investigated mobile auth diagnostics only. They did not apply migrations, change Supabase database schema, or enforce route protection.
+- Task 58 cleaned temporary mobile auth debugging code after confirming the local iPhone issue was caused by Next.js dev-mode HMR websocket behavior, not Supabase Auth.
+- The next backend task should review the draft schema and design table-specific RLS policies before any database application.
 
 ## What is not built yet
 
-- Authentication
-- Supabase project integration
-- Database schema
+- Full dashboard route protection
+- Real marketplace database schema beyond `public.profiles`
 - Server actions or API routes
 - Real repair case persistence
 - Real photo uploads
@@ -159,9 +172,10 @@ npm install
 npm run dev
 npm run lint
 npm run build -- --webpack
+npm run start -- -H 0.0.0.0 -p 3001
 ```
 
-Use the webpack build command for verification because it has been the stable build path in the current environment.
+Use the webpack build command for verification because it has been the stable build path in the current environment. For iPhone/mobile LAN auth testing, prefer production mode with `npm run build -- --webpack` followed by `npm run start -- -H 0.0.0.0 -p 3001`; `next dev` can produce misleading auth/debug symptoms when its HMR websocket fails on iPhone Safari.
 
 ## Current git workflow
 

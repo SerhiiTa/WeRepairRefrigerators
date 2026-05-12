@@ -190,6 +190,51 @@ After each test signup:
 
 Also test updating a safe profile field and confirm non-admin role/status/company changes are blocked.
 
+## 10A. Local mobile auth testing
+
+For iPhone/mobile testing on the same local network, use a production build/start flow from `frontend/`:
+
+```bash
+npm run build -- --webpack
+npm run start -- -H 0.0.0.0 -p 3001
+```
+
+Do not rely on `next dev` for iPhone auth QA. The webpack HMR websocket can fail on iPhone Safari over a local LAN and make auth/debug UI appear stuck even when Supabase Auth is working correctly.
+
+Desktop URL:
+
+```text
+http://localhost:3001/login
+```
+
+Phone URL example:
+
+```text
+http://10.0.0.67:3001/login
+```
+
+Supabase Auth URL configuration should include both localhost and the local network IP used for testing. In the Supabase dashboard, review the Auth URL/redirect settings and include local development origins such as:
+
+```text
+http://localhost:3001
+http://localhost:3001/login
+http://localhost:3001/dashboard
+http://10.0.0.67:3001
+http://10.0.0.67:3001/login
+http://10.0.0.67:3001/dashboard
+```
+
+The signup form uses the current browser origin for email confirmation redirects, so a phone opened at `http://10.0.0.67:3001` will request a confirmation redirect back to that origin. Keep the phone and development machine on the same network, and confirm firewalls allow access to port `3001`.
+
+For QA, the login/signup pages and dashboard auth panel should show:
+
+- Current session state: yes, no, loading, or error.
+- Logged-in user email.
+- Profile role and status when the `public.profiles` row is available.
+- Clear warnings for missing profile rows, Supabase/network errors, and profile loading timeouts.
+
+Dashboard routes remain non-blocking during this phase. The auth panel helps verify session/profile behavior before middleware or route protection is enforced.
+
 ## 11. Rollback caution
 
 Do not run destructive rollback SQL casually.
