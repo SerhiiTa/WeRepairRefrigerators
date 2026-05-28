@@ -3,6 +3,10 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import {
+  evaluateDashboardAccess,
+  type DashboardAccessDecision,
+} from "@/lib/auth/dashboard-access";
 import { getCurrentUserProfile } from "@/lib/auth/profile";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getMissingSupabaseEnvVars } from "@/lib/supabase/env";
@@ -23,6 +27,8 @@ type SupabaseCheckState = {
     | "profile_missing_or_unavailable";
   profile: ProfileRow | null;
   profileError: string | null;
+  dashboardDecision: DashboardAccessDecision | null;
+  technicianProfileDecision: DashboardAccessDecision | null;
 };
 
 const initialCheckState: SupabaseCheckState = {
@@ -35,6 +41,8 @@ const initialCheckState: SupabaseCheckState = {
   profileStatus: "not_checked",
   profile: null,
   profileError: null,
+  dashboardDecision: null,
+  technicianProfileDecision: null,
 };
 
 function StatusPill({
@@ -97,6 +105,47 @@ function ProfileField({
   );
 }
 
+function DecisionField({
+  label,
+  decision,
+}: {
+  label: string;
+  decision: DashboardAccessDecision | null;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+      <dt className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+        {label}
+      </dt>
+      <dd className="mt-2 text-sm text-slate-100">
+        {decision ? (
+          <span
+            className={
+              decision.allowed ? "text-emerald-200" : "text-amber-200"
+            }
+          >
+            {decision.allowed
+              ? `Allowed (${decision.reason})`
+              : `Blocked (${decision.reason})`}
+          </span>
+        ) : (
+          "Not checked"
+        )}
+      </dd>
+      {decision?.redirectTo ? (
+        <p className="mt-2 break-words text-xs text-slate-500">
+          Redirect: {decision.redirectTo}
+        </p>
+      ) : null}
+      {decision ? (
+        <p className="mt-2 text-xs leading-5 text-slate-500">
+          {decision.description}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 export default function SupabaseCheckPage() {
   const [checkState, setCheckState] =
     useState<SupabaseCheckState>(initialCheckState);
@@ -110,6 +159,13 @@ export default function SupabaseCheckPage() {
       const client = envReady ? getSupabaseBrowserClient() : null;
 
       if (!envReady || !client) {
+        const profileResult = {
+          status: envReady ? "logged_out" : "supabase_unavailable",
+          profile: null,
+          session: null,
+          error: null,
+        } as const;
+
         if (!isMounted) {
           return;
         }
@@ -124,11 +180,27 @@ export default function SupabaseCheckPage() {
           profileStatus: "not_checked",
           profile: null,
           profileError: null,
+          dashboardDecision: evaluateDashboardAccess({
+            pathname: "/dashboard",
+            profileResult,
+          }),
+          technicianProfileDecision: evaluateDashboardAccess({
+            pathname: "/dashboard/technician-profile",
+            profileResult,
+          }),
         });
         return;
       }
 
       const result = await getCurrentUserProfile({ client });
+      const dashboardDecision = evaluateDashboardAccess({
+        pathname: "/dashboard",
+        profileResult: result,
+      });
+      const technicianProfileDecision = evaluateDashboardAccess({
+        pathname: "/dashboard/technician-profile",
+        profileResult: result,
+      });
 
       if (!isMounted) {
         return;
@@ -145,6 +217,8 @@ export default function SupabaseCheckPage() {
           profileStatus: "profile_ready",
           profile: result.profile,
           profileError: null,
+          dashboardDecision,
+          technicianProfileDecision,
         });
         return;
       }
@@ -160,6 +234,8 @@ export default function SupabaseCheckPage() {
           profileStatus: "profile_missing_or_unavailable",
           profile: null,
           profileError: result.error,
+          dashboardDecision,
+          technicianProfileDecision,
         });
         return;
       }
@@ -177,6 +253,8 @@ export default function SupabaseCheckPage() {
         profileStatus: "not_checked",
         profile: null,
         profileError: null,
+        dashboardDecision,
+        technicianProfileDecision,
       });
     }
 
@@ -355,9 +433,39 @@ export default function SupabaseCheckPage() {
               label="Created at"
               value={checkState.profile.created_at}
             />
+            <ProfileField
+              label="Onboarding status"
+              value={checkState.profile.onboarding_status}
+            />
+            <ProfileField
+              label="Onboarding completed"
+              value={checkState.profile.onboarding_completed_at}
+            />
           </div>
         </section>
       ) : null}
+
+      <section className="rounded-3xl border border-slate-800 bg-slate-950 p-6">
+        <h2 className="text-lg font-semibold text-white">
+          Real dashboard guard decisions
+        </h2>
+        <p className="mt-3 text-sm leading-6 text-slate-400">
+          These checks use the same dashboard access helper as the protected
+          dashboard shell. The dev page itself remains reachable, but these
+          rows show whether the real routes should allow or redirect this
+          profile.
+        </p>
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <DecisionField
+            label="/dashboard"
+            decision={checkState.dashboardDecision}
+          />
+          <DecisionField
+            label="/dashboard/technician-profile"
+            decision={checkState.technicianProfileDecision}
+          />
+        </div>
+      </section>
 
       {isLoggedIn && !profileReady ? (
         <section className="rounded-3xl border border-amber-500/30 bg-amber-500/10 p-6">

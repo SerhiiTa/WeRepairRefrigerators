@@ -132,7 +132,7 @@ export async function getCurrentUserProfile(
     const { data, error } = await supabase
       .from("profiles")
       .select(
-        "id,email,full_name,role,status,role_intent,company_id,created_at,updated_at",
+        "id,email,full_name,role,status,role_intent,company_id,onboarding_status,onboarding_completed_at,created_at,updated_at",
       )
       .eq("id", session.user.id)
       .maybeSingle();
@@ -149,7 +149,7 @@ export async function getCurrentUserProfile(
     return {
       status: "profile_ready",
       profile: data,
-      session,
+      session: createProfileBackedSession(session, data),
       error: null,
     };
   } catch (error) {

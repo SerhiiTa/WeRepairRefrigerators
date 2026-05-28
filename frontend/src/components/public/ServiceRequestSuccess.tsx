@@ -14,12 +14,16 @@ import type { ServiceRequestFormValues } from "./ServiceRequestForm";
 type ServiceRequestSuccessProps = {
   request: ServiceRequestFormValues;
   technician: TechnicianProfilePreview | null;
+  photoUploadWarning?: string | null;
+  uploadedPhotoCount?: number;
   onReset: () => void;
 };
 
 export function ServiceRequestSuccess({
   request,
   technician,
+  photoUploadWarning = null,
+  uploadedPhotoCount = 0,
   onReset,
 }: ServiceRequestSuccessProps) {
   const availability =
@@ -34,12 +38,23 @@ export function ServiceRequestSuccess({
         Lead Prepared
       </p>
       <h2 className="mt-3 text-3xl font-black tracking-tight text-slate-950">
-        Your service request is ready for dashboard review.
+        Your service request was saved for review.
       </h2>
       <p className="mt-3 leading-7 text-slate-700">
-        Nothing was booked, sent, or stored. In the live version, this would become a marketplace
-        request for technician review.
+        Nothing was booked or dispatched yet. This request is now stored for future marketplace
+        review, and dashboard lead handling will come next.
       </p>
+      {uploadedPhotoCount > 0 ? (
+        <p className="mt-4 rounded-2xl border border-emerald-200 bg-white p-4 text-sm font-bold text-emerald-800">
+          {uploadedPhotoCount} photo{uploadedPhotoCount === 1 ? "" : "s"} attached to this
+          request.
+        </p>
+      ) : null}
+      {photoUploadWarning ? (
+        <p className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold leading-6 text-amber-900">
+          The request was saved, but photos were not attached: {photoUploadWarning}
+        </p>
+      ) : null}
 
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
         <div className="rounded-3xl border border-emerald-200 bg-white p-5">

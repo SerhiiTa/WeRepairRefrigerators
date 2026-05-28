@@ -103,10 +103,10 @@ export function evaluateAccessDecision({
 
   if (!isAuthenticated) {
     return {
-      allowedNow: true,
+      allowedNow: false,
       wouldRedirectLater: true,
       reason:
-        "Dashboard access is open now, but future enforcement would require login.",
+        "Protected dashboard access requires login.",
       recommendedRedirectTarget: getLoginRedirectTarget(pathname),
       requiredAccessLevel,
     };
@@ -114,33 +114,33 @@ export function evaluateAccessDecision({
 
   if (!profilePresent) {
     return {
-      allowedNow: true,
+      allowedNow: false,
       wouldRedirectLater: true,
       reason:
-        "A session exists, but future enforcement would require a matching profile row.",
-      recommendedRedirectTarget: "/dashboard/dev/supabase-check",
+        "A session exists, but protected dashboard access requires a matching profile row.",
+      recommendedRedirectTarget: "/account-status?reason=profile-missing",
       requiredAccessLevel,
     };
   }
 
   if (status === "suspended") {
     return {
-      allowedNow: true,
+      allowedNow: false,
       wouldRedirectLater: true,
       reason:
-        "Suspended profiles should not receive production dashboard access.",
-      recommendedRedirectTarget: "/account/suspended",
+        "Suspended profiles cannot receive protected dashboard access.",
+      recommendedRedirectTarget: "/account-status?reason=suspended",
       requiredAccessLevel,
     };
   }
 
   if (status === "rejected") {
     return {
-      allowedNow: true,
+      allowedNow: false,
       wouldRedirectLater: true,
       reason:
-        "Rejected profiles should not receive marketplace or dashboard access.",
-      recommendedRedirectTarget: "/account/rejected",
+        "Rejected profiles cannot receive protected dashboard access.",
+      recommendedRedirectTarget: "/account-status?reason=rejected",
       requiredAccessLevel,
     };
   }
@@ -150,7 +150,7 @@ export function evaluateAccessDecision({
       allowedNow: true,
       wouldRedirectLater: false,
       reason:
-        "Authenticated profile was found. Future dashboard-auth guard would pass.",
+        "Authenticated profile was found. Dashboard auth guard passes.",
       recommendedRedirectTarget: null,
       requiredAccessLevel,
     };
@@ -158,11 +158,11 @@ export function evaluateAccessDecision({
 
   if (!isActiveProfile({ status: status ?? "pending" })) {
     return {
-      allowedNow: true,
+      allowedNow: false,
       wouldRedirectLater: true,
       reason:
-        "This route will require an active or verified profile when enforcement begins.",
-      recommendedRedirectTarget: "/dashboard/settings",
+        "This route requires an active or verified profile.",
+      recommendedRedirectTarget: "/account-status?reason=pending",
       requiredAccessLevel,
     };
   }
@@ -172,11 +172,11 @@ export function evaluateAccessDecision({
     !hasRole(role, VERIFIED_TECHNICIAN_ROLES)
   ) {
     return {
-      allowedNow: true,
+      allowedNow: false,
       wouldRedirectLater: true,
       reason:
-        "This route will require verified technician, expert technician, company owner, or admin access.",
-      recommendedRedirectTarget: "/dashboard/unauthorized",
+        "This route requires verified technician, expert technician, company owner, or admin access.",
+      recommendedRedirectTarget: "/account-status?reason=dashboard-role",
       requiredAccessLevel,
     };
   }
@@ -186,21 +186,21 @@ export function evaluateAccessDecision({
     !hasRole(role, COMPANY_OWNER_ROLES)
   ) {
     return {
-      allowedNow: true,
+      allowedNow: false,
       wouldRedirectLater: true,
       reason:
-        "This route will require company owner or admin access when enforcement begins.",
-      recommendedRedirectTarget: "/dashboard/unauthorized",
+        "This route requires company owner or admin access.",
+      recommendedRedirectTarget: "/account-status?reason=dashboard-role",
       requiredAccessLevel,
     };
   }
 
   if (requiredAccessLevel === "admin" && !hasRole(role, "admin")) {
     return {
-      allowedNow: true,
+      allowedNow: false,
       wouldRedirectLater: true,
-      reason: "This route will require admin access when enforcement begins.",
-      recommendedRedirectTarget: "/dashboard/unauthorized",
+      reason: "This route requires admin access.",
+      recommendedRedirectTarget: "/account-status?reason=dashboard-role",
       requiredAccessLevel,
     };
   }
@@ -208,7 +208,7 @@ export function evaluateAccessDecision({
   return {
     allowedNow: true,
     wouldRedirectLater: false,
-    reason: "Future guard would allow this route for the current profile.",
+    reason: "Dashboard guard allows this route for the current profile.",
     recommendedRedirectTarget: null,
     requiredAccessLevel,
   };

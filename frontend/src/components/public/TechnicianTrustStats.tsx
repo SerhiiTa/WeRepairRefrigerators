@@ -6,10 +6,18 @@ type TechnicianTrustStatsProps = {
 
 export function TechnicianTrustStats({ technician }: TechnicianTrustStatsProps) {
   const stats = [
-    ["Rating", technician.rating ?? "4.9 mock rating"],
-    ["Response", technician.responseTime ?? "Same-day response window"],
-    ["Completed repairs", `${technician.completedRepairs ?? 100}+`],
-    ["Experience", `${technician.yearsExperience ?? 5}+ years`],
+    ["Rating", technician.rating ?? "Reviews coming soon"],
+    ["Response", technician.responseTime ?? "Availability coming soon"],
+    [
+      "Completed repairs",
+      technician.completedRepairs ? `${technician.completedRepairs}+` : "Case history coming soon",
+    ],
+    [
+      "Experience",
+      technician.yearsExperience
+        ? `${technician.yearsExperience}+ years`
+        : "Experience not listed",
+    ],
   ];
 
   return (

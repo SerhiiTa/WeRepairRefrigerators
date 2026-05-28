@@ -75,8 +75,8 @@ export function createDashboardIdentityState({
 
   const user = session.user;
 
-  // Role values currently come from Supabase auth metadata only. The profiles
-  // table will become the source of truth when real role sync is implemented.
+  // Role values are hydrated from the profile-backed session snapshot when the
+  // profiles row is available; otherwise this remains a safe public fallback.
   return {
     mode: "authenticated",
     email: user.email,

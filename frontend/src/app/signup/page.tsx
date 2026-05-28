@@ -27,15 +27,16 @@ export default function SignupPage() {
             </h2>
             <p className="mt-5 text-lg leading-8 text-slate-600">
               Signup sends customer or technician intent to Supabase metadata so
-              the profiles trigger can create the expected role/status. Route
-              protection and production permissions still come later.
+              the profiles trigger can create the expected role/status. Protected
+              dashboard access now depends on login, profile status, onboarding,
+              and role checks.
             </p>
             <div className="mt-8 grid gap-3 text-sm font-bold text-slate-600 sm:grid-cols-3">
               <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
                 Public marketplace stays open.
               </div>
               <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
-                Dashboard remains non-blocking.
+                Dashboard checks real auth.
               </div>
               <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
                 Profiles show role/status after login.

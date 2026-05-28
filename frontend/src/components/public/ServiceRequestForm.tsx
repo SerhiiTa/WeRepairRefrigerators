@@ -18,7 +18,11 @@ export type ServiceRequestFormValues = {
 type ServiceRequestFormProps = {
   values: ServiceRequestFormValues;
   technicians: TechnicianProfilePreview[];
+  photoFiles?: File[];
+  photoError?: string | null;
+  isSubmitting?: boolean;
   onChange: (values: ServiceRequestFormValues) => void;
+  onPhotosChange?: (files: File[]) => void;
   onSubmit: () => void;
 };
 
@@ -56,7 +60,11 @@ const preferredWindows = [
 export function ServiceRequestForm({
   values,
   technicians,
+  photoFiles = [],
+  photoError = null,
+  isSubmitting = false,
   onChange,
+  onPhotosChange,
   onSubmit,
 }: ServiceRequestFormProps) {
   function updateField<Key extends keyof ServiceRequestFormValues>(
@@ -88,6 +96,7 @@ export function ServiceRequestForm({
             inputMode="numeric"
             onChange={(event) => updateField("zipCode", event.target.value.replace(/[^0-9]/g, "").slice(0, 5))}
             placeholder="77024"
+            required
             value={values.zipCode}
           />
         </label>
@@ -97,6 +106,7 @@ export function ServiceRequestForm({
           <select
             className="min-h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-950 outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-100"
             onChange={(event) => updateField("applianceType", event.target.value)}
+            required
             value={values.applianceType}
           >
             {applianceTypes.map((option) => (
@@ -156,9 +166,42 @@ export function ServiceRequestForm({
           className="min-h-32 w-full resize-y rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium leading-6 text-slate-950 outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-100"
           onChange={(event) => updateField("issueDescription", event.target.value)}
           placeholder="Tell us what the refrigerator is doing."
+          required
           value={values.issueDescription}
         />
       </label>
+
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+        <label className="block space-y-2 text-sm font-black text-slate-900">
+          Appliance photos
+          <input
+            accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+            className="block w-full rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-4 text-sm font-bold text-slate-700 file:mr-4 file:rounded-full file:border-0 file:bg-blue-700 file:px-4 file:py-2 file:text-sm file:font-black file:text-white"
+            disabled={isSubmitting}
+            multiple
+            onChange={(event) =>
+              onPhotosChange?.(Array.from(event.target.files ?? []))
+            }
+            type="file"
+          />
+        </label>
+        <p className="mt-2 text-xs font-semibold leading-5 text-slate-500">
+          Upload up to 5 refrigerator photos. JPG, PNG, WebP, HEIC, or HEIF up
+          to 5 MB each.
+        </p>
+        {photoFiles.length > 0 ? (
+          <ul className="mt-3 space-y-1 text-xs font-bold text-slate-700">
+            {photoFiles.map((file) => (
+              <li key={`${file.name}-${file.size}`}>{file.name}</li>
+            ))}
+          </ul>
+        ) : null}
+        {photoError ? (
+          <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-900">
+            {photoError}
+          </p>
+        ) : null}
+      </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="space-y-2 text-sm font-black text-slate-900">
@@ -167,6 +210,7 @@ export function ServiceRequestForm({
             className="min-h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-950 outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-100"
             onChange={(event) => updateField("customerFirstName", event.target.value)}
             placeholder="First name only"
+            required
             type="text"
             value={values.customerFirstName}
           />
@@ -185,10 +229,11 @@ export function ServiceRequestForm({
       </div>
 
       <button
-        className="min-h-12 w-full rounded-full bg-blue-700 px-6 py-3 text-sm font-black text-white shadow-lg shadow-blue-700/20 transition hover:bg-blue-800"
+        className="min-h-12 w-full rounded-full bg-blue-700 px-6 py-3 text-sm font-black text-white shadow-lg shadow-blue-700/20 transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-400 disabled:shadow-none"
+        disabled={isSubmitting}
         type="submit"
       >
-        Prepare Service Request
+        {isSubmitting ? "Saving Request..." : "Submit Service Request"}
       </button>
     </form>
   );

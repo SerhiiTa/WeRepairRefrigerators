@@ -42,7 +42,7 @@ export function TechnicianProfileHeader({ technician }: TechnicianProfileHeaderP
             </p>
             <h2 className="mt-2 text-2xl font-black text-slate-950">{technician.serviceArea}</h2>
             <p className="mt-3 leading-7 text-slate-600">
-              Mock availability and request controls are placeholders only. Live booking is not
+              Availability and request controls are intake previews only. Live booking is not
               connected yet.
             </p>
           </aside>

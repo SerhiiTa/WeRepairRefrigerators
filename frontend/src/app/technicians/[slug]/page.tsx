@@ -9,13 +9,15 @@ import { TechnicianProfileHeader } from "@/components/public/TechnicianProfileHe
 import { TechnicianRepairCaseList } from "@/components/public/TechnicianRepairCaseList";
 import { TechnicianServiceAreas } from "@/components/public/TechnicianServiceAreas";
 import {
-  getPublicTechnicianBySlug,
   getPublicTechnicians,
   getRepairCasesForTechnician,
   publicFaqs,
 } from "@/lib/public-seo-data";
+import { loadPublicTechnicianProfileBySlug } from "@/lib/public-technician-profiles";
 import { buildSeoPageMetadata, toNextMetadata } from "@/lib/seo-utils";
 import { buildScheduleServiceHref } from "@/lib/schedule-service";
+
+export const dynamic = "force-dynamic";
 
 type TechnicianPageProps = {
   params: Promise<{
@@ -31,7 +33,7 @@ export function generateStaticParams() {
 
 export async function generateMetadata({ params }: TechnicianPageProps) {
   const { slug } = await params;
-  const technician = getPublicTechnicianBySlug(slug);
+  const technician = await loadPublicTechnicianProfileBySlug(slug);
 
   if (!technician) {
     return {};
@@ -40,7 +42,7 @@ export async function generateMetadata({ params }: TechnicianPageProps) {
   return toNextMetadata(
     buildSeoPageMetadata({
       titleParts: [technician.name, "Houston refrigerator repair technician"],
-      description: `${technician.name} is a public technician profile preview for ${technician.serviceArea}, with mock specialties including ${technician.specialties.join(", ")}.`,
+      description: `${technician.name} is a public technician profile for ${technician.serviceArea}, with specialties including ${technician.specialties.join(", ")}.`,
       canonicalPath: `/technicians/${technician.slug}`,
       keywords: [technician.name, "refrigerator repair technician", technician.serviceArea],
       kind: "technician",
@@ -50,13 +52,14 @@ export async function generateMetadata({ params }: TechnicianPageProps) {
 
 export default async function TechnicianPage({ params }: TechnicianPageProps) {
   const { slug } = await params;
-  const technician = getPublicTechnicianBySlug(slug);
+  const technician = await loadPublicTechnicianProfileBySlug(slug);
 
   if (!technician) {
     notFound();
   }
 
-  const repairCases = getRepairCasesForTechnician(technician.slug);
+  const repairCases =
+    technician.source === "mock" ? getRepairCasesForTechnician(technician.slug) : [];
   const relatedLinks = [
     ...repairCases.slice(0, 2).map((repairCase) => ({
       label: repairCase.title,
@@ -112,9 +115,9 @@ export default async function TechnicianPage({ params }: TechnicianPageProps) {
             <div className="mt-5 grid gap-3">
               <Link
                 href={buildScheduleServiceHref({ technician: technician.slug })}
-                className="rounded-full bg-blue-700 px-5 py-3 text-sm font-black text-white shadow-lg shadow-blue-700/20"
+                className="rounded-full bg-blue-700 px-5 py-3 text-center text-sm font-black text-white shadow-lg shadow-blue-700/20"
               >
-                Request This Technician
+                Request Service
               </Link>
               <Link
                 href="/repair-cases"
@@ -124,9 +127,9 @@ export default async function TechnicianPage({ params }: TechnicianPageProps) {
               </Link>
               <Link
                 href={buildScheduleServiceHref({ technician: technician.slug })}
-                className="rounded-full border border-blue-200 bg-white px-5 py-3 text-sm font-black text-blue-800 shadow-sm"
+                className="rounded-full border border-blue-200 bg-white px-5 py-3 text-center text-sm font-black text-blue-800 shadow-sm"
               >
-                Check Availability
+                Schedule Repair
               </Link>
             </div>
           </section>
@@ -139,7 +142,7 @@ export default async function TechnicianPage({ params }: TechnicianPageProps) {
         description="Request, availability, and dispatch controls are mock-only placeholders until booking and account workflows are approved."
         variant="light"
         primaryHref={buildScheduleServiceHref({ technician: technician.slug })}
-        primaryLabel="Request This Technician"
+        primaryLabel="Request Service"
         secondaryHref="/repair-cases"
         secondaryLabel="View Repair Cases"
       />

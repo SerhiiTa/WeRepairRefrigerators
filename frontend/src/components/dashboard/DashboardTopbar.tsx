@@ -1,16 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
 
 import { BrandLogo } from "@/components/BrandLogo";
-import { dashboardNavigationItems } from "@/config/dashboard-navigation";
 
 import { DashboardAuthStatus } from "./DashboardAuthStatus";
+import { DashboardNavigationLinks } from "./DashboardNavigationLinks";
 
 export function DashboardTopbar() {
-  const pathname = usePathname();
-
   return (
     <header className="border-b border-white/10 bg-slate-950/95 px-5 py-4 sm:px-6 lg:px-8">
       <div className="mb-4 flex items-center justify-between gap-4 lg:hidden">
@@ -40,10 +37,10 @@ export function DashboardTopbar() {
             View Public Site
           </Link>
           <Link
-            href="/dashboard/repair-cases/new"
+            href="/dashboard/leads"
             className="inline-flex items-center justify-center rounded-md bg-cyan-300 px-4 py-2.5 text-sm font-bold text-slate-950 transition hover:bg-cyan-200"
           >
-            New Repair Case
+            Review Leads
           </Link>
           <span className="rounded-md border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-sm font-semibold text-emerald-200">
             Houston MVP
@@ -56,22 +53,7 @@ export function DashboardTopbar() {
       </div>
 
       <nav aria-label="Mobile dashboard navigation" className="mt-4 flex gap-2 overflow-x-auto lg:hidden">
-        {dashboardNavigationItems.map((item) => {
-          const isActive =
-            item.href === "/dashboard" ? pathname === item.href : pathname.startsWith(item.href);
-
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`shrink-0 rounded-md px-3 py-2 text-sm font-semibold ${
-                isActive ? "bg-cyan-300 text-slate-950" : "border border-white/10 text-slate-300"
-              }`}
-            >
-              {item.label}
-            </Link>
-          );
-        })}
+        <DashboardNavigationLinks variant="mobile" />
       </nav>
     </header>
   );

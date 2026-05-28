@@ -114,7 +114,7 @@ export function AuthForm({ mode }: AuthFormProps) {
       }
     } else {
       try {
-        const { error } = await supabase.auth.signInWithPassword({
+        const { data, error } = await supabase.auth.signInWithPassword({
           email,
           password,
         });
@@ -124,6 +124,13 @@ export function AuthForm({ mode }: AuthFormProps) {
             tone: "error",
             message: getFriendlyAuthErrorMessage(error.message),
           });
+        } else if (data.session) {
+          setStatus({
+            tone: "success",
+            message: "Login complete. Opening the dashboard...",
+          });
+          router.replace("/dashboard");
+          router.refresh();
         } else {
           const sessionResult = await withTimeout(
             supabase.auth.getSession(),

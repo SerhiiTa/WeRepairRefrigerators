@@ -1,8 +1,10 @@
 import { PublicCtaSection } from "@/components/public/PublicCtaSection";
 import { PublicPageHeader } from "@/components/public/PublicPageHeader";
 import { TechnicianCard } from "@/components/public/TechnicianCard";
-import { getPublicTechnicians } from "@/lib/public-seo-data";
+import { loadPublicTechnicianProfiles } from "@/lib/public-technician-profiles";
 import { buildSeoPageMetadata, toNextMetadata } from "@/lib/seo-utils";
+
+export const dynamic = "force-dynamic";
 
 export const metadata = toNextMetadata(
   buildSeoPageMetadata({
@@ -15,15 +17,15 @@ export const metadata = toNextMetadata(
   }),
 );
 
-export default function TechniciansPage() {
-  const technicians = getPublicTechnicians();
+export default async function TechniciansPage() {
+  const technicians = await loadPublicTechnicianProfiles();
 
   return (
     <main className="min-h-screen bg-white text-slate-950">
       <PublicPageHeader
         eyebrow="Technician profiles"
         title="Meet Houston refrigerator repair technician previews."
-        description="Public profile previews help customers understand specialties, service areas, and privacy-safe repair examples before booking logic is connected."
+        description="Public technician profiles show only approved customer-facing fields, service areas, specialties, and safe marketplace context."
         variant="light"
       />
       <section className="mx-auto max-w-7xl px-6 py-16">
@@ -34,7 +36,7 @@ export default function TechniciansPage() {
         </div>
       </section>
       <PublicCtaSection
-        title="Technician requests are mock-only for now."
+        title="Technician requests are still intake-only for now."
         description="Public profiles are ready for future booking, availability, and account workflows, but no live dispatch or booking logic exists yet."
         variant="light"
         primaryHref="/repair-cases"

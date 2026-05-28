@@ -4,18 +4,23 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
-import { evaluateAccessDecision } from "@/lib/auth/access-decisions";
+import {
+  evaluateDashboardAccess,
+  type DashboardAccessDecision,
+} from "@/lib/auth/dashboard-access";
 import {
   createDashboardIdentityState,
   DASHBOARD_IDENTITY_LOADING,
   type DashboardIdentityState,
 } from "@/lib/auth/dashboard-identity";
-import {
-  getCurrentUserProfile,
-  mapProfileToDashboardIdentity,
-} from "@/lib/auth/profile";
+import { mapProfileToDashboardIdentity } from "@/lib/auth/profile";
 import { isActiveProfile } from "@/lib/auth/permissions";
 import type { AuthProfileStatus } from "@/lib/auth/types";
+import {
+  formatDashboardIdentityLabel,
+  loadDashboardIdentity,
+  type DashboardIdentityLoadResult,
+} from "@/lib/dashboard/identity";
 import {
   getSupabaseBrowserClient,
   isSupabaseBrowserConfigured,
@@ -54,6 +59,12 @@ type RouteProtectionNotice = {
   description: string;
 };
 
+type AccountContextState = {
+  companyLabel: string;
+  membershipLabel: string;
+  technicianLabel: string;
+};
+
 const modeCopy: Record<
   DashboardIdentityState["mode"],
   { label: string; helper: string; classes: string }
@@ -70,7 +81,7 @@ const modeCopy: Record<
   },
   guest_demo: {
     label: "Guest demo",
-    helper: "Log in or sign up when you want to test Supabase Auth.",
+    helper: "Development utilities can still show guest/demo status.",
     classes: "border-cyan-300/20 bg-cyan-300/10 text-cyan-100",
   },
   authenticated: {
@@ -82,16 +93,23 @@ const modeCopy: Record<
 
 const PROFILE_LOAD_TIMEOUT_MS = 8000;
 
+const DEFAULT_ACCOUNT_CONTEXT: AccountContextState = {
+  companyLabel: "Company: Not loaded",
+  membershipLabel: "Membership: Not loaded",
+  technicianLabel: "Technician: Not loaded",
+};
+
+const INITIAL_DASHBOARD_ACCESS_DECISION: DashboardAccessDecision = {
+  allowed: false,
+  reason: "checking",
+  redirectTo: null,
+  title: "Checking dashboard access",
+  description: "Loading the authenticated Supabase session and profile.",
+};
+
 function formatProfileStatus(status: string): string {
   return status
     .split("_")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function formatAccessLevel(level: string): string {
-  return level
-    .split("-")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
 }
@@ -113,6 +131,10 @@ export function DashboardAuthStatus() {
       profileStatus: null,
     });
   const [isSigningOut, setIsSigningOut] = useState(false);
+  const [accountContext, setAccountContext] =
+    useState<AccountContextState>(DEFAULT_ACCOUNT_CONTEXT);
+  const [dashboardAccessDecision, setDashboardAccessDecision] =
+    useState<DashboardAccessDecision>(INITIAL_DASHBOARD_ACCESS_DECISION);
 
   useEffect(() => {
     let isMounted = true;
@@ -124,14 +146,21 @@ export function DashboardAuthStatus() {
 
     async function refreshIdentity() {
       try {
-        const result = await withTimeout(
-          getCurrentUserProfile(),
+        const identityResult = await withTimeout(
+          loadDashboardIdentity(),
           PROFILE_LOAD_TIMEOUT_MS,
         );
+        const result = identityResult.profileResult;
+        const accessDecision = evaluateDashboardAccess({
+          pathname,
+          profileResult: result,
+        });
 
         if (!isMounted) {
           return;
         }
+
+        setDashboardAccessDecision(accessDecision);
 
         if (result.status === "profile_ready") {
           setIdentityState(
@@ -146,6 +175,7 @@ export function DashboardAuthStatus() {
             label: `Profile status: ${formatProfileStatus(result.profile.status)}`,
             profileStatus: result.profile.status,
           });
+          setAccountContext(createAccountContextState(identityResult));
           return;
         }
 
@@ -161,6 +191,7 @@ export function DashboardAuthStatus() {
             label: "Profile not found",
             profileStatus: null,
           });
+          setAccountContext(DEFAULT_ACCOUNT_CONTEXT);
           return;
         }
 
@@ -178,6 +209,7 @@ export function DashboardAuthStatus() {
               : "Profile not checked until login",
           profileStatus: null,
         });
+        setAccountContext(DEFAULT_ACCOUNT_CONTEXT);
       } catch (error) {
         if (!isMounted) {
           return;
@@ -189,6 +221,13 @@ export function DashboardAuthStatus() {
             supabaseAvailable: true,
           }),
         );
+        setDashboardAccessDecision({
+          allowed: false,
+          reason: "checking",
+          redirectTo: "/login",
+          title: "Unable to verify dashboard access",
+          description: getProfileLoadFailureLabel(error),
+        });
         setProfileSyncState({
           status:
             error instanceof Error &&
@@ -198,6 +237,7 @@ export function DashboardAuthStatus() {
           label: getProfileLoadFailureLabel(error),
           profileStatus: null,
         });
+        setAccountContext(DEFAULT_ACCOUNT_CONTEXT);
       }
     }
 
@@ -211,6 +251,9 @@ export function DashboardAuthStatus() {
         label: "Profile not checked",
         profileStatus: null,
       });
+      setDashboardAccessDecision(
+        evaluateDashboardAccess({ pathname, profileResult: null }),
+      );
       void refreshIdentity();
     }).data.subscription;
 
@@ -218,7 +261,7 @@ export function DashboardAuthStatus() {
       isMounted = false;
       subscription?.unsubscribe();
     };
-  }, []);
+  }, [pathname]);
 
   async function handleLogout() {
     const supabase = getSupabaseBrowserClient();
@@ -241,6 +284,18 @@ export function DashboardAuthStatus() {
       label: "Profile not checked until login",
       profileStatus: null,
     });
+    setDashboardAccessDecision(
+      evaluateDashboardAccess({
+        pathname,
+        profileResult: {
+          status: "logged_out",
+          profile: null,
+          session: null,
+          error: null,
+        },
+      }),
+    );
+    setAccountContext(DEFAULT_ACCOUNT_CONTEXT);
   }
 
   const copy = modeCopy[identityState.mode];
@@ -248,14 +303,6 @@ export function DashboardAuthStatus() {
     identityState,
     profileSyncState,
   );
-  const accessDecision = evaluateAccessDecision({
-    pathname,
-    isAuthenticated: identityState.mode === "authenticated",
-    profilePresent: profileSyncState.status === "profile_found",
-    role: identityState.role,
-    status: profileSyncState.profileStatus,
-    isLoading: identityState.mode === "loading",
-  });
   const accessHighlights = [
     identityState.accessPreview.canAccessOpenJobs ? "Open jobs" : null,
     identityState.accessPreview.canAccessPrivateCommunity ? "Community" : null,
@@ -279,9 +326,12 @@ export function DashboardAuthStatus() {
               : ""}
           </p>
           {identityState.mode === "authenticated" ? (
-            <p className="mt-1 text-xs text-current/70">
-              {profileSyncState.label}
-            </p>
+            <div className="mt-1 space-y-0.5 text-xs text-current/70">
+              <p>{profileSyncState.label}</p>
+              <p>{accountContext.companyLabel}</p>
+              <p>{accountContext.membershipLabel}</p>
+              <p>{accountContext.technicianLabel}</p>
+            </div>
           ) : null}
         </div>
 
@@ -343,30 +393,60 @@ export function DashboardAuthStatus() {
 
       <div className="mt-3 rounded-md border border-white/10 bg-slate-950/35 px-3 py-2 text-xs text-slate-300">
         <p className="font-black uppercase tracking-[0.16em] text-slate-100">
-          Auth guard dry run
+          Auth guard status
         </p>
         <p className="mt-1 text-slate-400">
-          Allowed now:{" "}
+          Current decision:{" "}
           <span className="font-bold text-slate-200">
-            {accessDecision.allowedNow ? "Yes" : "No"}
+            {dashboardAccessDecision.allowed ? "Allowed" : "Redirect required"}
           </span>
           {" | "}
-          Required later:{" "}
+          Gate reason:{" "}
           <span className="font-bold text-slate-200">
-            {formatAccessLevel(accessDecision.requiredAccessLevel)}
+            {formatProfileStatus(dashboardAccessDecision.reason)}
           </span>
           {" | "}
-          {accessDecision.wouldRedirectLater
-            ? `Would redirect to ${accessDecision.recommendedRedirectTarget}`
+          {dashboardAccessDecision.redirectTo
+            ? `Would redirect to ${dashboardAccessDecision.redirectTo}`
             : "No redirect expected"}
         </p>
         <p className="mt-1 text-slate-500">
-          {accessDecision.reason} Current dashboard access is still
-          non-blocking.
+          {dashboardAccessDecision.description} This panel mirrors the same
+          dashboard access helper used by the route gate.
         </p>
       </div>
     </aside>
   );
+}
+
+function createAccountContextState(
+  result: DashboardIdentityLoadResult,
+): AccountContextState {
+  if (result.status !== "ready") {
+    return DEFAULT_ACCOUNT_CONTEXT;
+  }
+
+  const company = result.company.data;
+  const membership = result.companyMembership.data;
+  const technicianProfile = result.technicianProfile.data;
+
+  return {
+    companyLabel: company
+      ? `Company: ${company.name} (${formatDashboardIdentityLabel(company.status)})`
+      : result.company.error
+        ? "Company: Restricted by RLS"
+        : "Company: Not linked",
+    membershipLabel: membership
+      ? `Membership: ${formatDashboardIdentityLabel(membership.member_role)} / ${formatDashboardIdentityLabel(membership.member_status)}`
+      : result.companyMembership.error
+        ? "Membership: Restricted by RLS"
+        : "Membership: No readable row",
+    technicianLabel: technicianProfile
+      ? `Technician: ${formatDashboardIdentityLabel(technicianProfile.technician_status)}`
+      : result.technicianProfile.error
+        ? "Technician: Restricted by RLS"
+        : "Technician: No profile yet",
+  };
 }
 
 async function withTimeout<T>(
@@ -404,7 +484,7 @@ function getRouteProtectionNotice(
       tone: "info",
       title: "Demo access",
       description:
-        "Dashboard routes remain open in this mock-safe phase. Log in to test role and profile-aware UI before route protection is enforced.",
+        "Guest dashboard access is only expected on development utility routes. Protected dashboard pages redirect logged-out users to login.",
     };
   }
 
@@ -414,7 +494,7 @@ function getRouteProtectionNotice(
         tone: "warning",
         title: "Profile missing",
         description:
-          "A session exists, but no matching profile row was found. The dashboard stays available for now; production access will require a valid profile.",
+          "A session exists, but no matching profile row was found. Protected dashboard pages redirect this state to the account status screen.",
       };
     }
 
@@ -432,7 +512,7 @@ function getRouteProtectionNotice(
         description:
           profileSyncState.profileStatus === "pending"
             ? "This profile is pending. Future protected dashboard access may be limited until approval or verification is complete."
-            : "This profile status should not receive production dashboard access until reviewed. Current access is still mock-safe and non-blocking.",
+            : "This profile status cannot receive protected dashboard access until reviewed.",
       };
     }
   }

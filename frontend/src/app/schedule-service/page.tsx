@@ -1,6 +1,9 @@
 import { PublicSiteHeader } from "@/components/public/PublicSiteHeader";
 import { ServiceRequestFlow } from "@/components/public/ServiceRequestFlow";
-import { getPublicTechnicians } from "@/lib/public-seo-data";
+import {
+  loadPublicTechnicianProfileBySlug,
+  loadPublicTechnicianProfiles,
+} from "@/lib/public-technician-profiles";
 import { buildSeoPageMetadata, toNextMetadata } from "@/lib/seo-utils";
 import type { ServiceRequestFormValues } from "@/components/public/ServiceRequestForm";
 
@@ -54,9 +57,17 @@ export default async function ScheduleServicePage({ searchParams }: ScheduleServ
   const resolvedSearchParams = await searchParams;
   const service = getParam(resolvedSearchParams, "service");
   const brand = getParam(resolvedSearchParams, "brand");
-  const technician = getParam(resolvedSearchParams, "technician");
+  const technicianSlug = getParam(resolvedSearchParams, "technician");
   const zip = getParam(resolvedSearchParams, "zip");
-  const technicians = getPublicTechnicians();
+  const publicTechnicians = await loadPublicTechnicianProfiles();
+  const requestedTechnician = technicianSlug
+    ? await loadPublicTechnicianProfileBySlug(technicianSlug)
+    : null;
+  const technicians =
+    requestedTechnician &&
+    !publicTechnicians.some((technician) => technician.slug === requestedTechnician.slug)
+      ? [requestedTechnician, ...publicTechnicians]
+      : publicTechnicians;
 
   const initialValues: ServiceRequestFormValues = {
     zipCode: zip,
@@ -64,7 +75,7 @@ export default async function ScheduleServicePage({ searchParams }: ScheduleServ
     brand: brand || "Other / Not sure",
     issueDescription: "",
     preferredServiceWindow: "First available",
-    technicianPreference: technician,
+    technicianPreference: requestedTechnician?.slug ?? "",
     customerFirstName: "",
     phone: "",
   };
@@ -86,7 +97,11 @@ export default async function ScheduleServicePage({ searchParams }: ScheduleServ
           </p>
         </div>
       </section>
-      <ServiceRequestFlow initialValues={initialValues} technicians={technicians} />
+      <ServiceRequestFlow
+        initialValues={initialValues}
+        requestedTechnician={requestedTechnician}
+        technicians={technicians}
+      />
     </main>
   );
 }

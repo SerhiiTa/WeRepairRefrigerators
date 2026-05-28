@@ -27,15 +27,15 @@ export default function LoginPage() {
             </h2>
             <p className="mt-5 text-lg leading-8 text-slate-600">
               Supabase Auth is connected for local QA. After login, the dashboard
-              will show your session, email, profile role, and profile status while
-              route protection remains non-blocking.
+              checks your session, profile role, profile status, and onboarding
+              completion before showing protected tools.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <Link
                 href="/dashboard"
                 className="rounded-full border border-blue-200 bg-white px-5 py-3 text-sm font-black text-blue-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-50"
               >
-                View demo dashboard
+                Go to dashboard
               </Link>
               <Link
                 href="/schedule-service"
