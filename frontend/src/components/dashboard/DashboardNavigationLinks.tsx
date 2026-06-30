@@ -46,28 +46,43 @@ const groupLabels: Record<DashboardNavigationItem["group"], string> = {
   marketplace: "Marketplace",
   operations: "Operations",
   content: "Content",
-  community: "Mock community",
+  community: "Community",
   admin: "Admin",
-  development: "Development",
+  development: "Tools",
 };
 
 function getVisibilityLabel(visibility: DashboardNavigationItem["visibility"]) {
-  if (visibility === "real") {
-    return null;
-  }
-
-  if (visibility === "mock") {
-    return "Preview";
-  }
-
-  if (visibility === "coming_soon") {
-    return "Soon";
-  }
-
-  return "Dev";
+  void visibility;
+  return null;
 }
 
-function isActivePath(pathname: string, href: string): boolean {
+function isActivePath(
+  pathname: string,
+  item: Pick<DashboardNavigationItem, "href" | "label">,
+): boolean {
+  const { href, label } = item;
+
+  if (
+    href === "/dashboard/leads" &&
+    !["Jobs"].includes(label)
+  ) {
+    return false;
+  }
+
+  if (
+    href === "/dashboard/customers" &&
+    label !== "Customers"
+  ) {
+    return false;
+  }
+
+  if (
+    href === "/dashboard/settings" &&
+    label !== "Settings"
+  ) {
+    return false;
+  }
+
   return href === "/dashboard" ? pathname === href : pathname.startsWith(href);
 }
 
@@ -135,8 +150,8 @@ export function DashboardNavigationLinks({
 
   if (identityState.status === "loading") {
     return (
-      <p className={variant === "mobile" ? "text-sm text-slate-400" : "px-3 text-sm text-slate-500"}>
-        Loading role-aware navigation...
+      <p className={variant === "mobile" ? "text-sm text-slate-400" : "px-3 text-sm text-slate-400"}>
+        Loading navigation...
       </p>
     );
   }
@@ -175,7 +190,7 @@ export function DashboardNavigationLinks({
     <>
       {Object.entries(groupedItems).map(([group, items]) => (
         <div key={group} className="space-y-2">
-          <p className="px-3 text-xs font-black uppercase tracking-[0.18em] text-slate-500">
+          <p className="px-3 text-[11px] font-black uppercase tracking-[0.18em] text-slate-400/80">
             {groupLabels[group as DashboardNavigationItem["group"]]}
           </p>
           {items?.map((item) => (
@@ -201,7 +216,7 @@ function DashboardNavigationLink({
   pathname: string;
   variant: "sidebar" | "mobile";
 }) {
-  const isActive = isActivePath(pathname, item.href);
+  const isActive = isActivePath(pathname, item);
   const visibilityLabel = getVisibilityLabel(item.visibility);
 
   if (variant === "mobile") {
@@ -209,10 +224,10 @@ function DashboardNavigationLink({
       <Link
         href={item.href}
         title={item.description}
-        className={`shrink-0 rounded-md px-3 py-2 text-sm font-semibold ${
+        className={`shrink-0 rounded-[10px] px-3 py-2 text-sm font-semibold ${
           isActive
-            ? "bg-cyan-300 text-slate-950"
-            : "border border-white/10 text-slate-300"
+            ? "bg-[#0F6BFF] text-white"
+            : "border border-[#E5E7EB] bg-white text-[#334155]"
         }`}
       >
         {item.label}
@@ -229,18 +244,29 @@ function DashboardNavigationLink({
     <Link
       href={item.href}
       title={item.description}
-      className={`flex items-center justify-between gap-3 rounded-md px-3 py-2.5 text-sm font-semibold transition ${
+      className={`group flex items-center justify-between gap-3 rounded-2xl px-3 py-2.5 text-sm font-semibold transition ${
         isActive
-          ? "bg-cyan-300 text-slate-950"
-          : "text-slate-300 hover:bg-white/5 hover:text-white"
+          ? "bg-[#0F6BFF] text-white shadow-[0_10px_24px_rgba(15,107,255,0.25)]"
+          : "text-slate-300 hover:bg-white/10 hover:text-white"
       }`}
     >
-      <span>{item.label}</span>
+      <span className="flex min-w-0 items-center gap-3">
+        <span
+          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${
+            isActive
+              ? "bg-white/20 text-white"
+              : "bg-white/5 text-slate-300 group-hover:bg-white/10 group-hover:text-white"
+          }`}
+        >
+          <NavigationIcon label={item.label} />
+        </span>
+        <span className="truncate">{item.label}</span>
+      </span>
       {visibilityLabel ? (
         <span
           className={`rounded border px-1.5 py-0.5 text-[10px] font-black uppercase tracking-[0.12em] ${
             isActive
-              ? "border-slate-950/20 text-slate-800"
+              ? "border-white/30 text-white/80"
               : "border-white/10 text-slate-500"
           }`}
         >
@@ -248,6 +274,40 @@ function DashboardNavigationLink({
         </span>
       ) : null}
     </Link>
+  );
+}
+
+function NavigationIcon({ label }: { label: string }) {
+  const pathByLabel: Record<string, string> = {
+    Dashboard: "M4 11.5 12 4l8 7.5M6 10.5V20h5v-5h2v5h5v-9.5",
+    Jobs: "M7 7h10M7 12h10M7 17h6M5 3h14v18H5z",
+    Schedule: "M7 3v4M17 3v4M4 9h16M5 5h14v16H5z",
+    Customers: "M8 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm8 2a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM2 21a6 6 0 0 1 12 0M14 21a5 5 0 0 1 8 0",
+    Estimates: "M5 4h14v16H5zM8 8h8M8 12h8M8 16h4",
+    Invoices: "M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6M9 16h3",
+    "Parts & Inventory": "M4 7h16v13H4zM7 4h10v3H7zM8 12h8",
+    "Manuals Library": "M5 4h7a3 3 0 0 1 3 3v17a3 3 0 0 0-3-3H5zM15 7h4v17a3 3 0 0 0-3-3h-1",
+    "Calls & Messages": "M5 5h14v10H8l-3 3zM8 8h8M8 12h5",
+    Community: "M12 5a4 4 0 1 0 0 8 4 4 0 0 0 0-8ZM4 21a8 8 0 0 1 16 0",
+    Vendors: "M4 9h16l-2-5H6zM5 9v12h14V9M9 13h6",
+    Technicians: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4 21a8 8 0 0 1 16 0",
+    Reports: "M5 19V5M5 19h16M9 16V9M13 16V7M17 16v-5",
+    Settings: "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8ZM12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1",
+  };
+
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+    >
+      <path d={pathByLabel[label] ?? "M5 12h14M12 5v14"} />
+    </svg>
   );
 }
 

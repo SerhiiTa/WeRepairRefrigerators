@@ -60,6 +60,16 @@ export function normalizeStringList(values: string[] | undefined): string[] {
   ).slice(0, 20);
 }
 
+function normalizeAvatarColor(value: string | undefined): string {
+  if (typeof value !== "string") {
+    return "#0F6BFF";
+  }
+
+  const normalized = value.trim();
+
+  return /^#[0-9A-Fa-f]{6}$/.test(normalized) ? normalized : "#0F6BFF";
+}
+
 export function validateCompanyInput(
   input: CreateCompanyAndOwnerMembershipInput,
 ):
@@ -158,7 +168,15 @@ export function normalizeTechnicianProfileInput(
     primary_state:
       normalizeOptionalText(input.primaryState, 2)?.toUpperCase() ?? "TX",
     service_zip_codes: normalizeStringList(input.serviceZipCodes),
+    service_cities: normalizeStringList(input.serviceCities),
+    appliance_categories: normalizeStringList(input.applianceCategories),
+    brands_serviced: normalizeStringList(input.brandsServiced),
     specialties: normalizeStringList(input.specialties),
     languages: normalizeStringList(input.languages),
+    avatar_color: normalizeAvatarColor(input.avatarColor),
+    marketplace_enabled:
+      typeof input.marketplaceEnabled === "boolean"
+        ? input.marketplaceEnabled
+        : null,
   };
 }

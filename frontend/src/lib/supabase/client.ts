@@ -4,6 +4,12 @@ import type { Database } from "./types";
 
 let browserClient: SupabaseClient<Database> | null = null;
 
+type BrowserAuthLock = <R>(
+  name: string,
+  acquireTimeout: number,
+  fn: () => Promise<R>,
+) => Promise<R>;
+
 type SupabaseBrowserClientResult =
   | {
       status: "ready";
@@ -15,8 +21,6 @@ type SupabaseBrowserClientResult =
       client: null;
       error: string;
     };
-
-const memoryStorage = new Map<string, string>();
 
 function readSupabaseBrowserEnv() {
   return {
@@ -41,7 +45,10 @@ function getSupabaseBrowserConfig(): { url: string; anonKey: string } | null {
   return env;
 }
 
-function canUseLocalStorage(): { available: boolean; error: string | null } {
+function getLocalStorageDiagnostics(): {
+  available: boolean;
+  error: string | null;
+} {
   if (typeof window === "undefined") {
     return {
       available: false,
@@ -53,6 +60,7 @@ function canUseLocalStorage(): { available: boolean; error: string | null } {
     const testKey = "wrfr:supabase-storage-test";
     window.localStorage.setItem(testKey, "1");
     window.localStorage.removeItem(testKey);
+
     return {
       available: true,
       error: null,
@@ -68,28 +76,11 @@ function canUseLocalStorage(): { available: boolean; error: string | null } {
   }
 }
 
-function createMemoryStorage(): Storage {
-  return {
-    get length() {
-      return memoryStorage.size;
-    },
-    clear() {
-      memoryStorage.clear();
-    },
-    getItem(key) {
-      return memoryStorage.get(key) ?? null;
-    },
-    key(index) {
-      return Array.from(memoryStorage.keys())[index] ?? null;
-    },
-    removeItem(key) {
-      memoryStorage.delete(key);
-    },
-    setItem(key, value) {
-      memoryStorage.set(key, value);
-    },
-  };
-}
+const browserAuthLock: BrowserAuthLock = async (_name, _acquireTimeout, fn) => {
+  // Keep auth reads deterministic in local dev browsers without adding a second
+  // storage system. Supabase Auth and RLS are still enforced by Supabase.
+  return fn();
+};
 
 function formatClientError(error: unknown): string {
   return error instanceof Error
@@ -101,6 +92,22 @@ function formatClientError(error: unknown): string {
 
 export function isSupabaseBrowserConfigured(): boolean {
   return hasSupabaseBrowserEnv();
+}
+
+export function getSupabaseBrowserRuntimeDiagnostics() {
+  const localStorage = getLocalStorageDiagnostics();
+
+  return {
+    windowAvailable: typeof window !== "undefined",
+    origin:
+      typeof window === "undefined" ? "server" : window.location.origin,
+    hostname:
+      typeof window === "undefined" ? "server" : window.location.hostname,
+    protocol:
+      typeof window === "undefined" ? "server" : window.location.protocol,
+    localStorageAvailable: localStorage.available,
+    localStorageError: localStorage.error,
+  };
 }
 
 export function getSupabaseBrowserClientResult(): SupabaseBrowserClientResult {
@@ -116,17 +123,14 @@ export function getSupabaseBrowserClientResult(): SupabaseBrowserClientResult {
 
   if (!browserClient) {
     try {
-      const storageCheck = canUseLocalStorage();
-
       browserClient = createClient<Database>(config.url, config.anonKey, {
         auth: {
           persistSession: true,
           autoRefreshToken: true,
           detectSessionInUrl: true,
-          ...(storageCheck.available
-            ? {}
-            : { storage: createMemoryStorage() }),
           storageKey: "wrfr-supabase-auth-token",
+          lock: browserAuthLock,
+          lockAcquireTimeout: 3000,
         },
       });
     } catch (error) {

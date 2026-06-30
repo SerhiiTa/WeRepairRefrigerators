@@ -197,7 +197,7 @@ async function loadTechnicianProfile({
     const { data, error } = await supabase
       .from("technician_profiles")
       .select(
-        "id,profile_id,company_id,affiliation_type,display_name,business_name,years_experience,service_summary_public,bio_private,primary_city,primary_state,service_zip_codes,specialties,languages,technician_status,marketplace_enabled,public_profile_ready,verification_submitted_at,verified_at,verified_by_profile_id,rejected_at,suspended_at,archived_by_profile_id,archived_at,created_at,updated_at",
+        "id,profile_id,company_id,affiliation_type,display_name,business_name,years_experience,service_summary_public,bio_private,primary_city,primary_state,service_zip_codes,service_cities,appliance_categories,brands_serviced,specialties,languages,avatar_color,technician_status,marketplace_enabled,public_profile_ready,verification_submitted_at,verified_at,verified_by_profile_id,rejected_at,suspended_at,archived_by_profile_id,archived_at,created_at,updated_at",
       )
       .eq("profile_id", profile.id)
       .is("archived_at", null)

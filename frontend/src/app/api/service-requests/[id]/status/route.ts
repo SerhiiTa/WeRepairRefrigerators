@@ -31,7 +31,7 @@ function formatStatusUpdateError(message: string): string {
     message.includes("Could not find the function") ||
     message.includes("update_service_request_status_rpc")
   ) {
-    return "Status updates are not ready yet. Apply migration 0019 in Supabase, then try again.";
+    return "Expanded job statuses are not ready yet. Apply migration 0034 in Supabase, then try again.";
   }
 
   if (message.includes("Invalid service request status")) {

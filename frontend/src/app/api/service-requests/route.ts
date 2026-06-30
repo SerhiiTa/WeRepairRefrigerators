@@ -32,6 +32,13 @@ function fail(message: string, status = 400) {
 
 function formatSupabaseError(message: string): string {
   if (
+    message.includes("create_service_request_with_customer_rpc") &&
+    (message.includes("schema cache") || message.includes("Could not find"))
+  ) {
+    return "Customer request storage is waiting for the customer foundation migration.";
+  }
+
+  if (
     message.includes("service_requests") &&
     (message.includes("schema cache") || message.includes("Could not find"))
   ) {
@@ -43,6 +50,26 @@ function formatSupabaseError(message: string): string {
   }
 
   return "We could not save this request yet. Please try again.";
+}
+
+function isRpcUnavailable(message: string): boolean {
+  return (
+    message.includes("create_service_request_with_customer_rpc") &&
+    (message.includes("schema cache") ||
+      message.includes("Could not find") ||
+      message.includes("does not exist"))
+  );
+}
+
+function readRpcRequestId(value: unknown): string | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as { service_request_id?: unknown; request_id?: unknown };
+  const requestId = record.service_request_id ?? record.request_id;
+
+  return typeof requestId === "string" && requestId.length > 0 ? requestId : null;
 }
 
 export async function POST(request: Request) {
@@ -111,6 +138,37 @@ export async function POST(request: Request) {
     null;
 
   const requestId = crypto.randomUUID();
+
+  const { data: customerRequestData, error: customerRequestError } =
+    await supabase.rpc("create_service_request_with_customer_rpc", {
+      p_customer_first_name: customerName,
+      p_customer_last_name: null,
+      p_customer_phone: customerPhone,
+      p_customer_email: null,
+      p_appliance_type: applianceType,
+      p_appliance_brand: applianceBrand,
+      p_appliance_model: null,
+      p_issue_description: issueDescription,
+      p_zip_code: zipCode,
+      p_city: null,
+      p_state: "TX",
+      p_preferred_time_window: preferredTimeWindow,
+      p_selected_technician_slug: publicTechnician?.slug ?? null,
+      p_selected_technician_business_name: selectedTechnicianName,
+      p_request_source: publicTechnician ? "technician_profile" : "schedule_service",
+    });
+
+  if (!customerRequestError) {
+    return NextResponse.json({
+      ok: true,
+      requestId: readRpcRequestId(customerRequestData) ?? requestId,
+      selectedTechnicianName,
+    });
+  }
+
+  if (!isRpcUnavailable(customerRequestError.message)) {
+    return fail(formatSupabaseError(customerRequestError.message), 503);
+  }
 
   const { error } = await supabase.from("service_requests").insert({
     id: requestId,

@@ -72,6 +72,7 @@ type SupabaseClientCheckResult = {
 };
 
 const SUPABASE_CLIENT_CHECK_TIMEOUT_MS = 4000;
+const SESSION_CHECK_TIMEOUT_MS = 5000;
 const PROFILE_LOAD_TIMEOUT_MS = 8000;
 
 const statusToneClasses: Record<AuthStatusState["status"], string> = {
@@ -108,9 +109,8 @@ export function AuthStatusPanel({
 
   useEffect(() => {
     let isMounted = true;
-    let subscription: { unsubscribe: () => void } | undefined;
     const loadingFallback = window.setTimeout(() => {
-      if (authStatusRef.current.status !== "loading") {
+      if (!isMounted || authStatusRef.current.status !== "loading") {
         return;
       }
 
@@ -121,9 +121,9 @@ export function AuthStatusPanel({
         role: null,
         profileStatus: null,
         message:
-          "Auth status timed out before Supabase returned. Refresh the status or try again after restarting the local server.",
+          "Supabase auth check timed out. Refresh the status and confirm the local server is reachable.",
       });
-    }, PROFILE_LOAD_TIMEOUT_MS + 1500);
+    }, SESSION_CHECK_TIMEOUT_MS + 1000);
 
     async function refreshAuthStatus() {
       setAuthStatus(initialAuthStatus);
@@ -140,10 +140,10 @@ export function AuthStatusPanel({
           clientResult.error ??
           "Supabase browser client is unavailable. Confirm local env vars are configured and restart the server.";
 
-        if (clientResult.status === "error" || clientResult.status === "timeout") {
+        if (clientResult.status === "unavailable") {
           setAuthStatus({
-            status: "error",
-            session: "error",
+            status: "supabase_unavailable",
+            session: "no",
             email: null,
             role: null,
             profileStatus: null,
@@ -153,8 +153,8 @@ export function AuthStatusPanel({
         }
 
         setAuthStatus({
-          status: "supabase_unavailable",
-          session: "no",
+          status: "error",
+          session: "error",
           email: null,
           role: null,
           profileStatus: null,
@@ -163,16 +163,11 @@ export function AuthStatusPanel({
         return;
       }
 
-      if (!subscription) {
-        subscription = supabase.auth.onAuthStateChange(() => {
-          void refreshAuthStatus();
-        }).data.subscription;
-      }
-
       try {
         const sessionResult = await withTimeout(
           supabase.auth.getSession(),
-          PROFILE_LOAD_TIMEOUT_MS,
+          SESSION_CHECK_TIMEOUT_MS,
+          "Supabase auth check timed out.",
         );
 
         if (!isMounted) {
@@ -207,6 +202,7 @@ export function AuthStatusPanel({
         const profileResult = await withTimeout(
           getCurrentUserProfile({ client: supabase }),
           PROFILE_LOAD_TIMEOUT_MS,
+          "Supabase profile load timed out.",
         );
 
         if (!isMounted) {
@@ -270,7 +266,6 @@ export function AuthStatusPanel({
     return () => {
       isMounted = false;
       window.clearTimeout(loadingFallback);
-      subscription?.unsubscribe();
     };
   }, [authRequestResult, refreshKey]);
 
@@ -422,15 +417,24 @@ async function getTimedSupabaseClientResult(): Promise<SupabaseClientCheckResult
 async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
+  timeoutMessage = "Auth check timeout",
 ): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      window.setTimeout(() => {
-        reject(new Error("Auth check timeout"));
-      }, timeoutMs);
-    }),
-  ]);
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error(timeoutMessage));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
 }
 
 function getShortErrorMessage(error: unknown): string {
@@ -457,7 +461,7 @@ function getAuthStatusErrorMessage(error: unknown): string {
     message.toLowerCase().includes("failed to fetch") ||
     message.toLowerCase().includes("network")
   ) {
-    return "Network or Supabase error while reading auth state. Confirm the phone and computer are on the same network and Supabase redirect URLs include the local IP.";
+    return "Network or Supabase error while reading auth state. Confirm the phone and computer are on the same network.";
   }
 
   return message;

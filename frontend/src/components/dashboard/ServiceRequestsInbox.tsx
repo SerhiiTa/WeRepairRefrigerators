@@ -10,6 +10,7 @@ import {
   formatServiceRequestSource,
   mapServiceRequestRow,
   SERVICE_REQUEST_SELECT_COLUMNS,
+  SERVICE_REQUEST_STATUS_TONES,
   type DashboardServiceRequest,
 } from "@/lib/service-request-records";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -20,28 +21,95 @@ type LoadState =
   | { status: "ready"; error: null }
   | { status: "error"; error: string };
 
-const statusTone: Record<string, "cyan" | "emerald" | "amber" | "slate"> = {
-  new: "cyan",
-  contacted: "amber",
-  scheduled: "cyan",
-  completed: "emerald",
-  canceled: "slate",
-  reviewed: "amber",
-  lead_created: "emerald",
-  archived: "slate",
-  spam: "slate",
-};
+type DateFilter = "all" | "today" | "scheduled" | "unscheduled";
 
 function getReadErrorMessage(message: string): string {
   if (message.includes("permission denied") || message.includes("row-level security")) {
-    return "Service request dashboard reads are not available for this account yet. Apply migration 0018 and confirm the request is selected for your public technician profile, or use an admin account.";
+    return "This account cannot read jobs yet. Confirm the dashboard account has access to the selected technician or company workspace.";
   }
 
   if (message.includes("service_requests") && message.includes("schema cache")) {
-    return "Service request storage is not available yet. Apply migration 0017 first, then 0018.";
+    return "Job storage is not ready for this workspace yet.";
   }
 
   return message;
+}
+
+function getTodayKey() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function getJobAddress(request: DashboardServiceRequest) {
+  if (request.fullAddress) {
+    return request.fullAddress;
+  }
+
+  const cityState = [request.city, request.state].filter(Boolean).join(", ");
+  return [cityState, request.zipCode ? `ZIP ${request.zipCode}` : null]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function getAppointmentLabel(request: DashboardServiceRequest) {
+  if (
+    request.scheduledDate &&
+    request.scheduledWindowStartTime &&
+    request.scheduledWindowEndTime
+  ) {
+    return `${request.scheduledDate} · ${request.scheduledWindowStartTime.slice(
+      0,
+      5,
+    )}-${request.scheduledWindowEndTime.slice(0, 5)}`;
+  }
+
+  return request.preferredTimeWindow ?? "Not scheduled";
+}
+
+function getTechnicianLabel(request: DashboardServiceRequest) {
+  if (request.selectedTechnicianBusinessName) {
+    return request.selectedTechnicianBusinessName;
+  }
+
+  if (request.assignedTechnicianProfileId) {
+    return "Assigned technician";
+  }
+
+  return "Unassigned";
+}
+
+function getEstimateLabel(request: DashboardServiceRequest) {
+  if (request.status === "estimate_sent") {
+    return "Estimate sent";
+  }
+
+  if (request.status === "estimate_approved") {
+    return "Estimate approved";
+  }
+
+  if (request.status === "estimate_declined") {
+    return "Estimate declined";
+  }
+
+  return "No active estimate";
+}
+
+function requestMatchesDateFilter(
+  request: DashboardServiceRequest,
+  dateFilter: DateFilter,
+) {
+  if (dateFilter === "all") {
+    return true;
+  }
+
+  if (dateFilter === "scheduled") {
+    return Boolean(request.scheduledDate || request.appointmentId);
+  }
+
+  if (dateFilter === "unscheduled") {
+    return !request.scheduledDate && !request.appointmentId;
+  }
+
+  return request.scheduledDate === getTodayKey();
 }
 
 export function ServiceRequestsInbox() {
@@ -50,8 +118,10 @@ export function ServiceRequestsInbox() {
     status: "loading",
     error: null,
   });
+  const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("All statuses");
-  const [zipFilter, setZipFilter] = useState("All ZIP codes");
+  const [technicianFilter, setTechnicianFilter] = useState("All technicians");
+  const [dateFilter, setDateFilter] = useState<DateFilter>("all");
 
   useEffect(() => {
     let isMounted = true;
@@ -63,7 +133,7 @@ export function ServiceRequestsInbox() {
         if (isMounted) {
           setLoadState({
             status: "error",
-            error: "Supabase is not configured for dashboard service request reads.",
+            error: "Job reads are not configured for this dashboard session.",
           });
         }
         return;
@@ -101,137 +171,245 @@ export function ServiceRequestsInbox() {
     () => ["All statuses", ...Array.from(new Set(requests.map((request) => request.status)))],
     [requests],
   );
-  const zipOptions = useMemo(
-    () => ["All ZIP codes", ...Array.from(new Set(requests.map((request) => request.zipCode)))],
+
+  const technicianOptions = useMemo(
+    () => [
+      "All technicians",
+      ...Array.from(new Set(requests.map(getTechnicianLabel))).filter(
+        (label) => label !== "Unassigned",
+      ),
+      "Unassigned",
+    ],
     [requests],
   );
 
-  const filteredRequests = useMemo(
-    () =>
-      requests.filter((request) => {
-        const statusMatches =
-          statusFilter === "All statuses" ? true : request.status === statusFilter;
-        const zipMatches = zipFilter === "All ZIP codes" ? true : request.zipCode === zipFilter;
+  const filteredRequests = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
 
-        return statusMatches && zipMatches;
-      }),
-    [requests, statusFilter, zipFilter],
-  );
+    return requests.filter((request) => {
+      const statusMatches =
+        statusFilter === "All statuses" ? true : request.status === statusFilter;
+      const technicianMatches =
+        technicianFilter === "All technicians"
+          ? true
+          : getTechnicianLabel(request) === technicianFilter;
+      const dateMatches = requestMatchesDateFilter(request, dateFilter);
+      const queryMatches =
+        query.length === 0
+          ? true
+          : [
+              request.customerName,
+              request.applianceType,
+              request.applianceBrand,
+              request.issueDescription,
+              request.city,
+              request.state,
+              request.zipCode,
+              getTechnicianLabel(request),
+            ]
+              .filter(Boolean)
+              .some((value) => value?.toLowerCase().includes(query));
+
+      return statusMatches && technicianMatches && dateMatches && queryMatches;
+    });
+  }, [dateFilter, requests, searchQuery, statusFilter, technicianFilter]);
+
+  const summary = useMemo(() => {
+    const today = getTodayKey();
+
+    return {
+      total: requests.length,
+      scheduledToday: requests.filter((request) => request.scheduledDate === today)
+        .length,
+      needsReview: requests.filter((request) => request.status === "new").length,
+      waitingCustomer: requests.filter((request) => request.status === "waiting_customer")
+        .length,
+    };
+  }, [requests]);
+
+  function clearFilters() {
+    setSearchQuery("");
+    setStatusFilter("All statuses");
+    setTechnicianFilter("All technicians");
+    setDateFilter("all");
+  }
 
   if (loadState.status === "loading") {
     return (
-      <section className="rounded-lg border border-white/10 bg-slate-900 p-6 text-slate-300">
-        Loading real service requests...
+      <section className="rounded-2xl border border-[#E5E7EB] bg-white p-6 text-sm font-semibold text-[#64748B] shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
+        Loading jobs...
       </section>
     );
   }
 
   if (loadState.status === "error") {
     return (
-      <section className="rounded-lg border border-amber-300/20 bg-amber-300/10 p-6">
-        <p className="text-sm font-bold uppercase tracking-[0.2em] text-amber-100">
-          Service requests unavailable
+      <section className="rounded-2xl border border-amber-200 bg-amber-50 p-6 shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
+        <p className="text-sm font-bold uppercase tracking-[0.18em] text-amber-700">
+          Jobs unavailable
         </p>
-        <h2 className="mt-3 text-2xl font-bold text-white">Real inbox reads are blocked.</h2>
-        <p className="mt-3 max-w-3xl leading-7 text-amber-50/90">{loadState.error}</p>
+        <h2 className="mt-3 text-2xl font-black text-[#0F172A]">
+          The job inbox could not load.
+        </h2>
+        <p className="mt-3 max-w-3xl leading-7 text-amber-800">
+          {loadState.error}
+        </p>
       </section>
     );
   }
 
   return (
-    <div className="space-y-6">
-      <section className="grid gap-3 rounded-lg border border-white/10 bg-slate-900 p-5 md:grid-cols-2 md:items-end">
-        <label className="block">
-          <span className="text-sm font-bold text-slate-100">Request status</span>
-          <select
-            className="mt-2 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-3 text-sm text-white outline-none transition focus:border-cyan-300"
-            onChange={(event) => setStatusFilter(event.target.value)}
-            value={statusFilter}
+    <div className="space-y-4">
+      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        {[
+          ["All Jobs", summary.total],
+          ["Today", summary.scheduledToday],
+          ["Needs Review", summary.needsReview],
+          ["Waiting Customer", summary.waitingCustomer],
+        ].map(([label, value]) => (
+          <article
+            className="rounded-2xl border border-[#E5E7EB] bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.06)]"
+            key={label}
           >
-            {statusOptions.map((status) => (
-              <option key={status} value={status}>
-                {status === "All statuses" ? status : formatServiceRequestSource(status)}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="block">
-          <span className="text-sm font-bold text-slate-100">ZIP code</span>
-          <select
-            className="mt-2 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-3 text-sm text-white outline-none transition focus:border-cyan-300"
-            onChange={(event) => setZipFilter(event.target.value)}
-            value={zipFilter}
-          >
-            {zipOptions.map((zipCode) => (
-              <option key={zipCode}>{zipCode}</option>
-            ))}
-          </select>
-        </label>
+            <p className="text-xs font-black uppercase tracking-[0.18em] text-[#64748B]">
+              {label}
+            </p>
+            <p className="mt-2 text-3xl font-black text-[#0F172A]">{value}</p>
+          </article>
+        ))}
       </section>
 
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-sm font-bold uppercase tracking-[0.2em] text-cyan-200">
-          {filteredRequests.length} request{filteredRequests.length === 1 ? "" : "s"} shown
+      <section className="rounded-2xl border border-[#E5E7EB] bg-white p-3 shadow-[0_8px_24px_rgba(15,23,42,0.06)] sm:p-4">
+        <div className="grid gap-3 lg:grid-cols-[1.4fr_1fr_1fr_1fr_auto] lg:items-end">
+          <label className="block">
+            <span className="text-xs font-black uppercase tracking-[0.14em] text-[#334155]">Search</span>
+            <input
+              className="mt-1.5 w-full rounded-[8px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-2.5 text-sm text-[#0F172A] outline-none transition placeholder:text-[#64748B] focus:border-[#0F6BFF]"
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Customer, appliance, ZIP, technician..."
+              value={searchQuery}
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-xs font-black uppercase tracking-[0.14em] text-[#334155]">Status</span>
+            <select
+              className="mt-1.5 w-full rounded-[8px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-2.5 text-sm text-[#0F172A] outline-none transition focus:border-[#0F6BFF]"
+              onChange={(event) => setStatusFilter(event.target.value)}
+              value={statusFilter}
+            >
+              {statusOptions.map((status) => (
+                <option key={status} value={status}>
+                  {status === "All statuses" ? status : formatServiceRequestSource(status)}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="text-xs font-black uppercase tracking-[0.14em] text-[#334155]">Technician</span>
+            <select
+              className="mt-1.5 w-full rounded-[8px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-2.5 text-sm text-[#0F172A] outline-none transition focus:border-[#0F6BFF]"
+              onChange={(event) => setTechnicianFilter(event.target.value)}
+              value={technicianFilter}
+            >
+              {technicianOptions.map((technician) => (
+                <option key={technician}>{technician}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="text-xs font-black uppercase tracking-[0.14em] text-[#334155]">Schedule</span>
+            <select
+              className="mt-1.5 w-full rounded-[8px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-2.5 text-sm text-[#0F172A] outline-none transition focus:border-[#0F6BFF]"
+              onChange={(event) => setDateFilter(event.target.value as DateFilter)}
+              value={dateFilter}
+            >
+              <option value="all">All dates</option>
+              <option value="today">Today</option>
+              <option value="scheduled">Scheduled</option>
+              <option value="unscheduled">Unscheduled</option>
+            </select>
+          </label>
+
+          <button
+            className="rounded-[10px] border border-[#E5E7EB] px-4 py-2.5 text-sm font-bold text-[#334155] transition hover:border-[#0F6BFF] hover:text-[#0F6BFF]"
+            onClick={clearFilters}
+            type="button"
+          >
+            Clear
+          </button>
+        </div>
+      </section>
+
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-bold uppercase tracking-[0.18em] text-[#0F6BFF]">
+          {filteredRequests.length} job{filteredRequests.length === 1 ? "" : "s"} shown
         </p>
-        <p className="text-sm text-slate-400">Loaded from Supabase `service_requests`.</p>
       </div>
 
       {filteredRequests.length > 0 ? (
-        <div className="space-y-4">
+        <div className="grid gap-4">
           {filteredRequests.map((request) => (
             <article
-              className="rounded-lg border border-white/10 bg-slate-900 p-5 transition hover:border-cyan-300/30"
+              className="rounded-2xl border border-[#E5E7EB] bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.06)] transition hover:border-[#0F6BFF]/30 hover:shadow-[0_12px_32px_rgba(15,23,42,0.08)]"
               key={request.id}
             >
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <div>
+              <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr_auto] lg:items-center">
+                <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <StatusBadge tone={statusTone[request.status] ?? "slate"}>
+                    <StatusBadge tone={SERVICE_REQUEST_STATUS_TONES[request.status] ?? "slate"}>
                       {formatServiceRequestSource(request.status)}
                     </StatusBadge>
-                    <span className="rounded-md border border-white/10 px-2.5 py-1 text-xs font-bold text-slate-300">
-                      ZIP {request.zipCode}
+                    <span className="rounded-full border border-[#E5E7EB] bg-[#F8FAFC] px-2.5 py-1 text-xs font-bold text-[#64748B]">
+                      {getEstimateLabel(request)}
                     </span>
                   </div>
-                  <h2 className="mt-4 text-xl font-bold tracking-tight text-white">
-                    {request.customerName} · {request.applianceBrand ?? "Unknown brand"}{" "}
-                    {request.applianceType}
+                  <h2 className="mt-3 text-lg font-black tracking-tight text-[#0F172A]">
+                    {request.customerName}
                   </h2>
-                  <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">
+                  <p className="mt-1 text-sm font-bold text-[#334155]">
+                    {request.applianceBrand ?? "Unknown brand"} {request.applianceType}
+                  </p>
+                  <p className="mt-2 line-clamp-1 max-w-3xl text-sm leading-6 text-[#64748B]">
                     {request.issueDescription}
                   </p>
                 </div>
+                <dl className="grid gap-2 sm:grid-cols-2">
+                  {[
+                    ["Address", getJobAddress(request) || "Address needed"],
+                    ["Time", getAppointmentLabel(request)],
+                    ["Tech", getTechnicianLabel(request)],
+                    ["Submitted", formatServiceRequestDate(request.createdAt)],
+                  ].map(([label, value]) => (
+                    <div
+                      className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-2"
+                      key={label}
+                    >
+                      <dt className="text-[10px] font-black uppercase tracking-[0.14em] text-[#64748B]">
+                        {label}
+                      </dt>
+                      <dd className="mt-0.5 line-clamp-1 text-xs font-bold leading-5 text-[#0F172A]">
+                        {value}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
                 <Link
-                  className="rounded-md bg-cyan-300 px-4 py-3 text-center text-sm font-bold text-slate-950 transition hover:bg-cyan-200"
+                  className="inline-flex justify-center rounded-[10px] bg-[#0F6BFF] px-4 py-3 text-sm font-bold text-white transition hover:bg-[#0057D9] lg:min-w-32"
                   href={`/dashboard/leads/${request.id}`}
                 >
-                  Review Details
+                  Open Job
                 </Link>
               </div>
-
-              <dl className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                {[
-                  ["Contact", request.customerPhone ?? request.customerEmail ?? "Not provided"],
-                  ["Preferred time", request.preferredTimeWindow ?? "Not provided"],
-                  ["Selected technician", request.selectedTechnicianBusinessName ?? "Unassigned"],
-                  ["Submitted", formatServiceRequestDate(request.createdAt)],
-                ].map(([label, value]) => (
-                  <div key={label} className="rounded-md border border-white/10 bg-slate-950 p-3">
-                    <dt className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">
-                      {label}
-                    </dt>
-                    <dd className="mt-1 text-sm leading-6 text-slate-300">{value}</dd>
-                  </div>
-                ))}
-              </dl>
             </article>
           ))}
         </div>
       ) : (
         <EmptyState
-          title="No service requests yet"
-          description="New public schedule-service submissions will appear here when RLS allows this dashboard account to read them."
+          title="No jobs match these filters"
+          description="Clear filters or adjust the search to see more technician jobs."
         />
       )}
     </div>

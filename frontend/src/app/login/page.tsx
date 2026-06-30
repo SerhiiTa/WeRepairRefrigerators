@@ -8,7 +8,7 @@ import { RefrigerationBackground } from "@/components/public/visuals/Refrigerati
 export const metadata: Metadata = {
   title: "Login | WeRepairRefrigerators",
   description:
-    "Log in to test Supabase Auth and dashboard role visibility for WeRepairRefrigerators.",
+    "Log in to your WeRepairRefrigerators customer or technician account.",
 };
 
 export default function LoginPage() {
@@ -23,19 +23,18 @@ export default function LoginPage() {
               Account access
             </p>
             <h2 className="mt-4 text-4xl font-black tracking-tight text-slate-950 sm:text-5xl">
-              Log in and confirm your dashboard session clearly.
+              Log in to the right workspace.
             </h2>
             <p className="mt-5 text-lg leading-8 text-slate-600">
-              Supabase Auth is connected for local QA. After login, the dashboard
-              checks your session, profile role, profile status, and onboarding
-              completion before showing protected tools.
+              Customers return to the customer portal. Technicians and company
+              owners continue to the technician dashboard.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <Link
-                href="/dashboard"
+                href="/customer/dashboard"
                 className="rounded-full border border-blue-200 bg-white px-5 py-3 text-sm font-black text-blue-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-50"
               >
-                Go to dashboard
+                Customer portal
               </Link>
               <Link
                 href="/schedule-service"

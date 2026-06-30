@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { BrandLogo } from "@/components/BrandLogo";
+import { PublicCustomerAccountNav } from "@/components/public/PublicCustomerAccountNav";
 
 type PublicSiteHeaderProps = {
   className?: string;
@@ -46,18 +47,7 @@ export function PublicSiteHeader({ className = "" }: PublicSiteHeaderProps) {
           >
             (713) 555-0134
           </a>
-          <Link
-            href="/login"
-            className="rounded-full border border-blue-100 bg-white px-4 py-2 text-sm font-bold text-blue-700 shadow-sm transition hover:border-blue-200 hover:bg-blue-50"
-          >
-            Log in
-          </Link>
-          <Link
-            href="/dashboard"
-            className="rounded-full border border-blue-200 bg-blue-700 px-4 py-2 text-sm font-black text-white shadow-sm shadow-blue-700/20 transition hover:bg-blue-800"
-          >
-            Technician Dashboard
-          </Link>
+          <PublicCustomerAccountNav />
         </nav>
       </div>
     </header>

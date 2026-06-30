@@ -5,10 +5,10 @@ export default function TechniciansPage() {
     <div className="mx-auto max-w-7xl">
       <EmptyState
         title="No technician profiles yet"
-        description="Technician profiles will appear here once profile management is added for the Houston MVP."
+        description="Technician team management will appear here once company staffing flows are added. Individual technician profile editing remains available through the existing profile route."
         action={{
-          label: "Create repair case",
-          href: "/dashboard/repair-cases/new",
+          label: "Open jobs",
+          href: "/dashboard/leads",
         }}
       />
     </div>

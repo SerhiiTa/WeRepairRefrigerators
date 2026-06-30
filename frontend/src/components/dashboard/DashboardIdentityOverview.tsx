@@ -40,7 +40,7 @@ function formatDateTime(value: string | null): string {
 
 function getRelatedStateLabel(status: string): string {
   if (status === "loaded") {
-    return "Loaded from Supabase";
+    return "Loaded";
   }
 
   if (status === "empty") {
@@ -48,7 +48,7 @@ function getRelatedStateLabel(status: string): string {
   }
 
   if (status === "rls_limited") {
-    return "Restricted by RLS";
+    return "Limited access";
   }
 
   if (status === "error") {
@@ -105,12 +105,12 @@ export function DashboardIdentityOverview() {
 
   if (state.status === "loading") {
     return (
-      <section className="rounded-lg border border-white/10 bg-slate-900 p-5">
-        <p className="text-sm font-bold uppercase tracking-[0.18em] text-cyan-200">
+      <section className="rounded-2xl border border-[#E5E7EB] bg-white p-5">
+        <p className="text-sm font-bold uppercase tracking-[0.18em] text-[#0F6BFF]">
           Real account data
         </p>
-        <p className="mt-3 text-sm leading-6 text-slate-400">
-          Loading Supabase session, profile, company, and technician context.
+        <p className="mt-3 text-sm leading-6 text-[#64748B]">
+          Loading account context.
         </p>
       </section>
     );
@@ -118,7 +118,7 @@ export function DashboardIdentityOverview() {
 
   if (state.status === "error") {
     return (
-      <section className="rounded-lg border border-amber-300/20 bg-amber-300/10 p-5 text-amber-100">
+      <section className="rounded-2xl border border-amber-300/20 bg-amber-300/10 p-5 text-amber-100">
         <p className="text-sm font-black uppercase tracking-[0.18em]">
           Real account data
         </p>
@@ -131,11 +131,11 @@ export function DashboardIdentityOverview() {
 
   if (data.status !== "ready") {
     return (
-      <section className="rounded-lg border border-white/10 bg-slate-900 p-5">
-        <p className="text-sm font-bold uppercase tracking-[0.18em] text-cyan-200">
+      <section className="rounded-2xl border border-[#E5E7EB] bg-white p-5">
+        <p className="text-sm font-bold uppercase tracking-[0.18em] text-[#0F6BFF]">
           Real account data
         </p>
-        <p className="mt-3 text-sm leading-6 text-slate-400">
+        <p className="mt-3 text-sm leading-6 text-[#64748B]">
           Dashboard identity is not ready:{" "}
           {formatDashboardIdentityLabel(data.status)}.
         </p>
@@ -158,7 +158,7 @@ export function DashboardIdentityOverview() {
     {
       label: "Signed in as",
       value: profile.email ?? "Email unavailable",
-      helper: `Profile ID ${profile.id.slice(0, 8)}...`,
+      helper: `Profile loaded`,
     },
     {
       label: "Profile state",
@@ -179,7 +179,7 @@ export function DashboardIdentityOverview() {
         : getRelatedStateLabel(data.companyMembership.status),
       helper:
         data.companyMembership.error ??
-        "Raw membership rows are intentionally limited when the account cannot manage company members.",
+        "Membership details are limited for this role.",
     },
     {
       label: "Technician profile",
@@ -206,16 +206,14 @@ export function DashboardIdentityOverview() {
   return (
     <section className="space-y-4">
       <div>
-        <p className="text-sm font-bold uppercase tracking-[0.18em] text-cyan-200">
+        <p className="text-sm font-bold uppercase tracking-[0.18em] text-[#0F6BFF]">
           Real account data
         </p>
-        <h2 className="mt-2 text-xl font-bold text-white">
-          Supabase identity and onboarding context
+        <h2 className="mt-2 text-xl font-bold text-[#0F172A]">
+          Account context
         </h2>
-        <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">
-          These cards are loaded from the authenticated Supabase session and RLS
-          protected profile/onboarding tables. Marketplace operations below are
-          still demo data.
+        <p className="mt-2 max-w-3xl text-sm leading-6 text-[#64748B]">
+          Account, company, and technician context for this workspace.
         </p>
       </div>
 
@@ -223,13 +221,13 @@ export function DashboardIdentityOverview() {
         {cards.map((card) => (
           <article
             key={card.label}
-            className="rounded-lg border border-white/10 bg-slate-900 p-5"
+            className="rounded-2xl border border-[#E5E7EB] bg-white p-5"
           >
-            <p className="text-sm font-medium text-slate-400">{card.label}</p>
-            <p className="mt-3 break-words text-2xl font-bold tracking-tight text-white">
+            <p className="text-sm font-medium text-[#64748B]">{card.label}</p>
+            <p className="mt-3 break-words text-2xl font-bold tracking-tight text-[#0F172A]">
               {card.value}
             </p>
-            <p className="mt-2 text-sm leading-6 text-slate-400">
+            <p className="mt-2 text-sm leading-6 text-[#64748B]">
               {card.helper}
             </p>
           </article>
@@ -246,7 +244,7 @@ function getRoleContext(data: Extract<DashboardIdentityLoadResult, { status: "re
     return {
       value: "Admin-capable account",
       helper:
-        "Admin-specific tools are still placeholders. Current dashboard data remains RLS-scoped and mock operations are labeled separately.",
+        "Admin tools remain limited to planned operational areas.",
     };
   }
 
@@ -255,7 +253,7 @@ function getRoleContext(data: Extract<DashboardIdentityLoadResult, { status: "re
       value: "Company owner workspace",
       helper: company.data
         ? `Company context loaded for ${company.data.name}. Team, leads, coverage, and analytics are still preview workflows.`
-        : "Company owner account is active, but company details were not readable in this RLS context.",
+        : "Company owner account is active, but company details are not available for this workspace yet.",
     };
   }
 

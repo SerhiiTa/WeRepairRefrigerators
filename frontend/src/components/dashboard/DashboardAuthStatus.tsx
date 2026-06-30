@@ -434,17 +434,17 @@ function createAccountContextState(
     companyLabel: company
       ? `Company: ${company.name} (${formatDashboardIdentityLabel(company.status)})`
       : result.company.error
-        ? "Company: Restricted by RLS"
+        ? "Company: Limited access"
         : "Company: Not linked",
     membershipLabel: membership
       ? `Membership: ${formatDashboardIdentityLabel(membership.member_role)} / ${formatDashboardIdentityLabel(membership.member_status)}`
       : result.companyMembership.error
-        ? "Membership: Restricted by RLS"
+        ? "Membership: Limited access"
         : "Membership: No readable row",
     technicianLabel: technicianProfile
       ? `Technician: ${formatDashboardIdentityLabel(technicianProfile.technician_status)}`
       : result.technicianProfile.error
-        ? "Technician: Restricted by RLS"
+        ? "Technician: Limited access"
         : "Technician: No profile yet",
   };
 }

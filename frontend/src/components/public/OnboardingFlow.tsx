@@ -118,6 +118,43 @@ function isTechnicianRole(profile: ProfileRow): boolean {
   );
 }
 
+function isCustomerOnboardingSatisfied({
+  role,
+  selectedPath,
+  onboardingStatus,
+}: {
+  role: ProfileRow["role"] | null;
+  selectedPath: OnboardingPath;
+  onboardingStatus: ProfileRow["onboarding_status"];
+}): boolean {
+  if (role === "customer" || selectedPath === "customer") {
+    return (
+      onboardingStatus === "customer_ready" || onboardingStatus === "complete"
+    );
+  }
+
+  return isDashboardOnboardingStatusSatisfied({
+    role,
+    onboardingStatus,
+  });
+}
+
+function getOnboardingRedirectPath({
+  role,
+  selectedPath,
+  nextPath,
+}: {
+  role: ProfileRow["role"] | null;
+  selectedPath: OnboardingPath;
+  nextPath: string;
+}): string {
+  if (role === "customer" || selectedPath === "customer") {
+    return nextPath.startsWith("/customer") ? nextPath : "/customer/dashboard";
+  }
+
+  return nextPath;
+}
+
 async function loadOwnTechnicianProfile(
   profileId: string,
 ): Promise<TechnicianProfileRow | null> {
@@ -130,7 +167,7 @@ async function loadOwnTechnicianProfile(
   const { data } = await supabase
     .from("technician_profiles")
     .select(
-      "id,profile_id,company_id,affiliation_type,display_name,business_name,years_experience,service_summary_public,bio_private,primary_city,primary_state,service_zip_codes,specialties,languages,technician_status,marketplace_enabled,public_profile_ready,verification_submitted_at,verified_at,verified_by_profile_id,rejected_at,suspended_at,archived_by_profile_id,archived_at,created_at,updated_at",
+      "id,profile_id,company_id,affiliation_type,display_name,business_name,years_experience,service_summary_public,bio_private,primary_city,primary_state,service_zip_codes,service_cities,appliance_categories,brands_serviced,specialties,languages,avatar_color,technician_status,marketplace_enabled,public_profile_ready,verification_submitted_at,verified_at,verified_by_profile_id,rejected_at,suspended_at,archived_by_profile_id,archived_at,created_at,updated_at",
     )
     .eq("profile_id", profileId)
     .is("archived_at", null)
@@ -241,12 +278,19 @@ export function OnboardingFlow() {
       }
 
       if (
-        isDashboardOnboardingStatusSatisfied({
+        isCustomerOnboardingSatisfied({
           role: result.profile.role,
+          selectedPath: defaultPath,
           onboardingStatus: result.profile.onboarding_status,
         })
       ) {
-        router.replace(nextPath);
+        router.replace(
+          getOnboardingRedirectPath({
+            role: result.profile.role,
+            selectedPath: defaultPath,
+            nextPath,
+          }),
+        );
       }
     }
 
@@ -368,8 +412,9 @@ export function OnboardingFlow() {
     }
 
     if (
-      !isDashboardOnboardingStatusSatisfied({
+      !isCustomerOnboardingSatisfied({
         role: profileResult.data.profile.role,
+        selectedPath,
         onboardingStatus: completionResult.data.onboardingStatus,
       })
     ) {
@@ -385,11 +430,21 @@ export function OnboardingFlow() {
       return;
     }
 
+    const redirectPath = getOnboardingRedirectPath({
+      role: profileResult.data.profile.role,
+      selectedPath,
+      nextPath,
+    });
+
     setSubmitState({
       tone: "success",
-      message: "Onboarding saved. Opening your dashboard...",
+      message:
+        redirectPath.startsWith("/customer")
+          ? "Onboarding saved. Opening your customer dashboard..."
+          : "Onboarding saved. Opening your dashboard...",
     });
-    router.replace(nextPath);
+    setIsSubmitting(false);
+    router.replace(redirectPath);
     router.refresh();
   }
 
@@ -459,7 +514,11 @@ export function OnboardingFlow() {
           </p>
         </div>
         <Link
-          href="/dashboard"
+          href={
+            profile?.role === "customer" || selectedPath === "customer"
+              ? "/customer/dashboard"
+              : "/dashboard"
+          }
           className="inline-flex justify-center rounded-full border border-blue-200 bg-white px-5 py-3 text-sm font-black text-blue-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-50"
         >
           Dashboard

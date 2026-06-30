@@ -8,9 +8,13 @@ import {
   type DashboardAccessDecision,
 } from "@/lib/auth/dashboard-access";
 import { getCurrentUserProfile } from "@/lib/auth/profile";
-import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import {
+  getSupabaseBrowserClientResult,
+  getSupabaseBrowserRuntimeDiagnostics,
+} from "@/lib/supabase/client";
 import { getMissingSupabaseEnvVars } from "@/lib/supabase/env";
-import type { ProfileRow } from "@/lib/supabase/types";
+import type { Database, ProfileRow } from "@/lib/supabase/types";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 type CheckStatus = "checking" | "ready";
 
@@ -18,6 +22,19 @@ type SupabaseCheckState = {
   status: CheckStatus;
   missingEnvVars: string[];
   clientCanInitialize: boolean;
+  origin: string;
+  hostname: string;
+  protocol: string;
+  localStorageStatus: "available" | "unavailable";
+  localStorageError: string | null;
+  getSessionStatus:
+    | "not_checked"
+    | "checking"
+    | "success"
+    | "no_session"
+    | "error"
+    | "timeout";
+  getSessionError: string | null;
   sessionStatus: "checking" | "supabase_unavailable" | "logged_out" | "logged_in";
   userEmail: string | null;
   userId: string | null;
@@ -35,6 +52,13 @@ const initialCheckState: SupabaseCheckState = {
   status: "checking",
   missingEnvVars: [],
   clientCanInitialize: false,
+  origin: "unknown",
+  hostname: "unknown",
+  protocol: "unknown",
+  localStorageStatus: "unavailable",
+  localStorageError: null,
+  getSessionStatus: "not_checked",
+  getSessionError: null,
   sessionStatus: "checking",
   userEmail: null,
   userId: null,
@@ -146,6 +170,56 @@ function DecisionField({
   );
 }
 
+type SessionCheckResult = {
+  status: "success" | "no_session" | "error" | "timeout";
+  error: string | null;
+};
+
+const GET_SESSION_TIMEOUT_MS = 5000;
+
+async function runTimedSessionCheck(
+  client: SupabaseClient<Database>,
+): Promise<SessionCheckResult> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    const result = await Promise.race([
+      client.auth.getSession(),
+      new Promise<Awaited<ReturnType<typeof client.auth.getSession>>>(
+        (_, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(new Error("getSession timed out after 5 seconds."));
+          }, GET_SESSION_TIMEOUT_MS);
+        },
+      ),
+    ]);
+
+    if (result.error) {
+      return {
+        status: "error",
+        error: result.error.message,
+      };
+    }
+
+    return {
+      status: result.data.session ? "success" : "no_session",
+      error: null,
+    };
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "getSession failed.";
+
+    return {
+      status: message.includes("timed out") ? "timeout" : "error",
+      error: message,
+    };
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
 export default function SupabaseCheckPage() {
   const [checkState, setCheckState] =
     useState<SupabaseCheckState>(initialCheckState);
@@ -156,7 +230,9 @@ export default function SupabaseCheckPage() {
     async function runCheck() {
       const missingEnvVars = getMissingSupabaseEnvVars();
       const envReady = missingEnvVars.length === 0;
-      const client = envReady ? getSupabaseBrowserClient() : null;
+      const runtimeDiagnostics = getSupabaseBrowserRuntimeDiagnostics();
+      const clientResult = envReady ? getSupabaseBrowserClientResult() : null;
+      const client = clientResult?.client ?? null;
 
       if (!envReady || !client) {
         const profileResult = {
@@ -174,6 +250,15 @@ export default function SupabaseCheckPage() {
           status: "ready",
           missingEnvVars,
           clientCanInitialize: Boolean(client),
+          origin: runtimeDiagnostics.origin,
+          hostname: runtimeDiagnostics.hostname,
+          protocol: runtimeDiagnostics.protocol,
+          localStorageStatus: runtimeDiagnostics.localStorageAvailable
+            ? "available"
+            : "unavailable",
+          localStorageError: runtimeDiagnostics.localStorageError,
+          getSessionStatus: "not_checked",
+          getSessionError: clientResult?.error ?? null,
           sessionStatus: "supabase_unavailable",
           userEmail: null,
           userId: null,
@@ -188,6 +273,54 @@ export default function SupabaseCheckPage() {
             pathname: "/dashboard/technician-profile",
             profileResult,
           }),
+        });
+        return;
+      }
+
+      const sessionCheck = await runTimedSessionCheck(client);
+
+      if (sessionCheck.status !== "success") {
+        const profileResult = {
+          status: "logged_out",
+          profile: null,
+          session: null,
+          error: null,
+        } as const;
+        const dashboardDecision = evaluateDashboardAccess({
+          pathname: "/dashboard",
+          profileResult,
+        });
+        const technicianProfileDecision = evaluateDashboardAccess({
+          pathname: "/dashboard/technician-profile",
+          profileResult,
+        });
+
+        if (!isMounted) {
+          return;
+        }
+
+        setCheckState({
+          status: "ready",
+          missingEnvVars,
+          clientCanInitialize: true,
+          origin: runtimeDiagnostics.origin,
+          hostname: runtimeDiagnostics.hostname,
+          protocol: runtimeDiagnostics.protocol,
+          localStorageStatus: runtimeDiagnostics.localStorageAvailable
+            ? "available"
+            : "unavailable",
+          localStorageError: runtimeDiagnostics.localStorageError,
+          getSessionStatus: sessionCheck.status,
+          getSessionError: sessionCheck.error,
+          sessionStatus:
+            sessionCheck.status === "no_session" ? "logged_out" : "checking",
+          userEmail: null,
+          userId: null,
+          profileStatus: "not_checked",
+          profile: null,
+          profileError: sessionCheck.error,
+          dashboardDecision,
+          technicianProfileDecision,
         });
         return;
       }
@@ -211,6 +344,15 @@ export default function SupabaseCheckPage() {
           status: "ready",
           missingEnvVars,
           clientCanInitialize: true,
+          origin: runtimeDiagnostics.origin,
+          hostname: runtimeDiagnostics.hostname,
+          protocol: runtimeDiagnostics.protocol,
+          localStorageStatus: runtimeDiagnostics.localStorageAvailable
+            ? "available"
+            : "unavailable",
+          localStorageError: runtimeDiagnostics.localStorageError,
+          getSessionStatus: sessionCheck.status,
+          getSessionError: sessionCheck.error,
           sessionStatus: "logged_in",
           userEmail: result.session.user.email,
           userId: result.session.user.id,
@@ -228,6 +370,15 @@ export default function SupabaseCheckPage() {
           status: "ready",
           missingEnvVars,
           clientCanInitialize: true,
+          origin: runtimeDiagnostics.origin,
+          hostname: runtimeDiagnostics.hostname,
+          protocol: runtimeDiagnostics.protocol,
+          localStorageStatus: runtimeDiagnostics.localStorageAvailable
+            ? "available"
+            : "unavailable",
+          localStorageError: runtimeDiagnostics.localStorageError,
+          getSessionStatus: sessionCheck.status,
+          getSessionError: sessionCheck.error,
           sessionStatus: "logged_in",
           userEmail: result.session.user.email,
           userId: result.session.user.id,
@@ -244,6 +395,15 @@ export default function SupabaseCheckPage() {
         status: "ready",
         missingEnvVars,
         clientCanInitialize: true,
+        origin: runtimeDiagnostics.origin,
+        hostname: runtimeDiagnostics.hostname,
+        protocol: runtimeDiagnostics.protocol,
+        localStorageStatus: runtimeDiagnostics.localStorageAvailable
+          ? "available"
+          : "unavailable",
+        localStorageError: runtimeDiagnostics.localStorageError,
+        getSessionStatus: sessionCheck.status,
+        getSessionError: sessionCheck.error,
         sessionStatus:
           result.status === "supabase_unavailable"
             ? "supabase_unavailable"
@@ -300,6 +460,29 @@ export default function SupabaseCheckPage() {
           </h2>
           <dl className="mt-4">
             <CheckRow
+              label="Current origin"
+              value={checkState.origin}
+              tone="neutral"
+            />
+            <CheckRow
+              label="Hostname / protocol"
+              value={`${checkState.hostname} / ${checkState.protocol}`}
+              tone="neutral"
+            />
+            <CheckRow
+              label="localStorage test"
+              value={
+                checkState.localStorageStatus === "available"
+                  ? "Available"
+                  : `Unavailable${checkState.localStorageError ? `: ${checkState.localStorageError}` : ""}`
+              }
+              tone={
+                checkState.localStorageStatus === "available"
+                  ? "success"
+                  : "warning"
+              }
+            />
+            <CheckRow
               label="Supabase env vars"
               value={envReady ? "Present" : "Missing"}
               tone={envReady ? "success" : "warning"}
@@ -317,6 +500,29 @@ export default function SupabaseCheckPage() {
                   : "Unavailable"
               }
               tone={checkState.clientCanInitialize ? "success" : "warning"}
+            />
+            <CheckRow
+              label="getSession() check"
+              value={
+                checkState.getSessionStatus === "success"
+                  ? "Success"
+                  : checkState.getSessionStatus === "no_session"
+                    ? "No session"
+                    : checkState.getSessionStatus === "timeout"
+                      ? "Timeout"
+                      : checkState.getSessionStatus === "error"
+                        ? `Error${checkState.getSessionError ? `: ${checkState.getSessionError}` : ""}`
+                        : checkState.getSessionStatus === "checking"
+                          ? "Checking"
+                          : "Not checked"
+              }
+              tone={
+                checkState.getSessionStatus === "success"
+                  ? "success"
+                  : checkState.getSessionStatus === "not_checked"
+                    ? "neutral"
+                    : "warning"
+              }
             />
             <CheckRow
               label="Auth session"

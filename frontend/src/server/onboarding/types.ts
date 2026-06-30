@@ -61,8 +61,13 @@ export type UpdateTechnicianProfileInput = AuthenticatedOnboardingInput & {
   primaryCity?: string;
   primaryState?: string;
   serviceZipCodes?: string[];
+  serviceCities?: string[];
+  applianceCategories?: string[];
+  brandsServiced?: string[];
   specialties?: string[];
   languages?: string[];
+  avatarColor?: string;
+  marketplaceEnabled?: boolean;
 };
 
 export type CompleteOnboardingInput = AuthenticatedOnboardingInput;
