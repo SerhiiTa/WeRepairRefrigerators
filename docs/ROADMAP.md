@@ -1,5 +1,12 @@
 # Roadmap
 
+Read first:
+
+docs/CODEX_OPERATING_RULES.md
+docs/PROJECT_STATE.md
+docs/ROADMAP.md
+docs/DEVELOPER_HANDOFF.md
+
 P0 auth recovery note: Owner account passwords were restored using a temporary password outside git; future QA provisioning must remain limited to `qa-` accounts.
 
 ## Platform Bible Documentation
@@ -7,6 +14,73 @@ P0 auth recovery note: Owner account passwords were restored using a temporary p
 The official WeRepairRefrigerators source-of-truth documentation is now organized under `docs/platform-bible/`.
 
 Before starting major architecture, workflow, customer, technician, marketplace, CRM, AI, inventory, vendor, or dashboard work, read `docs/platform-bible/README.md` and align implementation with the Platform Bible documents.
+
+## Milestone: Workiz Exit / HomeFix Pilot
+
+Primary two-month goal: HomeFix must stop using Workiz and run daily operations inside WRA.
+
+Success definition:
+
+- Dispatcher uses WRA instead of Workiz.
+- Technician uses WRA instead of Workiz.
+- Customer receives estimate, invoice, and appointment links from WRA.
+- Jobs are created, scheduled, estimated, invoiced, paid, and closed inside WRA.
+- Workiz is not opened for 30 days.
+
+Future task filter: every task must answer `Does this help HomeFix stop using Workiz within two months?` If no, move it to backlog.
+
+## Next Task Sequence
+
+### Task 149 — Professional Job Workspace Completion
+
+Focus:
+
+- Make Job Workspace ready for daily technician use.
+- No cosmetic redesign.
+- Improve practical workflow only.
+- Technician can open job, call customer, view address, notes, photos, appointments, estimate, invoice, status, and close job from mobile.
+
+### Task 150 — Dispatcher Board + Real Calendar
+
+Focus:
+
+- Dispatcher daily board.
+- Schedule by technician.
+- Move/reschedule appointments.
+- Return visits.
+- Google Calendar outbound sync validation.
+- Mobile/tablet friendly dispatcher view.
+
+### Task 151 — Real SMS Automation
+
+Focus:
+
+- Twilio or selected provider.
+- Appointment confirmation.
+- On-my-way message.
+- Estimate sent.
+- Appointment reminder.
+- Review request.
+- No demo messaging.
+
+### Task 152 — Invoice + Payment Completion
+
+Focus:
+
+- Invoice creation from approved/completed work.
+- Stripe payment.
+- Payment status.
+- Receipt.
+- Customer payment page.
+
+### Task 153 — HomeFix Daily Pilot
+
+Focus:
+
+- Run real HomeFix jobs inside WRA.
+- Identify blockers from daily use.
+- Fix only operational blockers.
+- Prepare Workiz shutoff checklist.
 
 ## Phase 1: Frontend MVP
 
@@ -21,6 +95,8 @@ Before starting major architecture, workflow, customer, technician, marketplace,
 - Task 148.14 used the newly available service-role key to create/reuse QA Auth users and establish an authenticated dashboard session. Live browser QA reached the Job Workspace and generated a `$4,476.91` OpenAI Repair Intelligence estimate, but save/reopen QA is blocked by a live DB mismatch: `service_requests.company_id` is missing while the Task 148 estimate RPC expects it. Apply `supabase/migrations/0044_repair_intelligence_estimate_persistence_company_scope_fix_apply_ready.sql`, then apply `supabase/fixtures/repair_intelligence_estimate_qa_fixture.sql`, then rerun the save/reopen QA before Task 149.
 
 - Task 148.15 verified that `0044` resolves the missing-column blocker and that the live estimate-agent route uses OpenAI for Repair Intelligence generation. The remaining persistence blocker is compatibility with legacy independent-technician QA jobs: those requests are dashboard-visible through `selected_technician_slug` but have `company_id = null`, so the professional estimate RPC still rejects them as `Service request not found`. Apply `supabase/migrations/0045_repair_intelligence_independent_technician_estimate_compat_apply_ready.sql` to allow those already-authorized legacy jobs to save estimates and learning payloads without changing company-owned estimate behavior. After `0045` is applied, rerun Generate Estimate → Save Estimate → leave job → reopen job and verify lines, non-zero total, RepairPlanSummary, and estimateDecisionContext persistence before starting Task 149.
+
+- Task 148 is COMPLETE. After live migrations `0044`, `0045`, and `0046`, authenticated browser QA passed for the full Repair Intelligence workflow: Generate Estimate -> review repair plan -> Send/Save Estimate -> leave job -> reopen job -> verify persisted estimate number, line items, non-zero total, single saved estimate row, and no fresh browser console errors. Task 149 was not started during this completion pass.
 
 - Task 138 professionalized the technician dashboard Phase 1: compact alert strip, 70/30 Today's Schedule and Sales Snapshot center, denser AI/parts/manual tools, compact operational widgets, and sidebar polish. This was UI-only with no backend or schema changes.
 

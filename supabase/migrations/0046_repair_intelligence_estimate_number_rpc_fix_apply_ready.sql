@@ -1,70 +1,14 @@
--- Task 148.15: Repair Intelligence estimate persistence compatibility.
+-- Task 148.16 follow-up: restore estimate number generation in the
+-- Repair Intelligence estimate create RPC.
 --
 -- DEV/STAGING APPLY-READY.
 --
 -- Purpose:
---   Task 148 professional estimates are company-scoped, but older dev/staging
---   CRM jobs can still be legitimately visible to an independent technician
---   through selected_technician_slug while service_requests.company_id is null.
---   Those jobs should be estimate-capable when can_view_service_request(...)
---   already authorizes the dashboard user.
---
--- Scope:
---   - Keeps company-owned estimate access unchanged.
---   - Adds selected-technician-slug compatibility for legacy independent
---     service requests with null company_id.
---   - Allows estimate learning events to persist for those legacy requests with
---     nullable company scope when public.estimate_learning_events exists.
---   - Skips learning-event table/policy changes safely when that optional Task
---     148.4 table has not been applied in the target database.
---   - Does not expose public writes, service-role frontend access, providers,
---     inventory, vendor search, payments, or Task 149 behavior.
-
-do $$
-begin
-  if to_regclass('public.estimate_learning_events') is not null then
-    alter table public.estimate_learning_events
-      alter column company_id drop not null;
-
-    comment on column public.estimate_learning_events.company_id is
-      'Owning company for estimate learning records when available. May be null for legacy independent-technician service requests that are authorized through selected technician slug.';
-
-    drop policy if exists "estimate_learning_events_company_select"
-      on public.estimate_learning_events;
-    create policy "estimate_learning_events_company_select"
-    on public.estimate_learning_events
-    for select
-    to authenticated
-    using (
-      (
-        company_id is not null
-        and public.user_can_access_company(company_id)
-      )
-      or (
-        service_request_id is not null
-        and public.can_view_service_request(service_request_id)
-      )
-    );
-
-    drop policy if exists "estimate_learning_events_company_insert"
-      on public.estimate_learning_events;
-    create policy "estimate_learning_events_company_insert"
-    on public.estimate_learning_events
-    for insert
-    to authenticated
-    with check (
-      (
-        company_id is not null
-        and public.user_can_access_company(company_id)
-      )
-      or (
-        service_request_id is not null
-        and public.can_view_service_request(service_request_id)
-      )
-    );
-  end if;
-end;
-$$;
+--   Migration 0045 replaced create_service_request_estimate_rpc for legacy
+--   independent-technician jobs, but regressed estimate_number generation.
+--   Live databases with service_request_estimates.estimate_number set NOT NULL
+--   reject those inserts. This forward-only patch preserves the 0045 access
+--   compatibility while creating customer-facing estimate numbers again.
 
 create or replace function public.create_service_request_estimate_rpc(
   p_request_id uuid,
@@ -124,6 +68,8 @@ begin
     tax,
     total,
     estimate_status,
+    estimate_number,
+    customer_preview_notes,
     warranty_text,
     disclaimer_text
   )
@@ -134,6 +80,8 @@ begin
     0,
     0,
     'draft',
+    'EST-' || to_char(now(), 'YYYY') || '-' || upper(substring(replace(gen_random_uuid()::text, '-', '') from 1 for 8)),
+    'Draft estimate prepared for customer review. Not sent or approved yet.',
     null,
     null
   )
@@ -286,7 +234,9 @@ begin
     p_request_id,
     v_profile_id,
     'estimate',
-    'Estimate created with ' || v_line_count || ' line item' || case when v_line_count = 1 then '' else 's' end || '.'
+    'Estimate ' || (select estimate_number from public.service_request_estimates where id = v_estimate_id)
+      || ' created with ' || v_line_count || ' line item'
+      || case when v_line_count = 1 then '' else 's' end || '.'
   );
 
   return jsonb_build_object(
@@ -302,121 +252,7 @@ end;
 $$;
 
 comment on function public.create_service_request_estimate_rpc(uuid, jsonb, jsonb) is
-  'Creates an estimate for company-owned service requests or legacy independent-technician service requests already visible through selected technician slug.';
+  'Creates an estimate with a stable estimate number for company-owned service requests or legacy independent-technician service requests already visible through selected technician slug.';
 
-create or replace function public.record_estimate_learning_event_rpc(
-  p_request_id uuid default null,
-  p_estimate_id uuid default null,
-  p_event_type text default 'draft_saved',
-  p_decision_context jsonb default '{}'::jsonb
-)
-returns jsonb
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  v_profile_id uuid;
-  v_company_id uuid;
-  v_request_id uuid;
-  v_estimate_id uuid;
-  v_event_id uuid;
-begin
-  if to_regclass('public.estimate_learning_events') is null then
-    return jsonb_build_object(
-      'id', null,
-      'event_type', p_event_type,
-      'service_request_id', p_request_id,
-      'estimate_id', p_estimate_id,
-      'company_id', null,
-      'skipped', true,
-      'reason', 'estimate_learning_events table is not available in this database'
-    );
-  end if;
-
-  select p.id into v_profile_id
-  from public.profiles p
-  where p.id = auth.uid();
-
-  if v_profile_id is null then
-    raise exception 'Authenticated profile is required.';
-  end if;
-
-  if p_event_type not in (
-    'draft_generated',
-    'draft_saved',
-    'draft_updated',
-    'draft_sent',
-    'draft_archived',
-    'line_adjusted'
-  ) then
-    raise exception 'Unsupported estimate learning event type.';
-  end if;
-
-  if p_estimate_id is not null then
-    select e.id, e.service_request_id, sr.company_id
-    into v_estimate_id, v_request_id, v_company_id
-    from public.service_request_estimates e
-    join public.service_requests sr on sr.id = e.service_request_id
-    where e.id = p_estimate_id;
-  elsif p_request_id is not null then
-    select sr.id, sr.company_id
-    into v_request_id, v_company_id
-    from public.service_requests sr
-    where sr.id = p_request_id;
-  end if;
-
-  if v_request_id is null then
-    raise exception 'Estimate learning event target not found.';
-  end if;
-
-  if p_request_id is not null and p_request_id <> v_request_id then
-    raise exception 'Estimate learning event request mismatch.';
-  end if;
-
-  if v_company_id is not null then
-    if not public.user_can_access_company(v_company_id) then
-      raise exception 'Estimate learning event is not accessible.';
-    end if;
-  elsif not public.can_view_service_request(v_request_id) then
-    raise exception 'Estimate learning event is not accessible.';
-  end if;
-
-  insert into public.estimate_learning_events (
-    company_id,
-    service_request_id,
-    estimate_id,
-    created_by_profile_id,
-    event_type,
-    diagnosis_text,
-    repair_scope,
-    line_decisions,
-    totals,
-    decision_context
-  )
-  values (
-    v_company_id,
-    v_request_id,
-    v_estimate_id,
-    v_profile_id,
-    p_event_type,
-    nullif(p_decision_context->>'diagnosisText', ''),
-    coalesce(p_decision_context->'repairScope', '{}'::jsonb),
-    coalesce(p_decision_context->'lineDecisions', '[]'::jsonb),
-    coalesce(p_decision_context->'totals', '{}'::jsonb),
-    coalesce(p_decision_context, '{}'::jsonb)
-  )
-  returning id into v_event_id;
-
-  return jsonb_build_object(
-    'id', v_event_id,
-    'event_type', p_event_type,
-    'service_request_id', v_request_id,
-    'estimate_id', v_estimate_id,
-    'company_id', v_company_id
-  );
-end;
-$$;
-
+revoke all on function public.create_service_request_estimate_rpc(uuid, jsonb, jsonb) from public;
 grant execute on function public.create_service_request_estimate_rpc(uuid, jsonb, jsonb) to authenticated;
-grant execute on function public.record_estimate_learning_event_rpc(uuid, uuid, text, jsonb) to authenticated;

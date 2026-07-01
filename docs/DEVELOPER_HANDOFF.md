@@ -1,5 +1,12 @@
 # Developer Handoff
 
+Read first:
+
+docs/CODEX_OPERATING_RULES.md
+docs/PROJECT_STATE.md
+docs/ROADMAP.md
+docs/DEVELOPER_HANDOFF.md
+
 ## Overview
 
 WeRepairRefrigerators is a Houston-first refrigerator repair marketplace and SaaS MVP for customers, technicians, and service business owners. The current app is a frontend-only Next.js App Router project with a public SEO/customer marketplace, internal dashboard CRM, and private technician community mock workflows.
@@ -13,6 +20,36 @@ P0 auth recovery note: Owner account passwords were restored using a temporary p
 Read `docs/platform-bible/` first before starting any new major task. The Platform Bible is the official source-of-truth documentation location for permanent WeRepairRefrigerators strategy, architecture, technician workflows, customer marketplace behavior, CRM workflow design, AI advisor scope, community, vendor/inventory, implementation history, and execution roadmap.
 
 Start with `docs/platform-bible/README.md`, then read `docs/platform-bible/WRA_00_ROADMAP_MASTER.docx`, `docs/platform-bible/WRA_09_IMPLEMENTATION_HISTORY_AND_PROJECT_STATE.docx`, and `docs/platform-bible/WRA_10_EXECUTION_ROADMAP_AND_DEVELOPMENT_PLAN.docx` in that order.
+
+## Fresh Chat Starting Point
+
+- Read `docs/CODEX_OPERATING_RULES.md` first before doing anything.
+- P0 auth recovery is complete, and owner account passwords were restored outside git. Never modify non-QA users.
+- The project was restored from stash after the emergency rollback, and the modern dashboard, customer portal, booking flow, Repair Intelligence, and Job Workspace work is restored.
+- Task 148 is COMPLETE. Final authenticated QA generated a Repair Intelligence estimate, saved/sent it, reopened the job, and verified estimate number `EST-2026-41A58909`, 11 persisted lines, and persisted total `$4,319.00`.
+- Task 149 has not been started.
+
+## Workiz Exit / HomeFix Pilot Priority
+
+The next two-month business priority is to move HomeFix daily operations out of Workiz and into WRA.
+
+Success means:
+
+- Dispatcher uses WRA instead of Workiz.
+- Technician uses WRA instead of Workiz.
+- Customer receives estimate, invoice, and appointment links from WRA.
+- Jobs are created, scheduled, estimated, invoiced, paid, and closed inside WRA.
+- Workiz is not opened for 30 days.
+
+Every future task must answer: `Does this help HomeFix stop using Workiz within two months?` If no, put it in backlog.
+
+Immediate task sequence:
+
+1. Task 149 — Professional Job Workspace Completion: daily technician workflow, not cosmetic redesign. Technician can open job, call customer, view address, notes, photos, appointments, estimate, invoice, status, and close job from mobile.
+2. Task 150 — Dispatcher Board + Real Calendar: dispatcher daily board, scheduling by technician, move/reschedule appointments, return visits, Google Calendar outbound sync validation, mobile/tablet dispatcher view.
+3. Task 151 — Real SMS Automation: selected provider, appointment confirmations, on-my-way, estimate sent, appointment reminders, review requests, no demo messaging.
+4. Task 152 — Invoice + Payment Completion: invoice creation from approved/completed work, Stripe payment, payment status, receipt, customer payment page.
+5. Task 153 — HomeFix Daily Pilot: run real HomeFix jobs inside WRA, identify operational blockers, fix only operational blockers, prepare Workiz shutoff checklist.
 
 ## How to run the project
 
@@ -58,6 +95,8 @@ Supabase Auth redirect URLs should include both the localhost URLs and the local
 - Task 148.14 continued after `SUPABASE_SERVICE_ROLE_KEY` was added. Codex created `qa-estimate-tech@example.com` through Supabase Admin API, stored its generated local-only password in `/private/tmp/wra-qa-estimate-tech-example-com-password.txt`, and reused `qa-booking-tech@example.test` to establish a real dashboard browser session. The Job Workspace generated an OpenAI Repair Intelligence sealed-system/compressor estimate with `$4,476.91` total, but saving failed because the live DB lacks `service_requests.company_id`. A forward SQL fix now exists at `supabase/migrations/0044_repair_intelligence_estimate_persistence_company_scope_fix_apply_ready.sql`, and the estimate API reports the dev detail `column sr.company_id does not exist`. Automatic SQL apply is still unavailable: no DB URL, no Supabase CLI/local config, no SQL execution RPC, and Supabase Management SQL rejects the service-role key. Apply `0044`, then apply `supabase/fixtures/repair_intelligence_estimate_qa_fixture.sql`, then rerun browser save/reopen QA before Task 149.
 
 - Task 148.15 continued after the user applied `0044`. The live API verified `OPENAI_API_KEY` server-side behavior with `source: openai`, a sealed-system/compressor repair plan, estimate lines, pricing output, customer summary, warranty text, and medium confidence. Saving still failed on the current QA jobs with `Service request not found` because those legacy requests are accessible by `selected_technician_slug` but have `service_requests.company_id = null`. A forward compatibility migration now exists at `supabase/migrations/0045_repair_intelligence_independent_technician_estimate_compat_apply_ready.sql`. Apply `0045` in Supabase before rerunning final save/reopen QA; it keeps company-owned estimate behavior intact and adds support for already-authorized independent-technician legacy jobs plus nullable-company learning events.
+
+- Task 148 is COMPLETE. Final authenticated browser QA used `qa-booking-tech@example.test` on `/dashboard/leads/a5aec648-01df-49ca-9d86-c7b63ef0a59e`: generated a real OpenAI Repair Intelligence sealed-system estimate, reviewed the repair plan, sent/saved `EST-2026-41A58909`, left the job, reopened it, expanded the saved estimate, and verified 1 current estimate, 0 history estimates, all 11 lines, and total `$4,319.00`. Fresh console capture after the final reopen had no new warnings/errors. Optional repair-plan learning-event persistence is not available in the current live DB because `public.estimate_learning_events` is absent; `record_estimate_learning_event_rpc(...)` safely skips that write.
 
 - Task 138 completed Technician Dashboard Professionalization Phase 1. `/dashboard` now has a compact operational alert strip, central Today's Schedule/Sales Snapshot row, denser AI advisor, parts search, manuals, recent calls/messages/community/inventory widgets, and refined sidebar styling. No database schema, APIs, RPCs, scheduling, estimates, invoices, or appointments were changed.
 

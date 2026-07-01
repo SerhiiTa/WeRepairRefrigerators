@@ -169,7 +169,7 @@ export function DashboardNavigationLinks({
       <>
         {visibleItems.map((item) => (
           <DashboardNavigationLink
-            key={item.href}
+            key={`${item.label}-${item.href}`}
             item={item}
             pathname={pathname}
             variant="mobile"
@@ -195,7 +195,7 @@ export function DashboardNavigationLinks({
           </p>
           {items?.map((item) => (
             <DashboardNavigationLink
-              key={item.href}
+              key={`${item.label}-${item.href}`}
               item={item}
               pathname={pathname}
               variant="sidebar"

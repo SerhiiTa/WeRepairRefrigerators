@@ -1,5 +1,12 @@
 # Project State
 
+Read first:
+
+docs/CODEX_OPERATING_RULES.md
+docs/PROJECT_STATE.md
+docs/ROADMAP.md
+docs/DEVELOPER_HANDOFF.md
+
 ## Project name
 
 WeRepairRefrigerators
@@ -17,6 +24,29 @@ Read `docs/platform-bible/README.md` first, then use `docs/platform-bible/WRA_00
 ## Houston MVP scope
 
 The MVP is focused on Houston only and refrigerator repair only. The first product surface is a dark SaaS frontend for technicians and service business owners, with dashboard placeholders and a repair case creation UI.
+
+## Current confirmed handoff status
+
+- P0 auth recovery is complete. Owner account passwords were restored outside git, and future QA provisioning must only modify `qa-` accounts.
+- The project was restored from the emergency stash/rollback path, and the modern dashboard, customer portal, customer booking, Repair Intelligence, and Job Workspace state is back in the working tree.
+- `docs/CODEX_OPERATING_RULES.md` exists and is mandatory reading before every task.
+- Task 148 is COMPLETE. Repair Intelligence estimate workflow was verified end-to-end in the authenticated Job Workspace.
+- Final Task 148 QA generated a real OpenAI Repair Intelligence estimate, reviewed the repair plan, sent/saved estimate `EST-2026-41A58909`, left the job, reopened it, and verified the estimate number, 11 persisted lines, and persisted total `$4,319.00`.
+- Task 149 has not been started.
+
+## Workiz Exit / HomeFix Pilot
+
+Primary two-month business goal: HomeFix must stop using Workiz and run daily operations inside WRA.
+
+Success definition:
+
+- Dispatcher uses WRA instead of Workiz.
+- Technician uses WRA instead of Workiz.
+- Customer receives estimate, invoice, and appointment links from WRA.
+- Jobs are created, scheduled, estimated, invoiced, paid, and closed inside WRA.
+- Workiz is not opened for 30 days.
+
+Every future task must answer: `Does this help HomeFix stop using Workiz within two months?` If no, move it to backlog.
 
 ## Current stack
 
@@ -43,6 +73,8 @@ The MVP is focused on Houston only and refrigerator repair only. The first produ
 - Task 148.14 automatic QA provisioning attempt: after `SUPABASE_SERVICE_ROLE_KEY` was added, Codex created/reused QA Auth users with Supabase Admin API and established an authenticated dashboard session using the existing `qa-booking-tech@example.test` account. Browser QA generated a real OpenAI Repair Intelligence estimate in the Job Workspace with a sealed-system/compressor plan and `$4,476.91` total. Saving failed because the live database is missing `service_requests.company_id` while the Task 148 professional estimate RPC references it. A forward fix migration was created at `supabase/migrations/0044_repair_intelligence_estimate_persistence_company_scope_fix_apply_ready.sql`, and the estimate API now reports this DB mismatch in development instead of a generic error. Automatic SQL application is still unavailable: no database URL, no Supabase CLI/local config, no SQL execution RPC, and Supabase Management SQL rejects the service-role key. Apply `0044` and then `supabase/fixtures/repair_intelligence_estimate_qa_fixture.sql` manually before rerunning save/reopen QA.
 
 - Task 148.15 final live verification attempt: after the user applied `0044`, the previous `sr.company_id` column error was resolved and the authenticated QA dashboard session still reached `/dashboard/leads`. The Repair Intelligence API route was verified live with OpenAI (`source: openai`) for an LG refrigerator no-cooling/sealed-system case, returning a structured repair plan, customer summary, warranty text, pricing policy output, and 11 estimate lines. Estimate save still failed on the available QA jobs with `Service request not found` because those legacy dev/staging service requests are visible through `selected_technician_slug` but still have `company_id = null`, and the dedicated `qa-estimate-tech@example.com` fixture has not been applied. A new forward-only compatibility migration was created at `supabase/migrations/0045_repair_intelligence_independent_technician_estimate_compat_apply_ready.sql`; it preserves company-owned estimate behavior while allowing already-authorized independent-technician legacy jobs to create estimates and persist learning events. Apply `0045` in Supabase, then rerun the save/reopen QA before marking Task 148 fully complete.
+
+- Task 148 is COMPLETE after final Task 148.16 QA. Migrations `0044`, `0045`, and `0046` are applied in live Supabase. Authenticated browser QA with `qa-booking-tech@example.test` generated an OpenAI Repair Intelligence estimate inside the real Job Workspace, reviewed the repair plan, sent/saved estimate `EST-2026-41A58909`, left the job, reopened it, expanded the saved estimate, and verified 1 current estimate, 0 history estimates, all 11 estimate lines, and persisted total `$4,319.00`. The job status moved to `Estimate Sent`, no duplicate estimate rows appeared, and fresh browser log capture after the final reopen showed no new warnings/errors. `repairPlanSummary` learning persistence is skipped in this live database because optional `public.estimate_learning_events` is absent; the estimate save path handles that safely.
 
 - Task 138 Technician Dashboard Professionalization Phase 1: `/dashboard` now opens directly into a compact technician command center with alert strip cards, 70/30 schedule and sales focus row, dense AI/parts/manual widgets, compact calls/messages/community/inventory cards, and refined sidebar visual states. Backend behavior, schema, APIs, estimates, invoices, appointments, and scheduling logic were unchanged.
 
