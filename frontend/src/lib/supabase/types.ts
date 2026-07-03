@@ -146,6 +146,27 @@ export type DatabaseCalendarSyncStatus =
   | "failed"
   | "canceled";
 
+export type DatabaseIntakeSourceType =
+  | "phone"
+  | "sms"
+  | "website_form"
+  | "email"
+  | "yelp"
+  | "google"
+  | "retell_ai"
+  | "manual"
+  | "other";
+
+export type DatabaseIntakeStatus =
+  | "new"
+  | "reviewed"
+  | "needs_info"
+  | "customer_matched"
+  | "ready_to_convert"
+  | "converted"
+  | "dismissed"
+  | "archived";
+
 export type Database = {
   public: {
     Tables: {
@@ -174,6 +195,63 @@ export type Database = {
         };
         Insert: Partial<Database["public"]["Tables"]["appointments"]["Row"]>;
         Update: Partial<Database["public"]["Tables"]["appointments"]["Row"]>;
+        Relationships: [];
+      };
+      intake_requests: {
+        Row: {
+          id: string;
+          company_id: string | null;
+          owner_profile_id: string | null;
+          source_type: DatabaseIntakeSourceType;
+          source_name: string | null;
+          source_identifier: string | null;
+          customer_first_name: string | null;
+          customer_last_name: string | null;
+          customer_name: string | null;
+          customer_phone: string | null;
+          customer_email: string | null;
+          service_address: string | null;
+          unit: string | null;
+          city: string | null;
+          state: string;
+          zip_code: string | null;
+          country: string;
+          latitude: number | null;
+          longitude: number | null;
+          place_id: string | null;
+          appliance_type: string | null;
+          brand: string | null;
+          model_number: string | null;
+          serial_number: string | null;
+          problem_description: string | null;
+          preferred_appointment_window: string | null;
+          appointment_date: string | null;
+          window_start_time: string | null;
+          window_end_time: string | null;
+          raw_message: string | null;
+          transcript: string | null;
+          raw_payload: Json;
+          extracted_data: Json;
+          duplicate_candidate: Json;
+          extraction_confidence: number | null;
+          status: DatabaseIntakeStatus;
+          linked_customer_id: string | null;
+          linked_service_request_id: string | null;
+          linked_appointment_id: string | null;
+          assigned_technician_id: string | null;
+          dismissal_reason: string | null;
+          duplicate_confirmed_at: string | null;
+          duplicate_confirmed_by: string | null;
+          archived_at: string | null;
+          archived_by: string | null;
+          created_by: string | null;
+          updated_by: string | null;
+          converted_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Partial<Database["public"]["Tables"]["intake_requests"]["Row"]>;
+        Update: Partial<Database["public"]["Tables"]["intake_requests"]["Row"]>;
         Relationships: [];
       };
       profiles: {
@@ -621,6 +699,32 @@ export type Database = {
       };
     };
     Functions: {
+      can_access_intake_request: {
+        Args: {
+          target_intake_request_id: string;
+        };
+        Returns: boolean;
+      };
+      create_intake_request_rpc: {
+        Args: {
+          p_payload: Json;
+        };
+        Returns: Json;
+      };
+      update_intake_request_rpc: {
+        Args: {
+          p_intake_request_id: string;
+          p_payload: Json;
+        };
+        Returns: Json;
+      };
+      convert_intake_request_rpc: {
+        Args: {
+          p_intake_request_id: string;
+          p_allow_possible_duplicate?: boolean;
+        };
+        Returns: Json;
+      };
       book_service_request_appointment_rpc: {
         Args: {
           p_service_request_id: string;
@@ -928,6 +1032,8 @@ export type CompanyMemberRow =
 export type CustomerRow = PublicSchema["Tables"]["customers"]["Row"];
 export type CustomerApplianceRow =
   PublicSchema["Tables"]["customer_appliances"]["Row"];
+export type IntakeRequestRow =
+  PublicSchema["Tables"]["intake_requests"]["Row"];
 export type PricingCatalogItemRow =
   PublicSchema["Tables"]["pricing_catalog_items"]["Row"];
 export type ProfileRow = PublicSchema["Tables"]["profiles"]["Row"];

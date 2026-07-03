@@ -76,6 +76,17 @@ export const dashboardNavigationItems: DashboardNavigationItem[] = [
       "Real Supabase service request inbox for public schedule-service submissions.",
   },
   {
+    label: "Intake",
+    href: "/dashboard/intake",
+    allowedRoles: TECHNICIAN_ROLES,
+    allowedStatuses: ACTIVE_PROFILE_STATUSES,
+    requiresCompletedOnboarding: true,
+    visibility: "real",
+    group: "operations",
+    description:
+      "Unified incoming request inbox for manual, website, phone, SMS, email, Retell, Yelp, and Google sources.",
+  },
+  {
     label: "Schedule",
     href: "/dashboard/technician-schedule",
     allowedRoles: TECHNICIAN_ROLES,

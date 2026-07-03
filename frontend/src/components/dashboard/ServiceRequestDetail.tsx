@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { StatusBadge } from "@/components/StatusBadge";
@@ -165,14 +165,19 @@ type EstimateApprovalLinkState = {
 } | null;
 
 type EstimateRepairPlanSummary = {
-  detectedRepairType: string;
-  applianceCategory: string;
-  operationsCount: number;
-  partsCount: number;
-  materialsCount: number;
-  confidence: "high" | "medium" | "low";
-  pricingWarnings: string[];
+  understoodSummary: string;
+  includedRepairs: string[];
+  includedParts: string[];
+  missingInformation: string[];
 };
+
+type WorkflowActionTone =
+  | "blue"
+  | "green"
+  | "amber"
+  | "purple"
+  | "slate"
+  | "red";
 
 type InvoiceActionState =
   | { status: "idle"; message: null }
@@ -412,6 +417,43 @@ function getQuickActionClasses(variant?: string) {
   }
 
   return `${base} border-[#CBD5E1] bg-[#F8FAFC] text-[#334155] hover:bg-slate-100`;
+}
+
+function getWorkflowActionClasses(tone: WorkflowActionTone) {
+  const base =
+    "rounded-[10px] border px-3 py-2.5 text-left text-xs font-black transition disabled:cursor-not-allowed disabled:opacity-45";
+
+  if (tone === "green") {
+    return `${base} border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100`;
+  }
+
+  if (tone === "amber") {
+    return `${base} border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100`;
+  }
+
+  if (tone === "purple") {
+    return `${base} border-purple-200 bg-purple-50 text-purple-800 hover:bg-purple-100`;
+  }
+
+  if (tone === "red") {
+    return `${base} border-red-200 bg-red-50 text-red-800 hover:bg-red-100`;
+  }
+
+  if (tone === "slate") {
+    return `${base} border-[#CBD5E1] bg-[#F8FAFC] text-[#334155] hover:bg-slate-100`;
+  }
+
+  return `${base} border-blue-200 bg-blue-50 text-[#0F6BFF] hover:bg-blue-100`;
+}
+
+function getPhoneHref(value: string | null, scheme: "tel" | "sms") {
+  const cleaned = value?.replace(/[^\d+]/g, "") ?? "";
+
+  return cleaned.length >= 7 ? `${scheme}:${cleaned}` : null;
+}
+
+function getEmailHref(value: string | null) {
+  return value ? `mailto:${value}` : null;
 }
 
 function getReadErrorMessage(message: string): string {
@@ -687,6 +729,12 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     status: "idle",
     message: null,
   });
+  const [technicianFindingsDraft, setTechnicianFindingsDraft] = useState("");
+  const [technicianFindingsSaveState, setTechnicianFindingsSaveState] =
+    useState<NoteSaveState>({
+      status: "idle",
+      message: null,
+    });
   const [photoType, setPhotoType] =
     useState<Exclude<DatabaseServiceRequestPhotoType, "customer_upload">>(
       "technician_upload",
@@ -770,20 +818,16 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
   const [calendarSyncSummary, setCalendarSyncSummary] =
     useState<CalendarSyncSummary>(null);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    async function loadRequest() {
+  const refreshServiceRequest = useCallback(
+    async (options?: { syncEditableFields?: boolean }) => {
       const supabase = getSupabaseBrowserClient();
 
       if (!supabase) {
-        if (isMounted) {
-          setState({
-            status: "error",
-            request: null,
-            error: "Job reads are not configured for this workspace.",
-          });
-        }
+        setState({
+          status: "error",
+          request: null,
+          error: "Job reads are not configured for this workspace.",
+        });
         return;
       }
 
@@ -792,10 +836,6 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
         .select(SERVICE_REQUEST_SELECT_COLUMNS)
         .eq("id", requestId)
         .maybeSingle();
-
-      if (!isMounted) {
-        return;
-      }
 
       if (error) {
         setState({
@@ -825,17 +865,21 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
           ? (request.status as ServiceRequestCrmStatus)
           : "new",
       );
-      setAddressForm(buildAddressFormState(request));
-      setAddressSaveState({ status: "idle", message: null });
-      setIsEditingAddress(false);
-    }
 
-    void loadRequest();
+      if (options?.syncEditableFields) {
+        setAddressForm(buildAddressFormState(request));
+        setAddressSaveState({ status: "idle", message: null });
+        setIsEditingAddress(false);
+      }
+    },
+    [requestId],
+  );
 
-    return () => {
-      isMounted = false;
-    };
-  }, [requestId]);
+  useEffect(() => {
+    void Promise.resolve().then(() =>
+      refreshServiceRequest({ syncEditableFields: true }),
+    );
+  }, [refreshServiceRequest]);
 
   useEffect(() => {
     void loadNotes();
@@ -848,6 +892,36 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     void loadLatestDispatcherSnapshot();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestId]);
+
+  useEffect(() => {
+    function refreshExternalEstimateChanges() {
+      if (
+        typeof document !== "undefined" &&
+        document.visibilityState !== "visible"
+      ) {
+        return;
+      }
+
+      void refreshServiceRequest();
+      void loadEstimates();
+      void loadNotes();
+    }
+
+    window.addEventListener("focus", refreshExternalEstimateChanges);
+    document.addEventListener(
+      "visibilitychange",
+      refreshExternalEstimateChanges,
+    );
+
+    return () => {
+      window.removeEventListener("focus", refreshExternalEstimateChanges);
+      document.removeEventListener(
+        "visibilitychange",
+        refreshExternalEstimateChanges,
+      );
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshServiceRequest, requestId]);
 
   useEffect(() => {
     let isActive = true;
@@ -1624,44 +1698,74 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     }
 
     const plan = repairPlan as {
-      detectedRepairType?: unknown;
-      applianceCategory?: unknown;
       requiredOperations?: unknown;
       likelyParts?: unknown;
       materials?: unknown;
-      confidence?: unknown;
+      customerFacingExplanation?: unknown;
+      problemSummary?: unknown;
+      estimateStrategy?: {
+        customerSummary?: unknown;
+      };
     };
-    const confidence =
-      plan.confidence === "high" ||
-      plan.confidence === "medium" ||
-      plan.confidence === "low"
-        ? plan.confidence
-        : "medium";
+    const operationTitles = Array.isArray(plan.requiredOperations)
+      ? plan.requiredOperations
+          .map((operation) =>
+            operation &&
+            typeof operation === "object" &&
+            "title" in operation &&
+            typeof operation.title === "string"
+              ? operation.title.trim()
+              : "",
+          )
+          .filter(Boolean)
+          .slice(0, 5)
+      : [];
+    const materialTitles = Array.isArray(plan.materials)
+      ? plan.materials
+          .map((material) =>
+            material &&
+            typeof material === "object" &&
+            "customerName" in material &&
+            typeof material.customerName === "string"
+              ? material.customerName.trim()
+              : "",
+          )
+          .filter(Boolean)
+          .slice(0, 4)
+      : [];
+    const partTitles = Array.isArray(plan.likelyParts)
+      ? plan.likelyParts
+          .map((part) =>
+            part &&
+            typeof part === "object" &&
+            "customerName" in part &&
+            typeof part.customerName === "string"
+              ? part.customerName.trim()
+              : "",
+          )
+          .filter(Boolean)
+          .slice(0, 5)
+      : [];
+    const missingInformation = Array.isArray(pricingWarnings)
+      ? pricingWarnings
+          .filter((warning): warning is string => typeof warning === "string")
+          .map((warning) => warning.trim())
+          .filter(Boolean)
+          .slice(0, 4)
+      : [];
+    const understoodSummary =
+      (typeof plan.estimateStrategy?.customerSummary === "string" &&
+        plan.estimateStrategy.customerSummary.trim()) ||
+      (typeof plan.customerFacingExplanation === "string" &&
+        plan.customerFacingExplanation.trim()) ||
+      (typeof plan.problemSummary === "string" && plan.problemSummary.trim()) ||
+      "Estimate draft prepared from technician-provided repair scope.";
 
     return {
-      detectedRepairType:
-        typeof plan.detectedRepairType === "string" &&
-        plan.detectedRepairType.trim()
-          ? plan.detectedRepairType
-          : "repair plan",
-      applianceCategory:
-        typeof plan.applianceCategory === "string" &&
-        plan.applianceCategory.trim()
-          ? plan.applianceCategory
-          : "general",
-      operationsCount: Array.isArray(plan.requiredOperations)
-        ? plan.requiredOperations.length
-        : 0,
-      partsCount: Array.isArray(plan.likelyParts)
-        ? plan.likelyParts.length
-        : 0,
-      materialsCount: Array.isArray(plan.materials) ? plan.materials.length : 0,
-      confidence,
-      pricingWarnings: Array.isArray(pricingWarnings)
-        ? pricingWarnings
-            .filter((warning): warning is string => typeof warning === "string")
-            .slice(0, 3)
-        : [],
+      understoodSummary,
+      includedRepairs: [...operationTitles, ...materialTitles].slice(0, 6),
+      includedParts: partTitles,
+      missingInformation,
     };
   }
 
@@ -1775,11 +1879,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
         payload.source ?? (payload.provider === "openai" ? "openai" : "fallback");
       setEstimateGenerationState({
         status: "success",
-        message:
-          payload.message ??
-          (source === "openai"
-            ? "Generated with AI. Please review before sending."
-            : "Generated locally. OpenAI estimate agent was not available."),
+        message: "Estimate draft prepared. Please review before sending.",
         source,
       });
     } catch (error) {
@@ -2754,6 +2854,76 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     void loadNotes();
   }
 
+  async function saveTechnicianFindings() {
+    if (state.status !== "ready") {
+      return;
+    }
+
+    const body = technicianFindingsDraft.trim();
+
+    if (!body) {
+      setTechnicianFindingsSaveState({
+        status: "error",
+        message: "Add the technician findings before saving.",
+      });
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setTechnicianFindingsSaveState({
+        status: "error",
+        message: "Job notes are not available for this workspace.",
+      });
+      return;
+    }
+
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
+    const accessToken = sessionData.session?.access_token;
+
+    if (sessionError || !accessToken) {
+      setTechnicianFindingsSaveState({
+        status: "error",
+        message: "Log in again before saving technician findings.",
+      });
+      return;
+    }
+
+    setTechnicianFindingsSaveState({ status: "saving", message: null });
+
+    const response = await fetch(`/api/service-requests/${state.request.id}/notes`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ noteType: "diagnostic", body }),
+    });
+
+    const payload = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      message?: string;
+    } | null;
+
+    if (!response.ok || !payload?.ok) {
+      setTechnicianFindingsSaveState({
+        status: "error",
+        message:
+          payload?.message ?? "We could not save the technician findings yet.",
+      });
+      return;
+    }
+
+    setTechnicianFindingsDraft("");
+    setTechnicianFindingsSaveState({
+      status: "success",
+      message: "Technician findings saved.",
+    });
+    void loadNotes();
+  }
+
   if (state.status === "loading") {
     return (
       <section className="rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] p-6 text-[#334155]">
@@ -2984,6 +3154,162 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
       onClick: () => setActiveJobTab("photos"),
     },
   ];
+  const callCustomerHref = getPhoneHref(request.customerPhone, "tel");
+  const textCustomerHref = getPhoneHref(request.customerPhone, "sms");
+  const emailCustomerHref = getEmailHref(request.customerEmail);
+  const latestDiagnosticNote =
+    notesState.notes.find((note) => note.noteType === "diagnostic") ?? null;
+  const latestPartsNote =
+    notesState.notes.find((note) => note.noteType === "parts_note") ?? null;
+  const latestEstimate =
+    [...estimatesState.estimates].sort(
+      (left, right) =>
+        new Date(right.updatedAt).getTime() -
+        new Date(left.updatedAt).getTime(),
+    )[0] ?? null;
+  const latestInvoice =
+    [...invoicesState.invoices].sort(
+      (left, right) =>
+        new Date(right.updatedAt).getTime() -
+        new Date(left.updatedAt).getTime(),
+    )[0] ?? null;
+  const workflowActions = [
+    {
+      label: "Arrived",
+      status: "diagnosed",
+      helper: "Start on-site workflow",
+      tone: "blue",
+    },
+    {
+      label: "Diagnosing",
+      status: "diagnosed",
+      helper: "Record findings",
+      tone: "purple",
+    },
+    {
+      label: "Estimate Sent",
+      status: "estimate_sent",
+      helper: "Customer review",
+      tone: "purple",
+    },
+    {
+      label: "Waiting Approval",
+      status: "waiting_customer",
+      helper: "Customer decision",
+      tone: "amber",
+    },
+    {
+      label: "Parts Ordered",
+      status: "parts_ordered",
+      helper: "Return may be needed",
+      tone: "amber",
+    },
+    {
+      label: "Parts Received",
+      status: "parts_received",
+      helper: "Ready to schedule",
+      tone: "green",
+    },
+    {
+      label: "Return Visit",
+      status: "return_visit_scheduled",
+      helper: "Follow-up booked",
+      tone: "blue",
+    },
+    {
+      label: "Completed",
+      status: "completed",
+      helper: "Repair complete",
+      tone: "green",
+    },
+    {
+      label: "Closed",
+      status: "closed",
+      helper: "No more action",
+      tone: "slate",
+    },
+  ] as const satisfies readonly {
+    label: string;
+    status: ServiceRequestCrmStatus;
+    helper: string;
+    tone: WorkflowActionTone;
+  }[];
+  const operationalNextStep =
+    !request.appointmentId && request.status !== "completed" && request.status !== "closed"
+      ? {
+          title: "Book the appointment",
+          body: "Choose a technician and window before dispatching this job.",
+          actionLabel: "Open Appointment",
+          tab: "appointment" as JobWorkspaceTab,
+        }
+      : request.status === "scheduled"
+        ? {
+            title: "Arrive and diagnose",
+            body: "Confirm access, inspect the appliance, and record technician findings.",
+            actionLabel: "Mark Diagnosing",
+            status: "diagnosed" as ServiceRequestCrmStatus,
+          }
+        : !latestDiagnosticNote && request.status !== "completed" && request.status !== "closed"
+          ? {
+              title: "Record findings",
+              body: "Add the diagnosis so Repair Intelligence, estimates, and history stay useful.",
+              actionLabel: "Add Findings",
+              tab: "overview" as JobWorkspaceTab,
+            }
+          : !latestEstimate && request.status !== "completed" && request.status !== "closed"
+            ? {
+                title: "Create the estimate",
+                body: "Generate or build the repair estimate from the diagnosis and send it to the customer.",
+                actionLabel: "Open Estimate",
+                tab: "estimate" as JobWorkspaceTab,
+              }
+            : latestEstimate?.estimateStatus === "draft"
+              ? {
+                  title: "Send the estimate",
+                  body: `${latestEstimate.estimateNumber} is still a draft and needs customer review.`,
+                  actionLabel: "Open Estimate",
+                  tab: "estimate" as JobWorkspaceTab,
+                }
+              : request.status === "parts_needed"
+                ? {
+                    title: "Order required parts",
+                    body: "Move the job to Parts Ordered when the order is placed.",
+                    actionLabel: "Mark Parts Ordered",
+                    status: "parts_ordered" as ServiceRequestCrmStatus,
+                  }
+                : request.status === "parts_received"
+                  ? {
+                      title: "Schedule return visit",
+                      body: "Parts are ready. Set the return visit or update the appointment.",
+                      actionLabel: "Return Visit",
+                      status:
+                        "return_visit_scheduled" as ServiceRequestCrmStatus,
+                    }
+                  : latestInvoice?.invoiceStatus === "paid" ||
+                      request.status === "completed" ||
+                      request.status === "closed"
+                    ? {
+                        title: "Close out the job",
+                        body: "Verify photos, notes, invoice status, and warranty details before closing.",
+                        actionLabel: "Close Job",
+                        status: "closed" as ServiceRequestCrmStatus,
+                      }
+                    : {
+                        title: "Continue the repair workflow",
+                        body: "Use the workflow actions below to keep job status, notes, estimates, parts, and invoices current.",
+                        actionLabel: "Review Timeline",
+                        tab: "timeline" as JobWorkspaceTab,
+                      };
+  const partsWorkflowLabel =
+    request.status === "parts_needed"
+      ? "Parts required"
+      : request.status === "parts_ordered"
+        ? "Parts ordered"
+        : request.status === "parts_received"
+          ? "Parts received"
+          : request.status === "return_visit_scheduled"
+            ? "Return visit scheduled"
+            : "No active parts hold";
   const customEstimateLinesTotal = customEstimateLines.reduce(
     (total, line) => total + line.quantity * line.unitPrice,
     0,
@@ -3833,6 +4159,337 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
         ) : null}
       </section>
       ) : null}
+
+      <section className="mt-4 rounded-2xl border border-blue-100 bg-blue-50 p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
+              Next action
+            </p>
+            <h2 className="mt-1 text-xl font-black text-[#0F172A]">
+              {operationalNextStep.title}
+            </h2>
+            <p className="mt-1 max-w-3xl text-sm font-semibold leading-6 text-[#334155]">
+              {operationalNextStep.body}
+            </p>
+          </div>
+          <button
+            className="rounded-[10px] bg-[#0F6BFF] px-4 py-3 text-sm font-black text-white transition hover:bg-[#0057D9] disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={statusUpdateState.status === "saving"}
+            onClick={() => {
+              if ("status" in operationalNextStep) {
+                void updateStatus(operationalNextStep.status);
+                return;
+              }
+
+              if ("tab" in operationalNextStep) {
+                setActiveJobTab(operationalNextStep.tab);
+              }
+            }}
+            type="button"
+          >
+            {operationalNextStep.actionLabel}
+          </button>
+        </div>
+      </section>
+
+      <section className="mt-4 grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+        <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
+                Customer communication
+              </p>
+              <h2 className="mt-1 text-lg font-black text-[#0F172A]">
+                {request.customerName}
+              </h2>
+              <p className="mt-1 text-sm font-semibold text-[#64748B]">
+                {request.customerPhone ?? "No phone recorded"} ·{" "}
+                {request.customerEmail ?? "No email recorded"}
+              </p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-3 md:min-w-[24rem]">
+              {callCustomerHref ? (
+                <a
+                  className="rounded-[10px] border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-center text-xs font-black text-emerald-800 transition hover:bg-emerald-100"
+                  href={callCustomerHref}
+                >
+                  Call
+                </a>
+              ) : (
+                <span className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-2.5 text-center text-xs font-black text-[#64748B]">
+                  No Phone
+                </span>
+              )}
+              {textCustomerHref ? (
+                <a
+                  className="rounded-[10px] border border-blue-200 bg-blue-50 px-3 py-2.5 text-center text-xs font-black text-[#0F6BFF] transition hover:bg-blue-100"
+                  href={textCustomerHref}
+                >
+                  Text
+                </a>
+              ) : (
+                <span className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-2.5 text-center text-xs font-black text-[#64748B]">
+                  No Text
+                </span>
+              )}
+              {emailCustomerHref ? (
+                <a
+                  className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-2.5 text-center text-xs font-black text-[#334155] transition hover:border-[#0F6BFF] hover:text-[#0F6BFF]"
+                  href={emailCustomerHref}
+                >
+                  Email
+                </a>
+              ) : (
+                <span className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-2.5 text-center text-xs font-black text-[#64748B]">
+                  No Email
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <div className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] p-3">
+              <p className="text-[11px] font-black uppercase tracking-[0.16em] text-[#64748B]">
+                Address
+              </p>
+              <p className="mt-1 line-clamp-3 text-sm font-semibold leading-5 text-[#334155]">
+                {fullAddress || addressSummary}
+              </p>
+            </div>
+            <div className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] p-3">
+              <p className="text-[11px] font-black uppercase tracking-[0.16em] text-[#64748B]">
+                Appointment
+              </p>
+              <p className="mt-1 text-sm font-semibold leading-5 text-[#334155]">
+                {scheduledWindowLabel ?? request.preferredTimeWindow ?? "Not scheduled"}
+              </p>
+            </div>
+            <div className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] p-3">
+              <p className="text-[11px] font-black uppercase tracking-[0.16em] text-[#64748B]">
+                Source
+              </p>
+              <p className="mt-1 text-sm font-semibold leading-5 text-[#334155]">
+                {formatServiceRequestSource(request.requestSource)}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
+            Repair workflow
+          </p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {workflowActions.map((action) => (
+              <button
+                className={getWorkflowActionClasses(action.tone)}
+                disabled={
+                  statusUpdateState.status === "saving" ||
+                  request.status === action.status
+                }
+                key={action.label}
+                onClick={() => void updateStatus(action.status)}
+                type="button"
+              >
+                <span className="block">{action.label}</span>
+                <span className="mt-0.5 block text-[11px] font-bold opacity-75">
+                  {action.helper}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="mt-4 grid gap-4 xl:grid-cols-2">
+        <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
+                Appliance and diagnosis
+              </p>
+              <h2 className="mt-1 text-lg font-black text-[#0F172A]">
+                {request.applianceBrand ?? "Unknown brand"} {request.applianceType}
+              </h2>
+              <p className="mt-1 text-sm font-semibold text-[#64748B]">
+                Model: {request.applianceModel ?? "Not recorded"} · Serial: Not recorded
+              </p>
+            </div>
+            <button
+              className="rounded-[10px] border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-black text-[#0F6BFF] transition hover:bg-blue-100"
+              onClick={() => setActiveJobTab("estimate")}
+              type="button"
+            >
+              Repair Intelligence
+            </button>
+          </div>
+          <div className="mt-4 rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] p-3">
+            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-[#64748B]">
+              Customer complaint
+            </p>
+            <p className="mt-1 text-sm font-semibold leading-6 text-[#334155]">
+              {request.issueDescription}
+            </p>
+          </div>
+          <div className="mt-3 rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] p-3">
+            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-[#64748B]">
+              Latest technician findings
+            </p>
+            <p className="mt-1 text-sm font-semibold leading-6 text-[#334155]">
+              {latestDiagnosticNote?.body ??
+                "No diagnostic findings recorded yet."}
+            </p>
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <div className="rounded-[10px] border border-[#E5E7EB] bg-white p-3">
+              <p className="text-[11px] font-black uppercase tracking-[0.16em] text-[#64748B]">
+                Estimate
+              </p>
+              <p className="mt-1 text-sm font-semibold text-[#334155]">
+                {latestEstimate
+                  ? `${latestEstimate.estimateNumber} · ${formatServiceRequestSource(
+                      latestEstimate.estimateStatus,
+                    )} · ${formatServiceRequestMoney(latestEstimate.total)}`
+                  : "No estimate yet"}
+              </p>
+            </div>
+            <div className="rounded-[10px] border border-[#E5E7EB] bg-white p-3">
+              <p className="text-[11px] font-black uppercase tracking-[0.16em] text-[#64748B]">
+                Invoice
+              </p>
+              <p className="mt-1 text-sm font-semibold text-[#334155]">
+                {latestInvoice
+                  ? `${latestInvoice.invoiceNumber} · ${formatServiceRequestSource(
+                      latestInvoice.invoiceStatus,
+                    )} · ${formatServiceRequestMoney(latestInvoice.total)}`
+                  : "No invoice yet"}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
+            Technician findings
+          </p>
+          <h2 className="mt-1 text-lg font-black text-[#0F172A]">
+            Voice-ready note capture
+          </h2>
+          <p className="mt-1 text-sm font-semibold leading-6 text-[#64748B]">
+            Type or dictate findings here. Saved findings become diagnostic notes and feed the repair history.
+          </p>
+          <textarea
+            className="mt-3 min-h-28 w-full rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-3 text-sm font-semibold text-[#0F172A] outline-none transition placeholder:text-[#94A3B8] focus:border-[#0F6BFF]"
+            disabled={technicianFindingsSaveState.status === "saving"}
+            onChange={(event) => {
+              setTechnicianFindingsDraft(event.target.value);
+              setTechnicianFindingsSaveState({ status: "idle", message: null });
+            }}
+            placeholder="Example: Evaporator packed with ice. Fan not spinning. Need defrost heater and fan motor."
+            value={technicianFindingsDraft}
+          />
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+            <button
+              className="rounded-[10px] bg-[#0F6BFF] px-4 py-3 text-sm font-black text-white transition hover:bg-[#0057D9] disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={
+                technicianFindingsSaveState.status === "saving" ||
+                !technicianFindingsDraft.trim()
+              }
+              onClick={() => void saveTechnicianFindings()}
+              type="button"
+            >
+              {technicianFindingsSaveState.status === "saving"
+                ? "Saving..."
+                : "Save Findings"}
+            </button>
+            <button
+              className="rounded-[10px] border border-[#E5E7EB] px-4 py-3 text-sm font-black text-[#334155] transition hover:border-[#0F6BFF] hover:text-[#0F6BFF]"
+              onClick={() => setActiveJobTab("notes")}
+              type="button"
+            >
+              Open Notes
+            </button>
+          </div>
+          {technicianFindingsSaveState.message ? (
+            <p
+              className={`mt-3 text-sm font-semibold ${
+                technicianFindingsSaveState.status === "error"
+                  ? "text-amber-800"
+                  : "text-[#0F6BFF]"
+              }`}
+            >
+              {technicianFindingsSaveState.message}
+            </p>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="mt-4 grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
+        <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
+            Parts workflow
+          </p>
+          <h2 className="mt-1 text-lg font-black text-[#0F172A]">
+            {partsWorkflowLabel}
+          </h2>
+          <p className="mt-2 text-sm font-semibold leading-6 text-[#64748B]">
+            {latestPartsNote?.body ??
+              "Use the parts statuses when a repair needs ordering, receiving, or a return visit."}
+          </p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {[
+              ["Parts Needed", "parts_needed"],
+              ["Parts Ordered", "parts_ordered"],
+              ["Parts Received", "parts_received"],
+              ["Return Visit", "return_visit_scheduled"],
+            ].map(([label, status]) => (
+              <button
+                className="rounded-[10px] border border-amber-200 bg-amber-50 px-3 py-2.5 text-left text-xs font-black text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-45"
+                disabled={
+                  statusUpdateState.status === "saving" ||
+                  request.status === status
+                }
+                key={status}
+                onClick={() => void updateStatus(status as ServiceRequestCrmStatus)}
+                type="button"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
+            Customer repair history
+          </p>
+          <h2 className="mt-1 text-lg font-black text-[#0F172A]">
+            Current job history
+          </h2>
+          <div className="mt-3 grid gap-2 sm:grid-cols-3">
+            <div className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] p-3">
+              <p className="text-2xl font-black text-[#0F172A]">
+                {notesState.notes.length}
+              </p>
+              <p className="text-xs font-bold text-[#64748B]">Notes</p>
+            </div>
+            <div className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] p-3">
+              <p className="text-2xl font-black text-[#0F172A]">
+                {photosState.photos.length}
+              </p>
+              <p className="text-xs font-bold text-[#64748B]">Photos</p>
+            </div>
+            <div className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] p-3">
+              <p className="text-2xl font-black text-[#0F172A]">
+                {timelineItems.length}
+              </p>
+              <p className="text-xs font-bold text-[#64748B]">Timeline</p>
+            </div>
+          </div>
+          <p className="mt-3 text-sm font-semibold leading-6 text-[#64748B]">
+            Previous repairs from linked customer history are not attached to this job yet. Current job activity is available in Timeline.
+          </p>
+        </div>
+      </section>
 
       <section className="mt-6 rounded-2xl border border-[#E5E7EB] bg-white p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -4923,94 +5580,68 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
 
           {estimateDraftAgentResult ? (
             <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2">
-              {estimateGenerationState.message ? (
-                <p className="text-sm font-bold text-[#0F172A]">
-                  {estimateGenerationState.message}
-                </p>
-              ) : null}
+              <p className="text-xs font-black uppercase tracking-[0.14em] text-[#0F6BFF]">
+                Estimate Draft
+              </p>
+              <p className="mt-1 text-sm font-black text-[#0F172A]">
+                Please review before sending.
+              </p>
+              <p className="mt-1 text-xs font-semibold leading-5 text-[#475569]">
+                {estimateRepairPlanSummary?.understoodSummary ||
+                  estimateDraftAgentResult.customerDescription ||
+                  "The draft is ready for technician review."}
+              </p>
               {estimateRepairPlanSummary ? (
-                <div className="mt-2 rounded-lg border border-blue-100 bg-white/80 p-2">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <p className="text-xs font-black uppercase tracking-[0.14em] text-[#0F6BFF]">
-                        Repair plan
-                      </p>
-                      <p className="mt-1 text-sm font-black text-[#0F172A]">
-                        {estimateRepairPlanSummary.detectedRepairType.replaceAll(
-                          "_",
-                          " ",
-                        )}
-                      </p>
-                      <p className="mt-1 text-xs font-semibold text-[#64748B]">
-                        {estimateRepairPlanSummary.applianceCategory} ·{" "}
-                        {estimateRepairPlanSummary.operationsCount} operations ·{" "}
-                        {estimateRepairPlanSummary.partsCount} parts ·{" "}
-                        {estimateRepairPlanSummary.materialsCount} materials
-                      </p>
-                    </div>
-                    <StatusBadge
-                      tone={
-                        estimateRepairPlanSummary.confidence === "high"
-                          ? "emerald"
-                          : estimateRepairPlanSummary.confidence === "medium"
-                            ? "blue"
-                            : "amber"
-                      }
-                    >
-                      {formatServiceRequestSource(
-                        estimateRepairPlanSummary.confidence,
-                      )}{" "}
-                      confidence
-                    </StatusBadge>
-                  </div>
-                  {estimateRepairPlanSummary.confidence === "low" ? (
-                    <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800">
-                      Low confidence. Review repair scope before sending.
+                <div className="mt-3 grid gap-2 md:grid-cols-3">
+                  <div className="rounded-lg border border-blue-100 bg-white/85 p-2">
+                    <p className="text-[11px] font-black uppercase tracking-[0.12em] text-[#64748B]">
+                      Repairs included
                     </p>
-                  ) : null}
-                  {estimateRepairPlanSummary.pricingWarnings.length > 0 ? (
-                    <ul className="mt-2 list-disc space-y-1 pl-5 text-xs font-semibold text-[#64748B]">
-                      {estimateRepairPlanSummary.pricingWarnings.map(
-                        (warning) => (
-                          <li key={warning}>{warning}</li>
-                        ),
-                      )}
-                    </ul>
-                  ) : null}
-                </div>
-              ) : null}
-              {process.env.NODE_ENV !== "production" ? (
-                <details className="mt-2 text-xs text-[#64748B]">
-                  <summary className="cursor-pointer font-black text-[#0F6BFF]">
-                    Draft details
-                  </summary>
-                  <div className="mt-2 flex flex-wrap gap-2 font-bold text-[#334155]">
-                    <span className="rounded-full border border-blue-100 bg-white px-3 py-1">
-                      Language:{" "}
-                      {formatServiceRequestSource(
-                        estimateDraftAgentResult.diagnosisNormalization
-                          .detectedLanguage,
-                      )}
-                    </span>
-                    {estimateDraftAgentResult.diagnosisNormalization.repairIntents.map(
-                      (intent) => (
-                        <span
-                          className="rounded-full border border-blue-100 bg-white px-3 py-1"
-                          key={intent}
-                        >
-                          {intent.replaceAll("_", " ")}
-                        </span>
-                      ),
+                    {estimateRepairPlanSummary.includedRepairs.length > 0 ? (
+                      <ul className="mt-1 space-y-1 text-xs font-semibold leading-5 text-[#0F172A]">
+                        {estimateRepairPlanSummary.includedRepairs.map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="mt-1 text-xs font-semibold text-[#64748B]">
+                        Confirm repair work before sending.
+                      </p>
                     )}
                   </div>
-                  <p className="mt-2 leading-5">
-                    Normalized diagnosis:{" "}
-                    {
-                      estimateDraftAgentResult.diagnosisNormalization
-                        .normalizedEnglishDiagnosis
-                    }
-                  </p>
-                </details>
+                  <div className="rounded-lg border border-blue-100 bg-white/85 p-2">
+                    <p className="text-[11px] font-black uppercase tracking-[0.12em] text-[#64748B]">
+                      Parts included
+                    </p>
+                    {estimateRepairPlanSummary.includedParts.length > 0 ? (
+                      <ul className="mt-1 space-y-1 text-xs font-semibold leading-5 text-[#0F172A]">
+                        {estimateRepairPlanSummary.includedParts.map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="mt-1 text-xs font-semibold text-[#64748B]">
+                        No specific parts listed yet.
+                      </p>
+                    )}
+                  </div>
+                  <div className="rounded-lg border border-amber-100 bg-white/85 p-2">
+                    <p className="text-[11px] font-black uppercase tracking-[0.12em] text-[#64748B]">
+                      Needs confirmation
+                    </p>
+                    {estimateRepairPlanSummary.missingInformation.length > 0 ? (
+                      <ul className="mt-1 space-y-1 text-xs font-semibold leading-5 text-amber-800">
+                        {estimateRepairPlanSummary.missingInformation.map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="mt-1 text-xs font-semibold text-emerald-700">
+                        No missing estimate information flagged.
+                      </p>
+                    )}
+                  </div>
+                </div>
               ) : null}
             </div>
           ) : null}

@@ -1,16 +1,14 @@
 import { NextResponse } from "next/server";
 
-import {
-  generateEstimateDraft,
-  type DiagnosisLanguage,
-  type EstimateDraftAgentLine,
-  type EstimateDraftAgentResult,
-  type EstimateDraftLineType,
-  type RepairIntent,
+import type {
+  DiagnosisLanguage,
+  EstimateDraftAgentLine,
+  EstimateDraftAgentResult,
+  EstimateDraftLineType,
+  RepairIntent,
 } from "@/lib/estimate-draft-agent";
 import {
-  createEstimateFromRepairPlan,
-  createRepairPlan,
+  normalizeApplianceCategory,
   type RepairPlan,
 } from "@/lib/repair-intelligence";
 import { createUserScopedServerClient } from "@/server/onboarding/supabase";
@@ -42,6 +40,7 @@ type OpenAiEstimateDraft = {
   detected_language: DiagnosisLanguage;
   normalized_english_diagnosis: string;
   repair_intents: RepairIntent[];
+  missing_information: string[];
   likely_repair_scope: {
     scope_key: string;
     service_category: string;
@@ -56,13 +55,12 @@ type OpenAiEstimateDraft = {
   warnings: string[];
 };
 
-type ExplicitEstimateScope = {
-  evaporatorFanReplacement: boolean;
-  defrostHeaterReplacement: boolean;
-  manualEvaporatorDefrost: boolean;
-  waterValveReplacement: boolean;
-  frozenDispenserWaterLine: boolean;
-  sealedSystemCompressor: boolean;
+type AuthorizedScopeItem = {
+  id: string;
+  label: string;
+  lineType: EstimateDraftLineType;
+  keywords: string[];
+  requiredPlaceholders: string[];
 };
 
 const ESTIMATE_AGENT_TIMEOUT_MS = 30_000;
@@ -232,10 +230,44 @@ function hasAnyTerm(value: string, terms: string[]): boolean {
   return terms.some((term) => value.includes(term));
 }
 
-function extractExplicitEstimateScope(
-  diagnosis: string,
-): ExplicitEstimateScope {
+function hasExplicitAction(value: string): boolean {
+  return hasAnyTerm(value, [
+    "replace",
+    "replacement",
+    "change",
+    "install",
+    "add",
+    "manual",
+    "manually",
+    "defrost",
+    "thaw",
+    "замена",
+    "заменить",
+    "поменять",
+    "ставить",
+    "установить",
+    "добавить",
+    "размороз",
+    "разморозить",
+    "вручную",
+    "cambiar",
+    "reemplazar",
+    "instalar",
+    "descongelar",
+  ]);
+}
+
+function buildAuthorizedScopeItems(diagnosis: string): AuthorizedScopeItem[] {
   const normalized = normalizeDiagnosisForScope(diagnosis);
+  const explicitAction = hasExplicitAction(normalized);
+  const items: AuthorizedScopeItem[] = [];
+
+  const addItem = (item: AuthorizedScopeItem) => {
+    if (!items.some((existing) => existing.id === item.id)) {
+      items.push(item);
+    }
+  };
+
   const hasEvaporator = hasAnyTerm(normalized, [
     "evaporator",
     "эвапорейтор",
@@ -261,26 +293,6 @@ function extractExplicitEstimateScope(
     "тен",
     "хитер",
   ]);
-  const hasIceOrDefrost = hasAnyTerm(normalized, [
-    "ice",
-    "iced",
-    "frost",
-    "defrost",
-    "размороз",
-    "разморозка",
-    "лед",
-    "льд",
-    "льдом",
-    "забит льдом",
-  ]);
-  const hasManualDefrost = hasIceOrDefrost && hasAnyTerm(normalized, [
-    "manual",
-    "manually",
-    "вручную",
-    "руками",
-    "разморозка",
-    "разморозить",
-  ]);
   const hasWaterValve = hasAnyTerm(normalized, [
     "water valve",
     "water inlet valve",
@@ -291,54 +303,207 @@ function extractExplicitEstimateScope(
     "клапан подачи воды",
     "центральный вотер валв",
   ]);
-  const hasDispenser = hasAnyTerm(normalized, [
-    "dispenser",
-    "диспенсер",
-    "подачи воды",
-    "water dispenser",
-  ]);
-  const hasWaterLine = hasAnyTerm(normalized, [
+  const hasDispenserWaterLine = hasAnyTerm(normalized, [
     "water line",
-    "линия воды",
+    "water tube",
+    "dispenser water line",
     "трубочка",
     "трубка",
     "подачи воды",
   ]);
-  const hasFrozenLine = hasWaterLine && hasAnyTerm(normalized, [
-    "frozen",
-    "freeze",
-    "thaw",
-    "размороз",
+  const hasDefrost = hasAnyTerm(normalized, [
+    "manual defrost",
+    "manually defrost",
+    "defrost",
+    "ice removal",
+    "разморозка",
     "разморозить",
-    "замерз",
-    "замерзла",
-    "замерзшая",
+    "вручную",
+    "descongelar",
   ]);
-  const hasCompressor = hasAnyTerm(normalized, [
-    "compressor",
-    "компрессор",
-    "linear compressor",
-    "линейный компрессор",
-  ]);
-  const hasNoCooling = hasAnyTerm(normalized, [
-    "not cooling",
-    "no cooling",
-    "no cool",
-    "не кулит",
-    "не холодит",
-    "не производит холод",
-    "нет холода",
+  const hasCompressorReplace = hasAnyTerm(normalized, [
+    "replace compressor",
+    "compressor replacement",
+    "change compressor",
+    "замена компрессор",
+    "заменить компрессор",
+    "поменять компрессор",
+    "cambiar compresor",
+    "reemplazar compresor",
   ]);
 
+  if (explicitAction && hasEvaporator && hasFan) {
+    addItem({
+      id: "evaporator_fan_replacement",
+      label: "Evaporator fan motor replacement",
+      lineType: "part",
+      keywords: ["evaporator", "fan", "motor"],
+      requiredPlaceholders: ["[PART PRICE REQUIRED]", "[LABOR PRICE REQUIRED]"],
+    });
+  }
+
+  if (explicitAction && hasHeater && (hasEvaporator || hasDefrost)) {
+    addItem({
+      id: "defrost_heater_replacement",
+      label: "Defrost heater / evaporator heating element replacement",
+      lineType: "part",
+      keywords: ["defrost", "heater", "heating", "element", "evaporator"],
+      requiredPlaceholders: ["[PART PRICE REQUIRED]", "[LABOR PRICE REQUIRED]"],
+    });
+  }
+
+  if (hasDefrost && (hasEvaporator || hasAnyTerm(normalized, ["ice", "лед", "льд"]))) {
+    addItem({
+      id: "manual_evaporator_defrost",
+      label: "Manual evaporator defrost / ice removal",
+      lineType: "material",
+      keywords: ["manual", "defrost", "ice", "evaporator"],
+      requiredPlaceholders: ["[LABOR PRICE REQUIRED]"],
+    });
+  }
+
+  if (explicitAction && hasWaterValve) {
+    addItem({
+      id: "water_inlet_valve_replacement",
+      label: "Water inlet / dispenser water valve replacement",
+      lineType: "part",
+      keywords: ["water", "valve", "inlet", "dispenser"],
+      requiredPlaceholders: ["[PART PRICE REQUIRED]", "[LABOR PRICE REQUIRED]"],
+    });
+  }
+
+  if (hasDefrost && hasDispenserWaterLine) {
+    addItem({
+      id: "frozen_dispenser_water_line_thaw",
+      label: "Frozen dispenser water line thawing",
+      lineType: "material",
+      keywords: ["water", "line", "tube", "thaw", "defrost"],
+      requiredPlaceholders: ["[LABOR PRICE REQUIRED]"],
+    });
+  }
+
+  if (explicitAction && hasCompressorReplace) {
+    addItem({
+      id: "compressor_replacement",
+      label: "Compressor replacement explicitly requested by technician",
+      lineType: "part",
+      keywords: ["compressor", "replacement"],
+      requiredPlaceholders: [
+        "[TECHNICIAN CONFIRMATION REQUIRED]",
+        "[PART PRICE REQUIRED]",
+        "[LABOR PRICE REQUIRED]",
+      ],
+    });
+  }
+
+  if (items.length > 0) {
+    addItem({
+      id: "technician_labor_testing",
+      label: "Technician labor, reassembly, and final testing for listed work",
+      lineType: "labor",
+      keywords: ["labor", "testing", "reassembly"],
+      requiredPlaceholders: ["[LABOR PRICE REQUIRED]"],
+    });
+  }
+
+  return items;
+}
+
+function lineMatchesAuthorizedScope(
+  line: OpenAiEstimateLine,
+  authorizedScopeItems: AuthorizedScopeItem[],
+): boolean {
+  const text = lineSearchText(line);
+
+  return authorizedScopeItems.some((item) =>
+    item.keywords.some((keyword) => text.includes(keyword)),
+  );
+}
+
+function enforceTechnicianScopeAuthority(
+  draft: OpenAiEstimateDraft,
+  authorizedScopeItems: AuthorizedScopeItem[],
+): OpenAiEstimateDraft {
+  if (authorizedScopeItems.length === 0) {
+    return {
+      ...draft,
+      estimate_lines: [
+        {
+          line_type: "custom",
+          customer_name: "Technician Repair Scope Required",
+          internal_name: "Technician repair scope confirmation required",
+          description:
+            "The technician must confirm the repair operations, replacement parts, and pricing before an estimate can be sent.",
+          quantity: 1,
+          unit_price: 0,
+          unit_cost: 0,
+          taxable: false,
+          notes:
+            "[TECHNICIAN CONFIRMATION REQUIRED] [PART PRICE REQUIRED] [LABOR PRICE REQUIRED]",
+        },
+      ],
+      repair_intents: [],
+      confidence: "low",
+      warnings: [
+        ...draft.warnings,
+        "No explicit technician repair operations were provided. Estimate lines were not generated because the AI is not allowed to decide repair scope.",
+      ].slice(0, 8),
+      missing_information: Array.from(
+        new Set([
+          ...draft.missing_information,
+          "[TECHNICIAN CONFIRMATION REQUIRED]",
+          "[PART PRICE REQUIRED]",
+          "[LABOR PRICE REQUIRED]",
+        ]),
+      ),
+    };
+  }
+
+  const filteredLines = draft.estimate_lines.filter((line) =>
+    lineMatchesAuthorizedScope(line, authorizedScopeItems),
+  );
+  const missingItems = authorizedScopeItems.filter(
+      (item) =>
+        !filteredLines.some((line) =>
+          item.keywords.some((keyword) => lineSearchText(line).includes(keyword)),
+        ),
+    );
+  const missingLineWarnings = missingItems
+    .map((item) => `${item.label}: [TECHNICIAN CONFIRMATION REQUIRED]`);
+  const placeholderLines: OpenAiEstimateLine[] = missingItems.map((item) => ({
+    line_type: item.lineType,
+    customer_name: item.label,
+    internal_name: item.label,
+    description:
+      "Technician explicitly included this item. Confirm final quantity and pricing before sending.",
+    quantity: 1,
+    unit_price: 0,
+    unit_cost: 0,
+    taxable: item.lineType === "part",
+    notes: item.requiredPlaceholders.join(" "),
+  }));
+
   return {
-    evaporatorFanReplacement: hasEvaporator && hasFan,
-    defrostHeaterReplacement:
-      hasHeater && (hasEvaporator || hasIceOrDefrost),
-    manualEvaporatorDefrost:
-      hasManualDefrost || (hasEvaporator && hasIceOrDefrost),
-    waterValveReplacement: hasWaterValve && hasDispenser,
-    frozenDispenserWaterLine: hasFrozenLine && hasDispenser,
-    sealedSystemCompressor: hasCompressor && hasNoCooling,
+    ...draft,
+    estimate_lines: [...filteredLines, ...placeholderLines],
+    repair_intents: draft.repair_intents.filter((intent) =>
+      allowedRepairIntents.includes(intent),
+    ),
+    confidence: missingLineWarnings.length > 0 ? "low" : draft.confidence,
+    warnings: Array.from(
+      new Set([
+        ...draft.warnings,
+        "Technician findings are the single source of truth. Any AI line outside explicit technician scope was removed.",
+        ...missingLineWarnings,
+      ]),
+    ).slice(0, 8),
+    missing_information: Array.from(
+      new Set([
+        ...draft.missing_information,
+        ...authorizedScopeItems.flatMap((item) => item.requiredPlaceholders),
+        ...missingLineWarnings,
+      ]),
+    ).slice(0, 10),
   };
 }
 
@@ -353,354 +518,182 @@ function lineSearchText(line: OpenAiEstimateLine): string {
   );
 }
 
-function draftHasLine(
-  draft: OpenAiEstimateDraft,
-  terms: string[],
-  requiredTerms?: string[],
-): boolean {
-  return draft.estimate_lines.some((line) => {
-    const text = lineSearchText(line);
-
-    return (
-      hasAnyTerm(text, terms) &&
-      (!requiredTerms || hasAnyTerm(text, requiredTerms))
-    );
-  });
-}
-
-function addRepairIntent(
-  intents: RepairIntent[],
-  intent: RepairIntent,
-): RepairIntent[] {
-  return intents.includes(intent) ? intents : [...intents, intent];
-}
-
-function appendLineIfMissing(
-  lines: OpenAiEstimateLine[],
-  line: OpenAiEstimateLine,
-): OpenAiEstimateLine[] {
-  const title = normalizeDiagnosisForScope(line.customer_name);
-
-  if (
-    lines.some(
-      (existingLine) =>
-        normalizeDiagnosisForScope(existingLine.customer_name) === title,
-    )
-  ) {
-    return lines;
-  }
-
-  return [...lines, line];
-}
-
-function ensureExplicitScopeLines(
-  draft: OpenAiEstimateDraft,
-  explicitScope: ExplicitEstimateScope,
-): OpenAiEstimateDraft {
-  let lines = draft.estimate_lines;
-  let repairIntents = draft.repair_intents;
-  const warnings = [...draft.warnings];
-
-  if (
-    explicitScope.evaporatorFanReplacement &&
-    !draftHasLine(draft, ["evaporator", "эвапорейтор", "испаритель"], [
-      "fan",
-      "фэн",
-      "фен",
-      "вентилятор",
-    ])
-  ) {
-    lines = appendLineIfMissing(lines, {
-      line_type: "part",
-      customer_name: "Evaporator Fan Motor Replacement",
-      internal_name: "Evaporator fan motor assembly",
-      description:
-        "Replace the evaporator fan motor assembly required for cold air circulation.",
-      quantity: 1,
-      unit_price: 289,
-      unit_cost: 95,
-      taxable: true,
-      notes:
-        "Added by explicit-scope validation because the technician requested evaporator fan replacement.",
-    });
-    repairIntents = addRepairIntent(repairIntents, "evaporator_fan_failure");
-  }
-
-  if (
-    explicitScope.defrostHeaterReplacement &&
-    !draftHasLine(draft, ["heater", "heating", "нагрев", "тэн", "тен"], [
-      "defrost",
-      "evaporator",
-      "размороз",
-      "испаритель",
-    ])
-  ) {
-    lines = appendLineIfMissing(lines, {
-      line_type: "part",
-      customer_name: "Defrost Heater Replacement",
-      internal_name: "Evaporator defrost heater / heating element",
-      description:
-        "Replace the evaporator defrost heater for the automatic defrost system.",
-      quantity: 1,
-      unit_price: 245,
-      unit_cost: 85,
-      taxable: true,
-      notes:
-        "Added by explicit-scope validation because the technician requested heater/heating replacement in evaporator defrost context.",
-    });
-    repairIntents = addRepairIntent(
-      addRepairIntent(repairIntents, "defrost_heater_replacement"),
-      "heating_element_failure",
-    );
-  }
-
-  if (
-    explicitScope.manualEvaporatorDefrost &&
-    !draftHasLine(draft, ["manual", "defrost", "ice", "размороз", "лед"], [
-      "evaporator",
-      "испаритель",
-      "ice",
-      "лед",
-    ])
-  ) {
-    lines = appendLineIfMissing(lines, {
-      line_type: "material",
-      customer_name: "Manual Evaporator Defrost Service",
-      internal_name: "Manual evaporator defrost / ice removal",
-      description:
-        "Manually defrost the evaporator and clear ice buildup before final cooling tests.",
-      quantity: 1,
-      unit_price: 185,
-      unit_cost: 65,
-      taxable: false,
-      notes:
-        "Added by explicit-scope validation because the technician described manual evaporator defrost or ice removal.",
-    });
-    repairIntents = addRepairIntent(
-      addRepairIntent(repairIntents, "manual_defrost_required"),
-      "evaporator_iced_over",
-    );
-  }
-
-  if (
-    explicitScope.waterValveReplacement &&
-    !draftHasLine(draft, ["water", "valve", "клапан", "вотер валв"], [
-      "valve",
-      "клапан",
-      "вотер валв",
-    ])
-  ) {
-    lines = appendLineIfMissing(lines, {
-      line_type: "part",
-      customer_name: "Dispenser Water Valve Replacement",
-      internal_name: "Water inlet valve / dispenser water valve",
-      description:
-        "Replace the water valve serving the refrigerator dispenser water supply.",
-      quantity: 1,
-      unit_price: 225,
-      unit_cost: 75,
-      taxable: true,
-      notes:
-        "Added by explicit-scope validation because the technician requested water valve replacement.",
-    });
-    repairIntents = addRepairIntent(
-      repairIntents,
-      "water_inlet_valve_replacement",
-    );
-  }
-
-  if (
-    explicitScope.frozenDispenserWaterLine &&
-    !draftHasLine(draft, ["water", "line", "tube", "труб"], [
-      "thaw",
-      "defrost",
-      "размороз",
-      "frozen",
-      "замерз",
-    ])
-  ) {
-    lines = appendLineIfMissing(lines, {
-      line_type: "material",
-      customer_name: "Frozen Dispenser Water Line Thawing",
-      internal_name: "Dispenser door water tube thaw service",
-      description:
-        "Thaw the frozen dispenser water line in the door and verify water flow.",
-      quantity: 1,
-      unit_price: 145,
-      unit_cost: 50,
-      taxable: false,
-      notes:
-        "Added by explicit-scope validation because the technician described thawing the dispenser water tube.",
-    });
-    repairIntents = addRepairIntent(
-      repairIntents,
-      "frozen_dispenser_water_line",
-    );
-  }
-
-  if (
-    explicitScope.sealedSystemCompressor &&
-    !draftHasLine(draft, ["sealed", "compressor", "компрессор"], [
-      "system",
-      "compressor",
-      "компрессор",
-    ])
-  ) {
-    lines = appendLineIfMissing(lines, {
-      line_type: "labor",
-      customer_name: "Advanced Sealed-System Diagnosis",
-      internal_name: "Sealed system / compressor performance diagnosis",
-      description:
-        "Perform advanced cooling-system checks for suspected compressor or sealed-system failure.",
-      quantity: 1,
-      unit_price: 225,
-      unit_cost: 90,
-      taxable: false,
-      notes:
-        "Added by explicit-scope validation because the diagnosis describes a compressor running with no cooling.",
-    });
-    repairIntents = addRepairIntent(
-      addRepairIntent(repairIntents, "sealed_system_failure_suspected"),
-      "advanced_cooling_system_diagnosis",
-    );
-  }
-
-  const needsRepairLabor =
-    explicitScope.evaporatorFanReplacement ||
-    explicitScope.defrostHeaterReplacement ||
-    explicitScope.manualEvaporatorDefrost ||
-    explicitScope.waterValveReplacement ||
-    explicitScope.frozenDispenserWaterLine ||
-    explicitScope.sealedSystemCompressor;
-  const hasLaborOrTesting = lines.some((line) => {
-    const text = lineSearchText(line);
-
-    return (
-      line.line_type === "labor" ||
-      hasAnyTerm(text, ["labor", "diagnostic", "testing", "reassembly"])
-    );
-  });
-
-  if (needsRepairLabor && !hasLaborOrTesting) {
-    lines = appendLineIfMissing(lines, {
-      line_type: "labor",
-      customer_name: "Diagnostic, Reassembly, and Testing Labor",
-      internal_name: "Repair labor with final cooling test",
-      description:
-        "Access the failed components, complete reassembly, and verify cooling performance after repair.",
-      quantity: 1,
-      unit_price: 225,
-      unit_cost: 90,
-      taxable: false,
-      notes:
-        "Added by explicit-scope validation so named parts are not estimated without labor/testing scope.",
-    });
-  }
-
-  if (lines.length !== draft.estimate_lines.length) {
-    warnings.push(
-      "Explicit technician scope was preserved with server-side estimate line validation.",
-    );
-  }
+function createAuthorityFallbackDraft(
+  input: {
+    applianceType: string | null;
+    brand: string | null;
+    modelNumber: string | null;
+    customerComplaint: string | null;
+    technicianDiagnosis: string;
+    existingNotes: string[];
+  },
+  authorizedScopeItems: AuthorizedScopeItem[],
+  sourceReason = "Local technician-authority estimate writer fallback.",
+): EstimateDraftAgentResult {
+  const normalizedDiagnosis = cleanText(input.technicianDiagnosis, 1200);
+  const missingInformation = Array.from(
+    new Set(
+      authorizedScopeItems.length > 0
+        ? authorizedScopeItems.flatMap((item) => item.requiredPlaceholders)
+        : [
+            "[TECHNICIAN CONFIRMATION REQUIRED]",
+            "[PART PRICE REQUIRED]",
+            "[LABOR PRICE REQUIRED]",
+          ],
+    ),
+  );
+  const lines: EstimateDraftAgentLine[] =
+    authorizedScopeItems.length > 0
+      ? authorizedScopeItems.map((item) => ({
+          lineType: item.lineType,
+          customerName: item.label,
+          internalName: item.label,
+          quantity: 1,
+          unitPrice: 0,
+          unitCost: 0,
+          publicDescription:
+            "Technician-authorized repair item. Confirm pricing before sending.",
+          taxable: item.lineType === "part",
+          notes: item.requiredPlaceholders.join(" "),
+        }))
+      : [
+          {
+            lineType: "custom",
+            customerName: "Technician Repair Scope Required",
+            internalName: "Technician repair scope confirmation required",
+            quantity: 1,
+            unitPrice: 0,
+            unitCost: 0,
+            publicDescription:
+              "Confirm the repair operations, replacement parts, quantities, and prices before sending.",
+            taxable: false,
+            notes: missingInformation.join(" "),
+          },
+        ];
 
   return {
-    ...draft,
-    repair_intents: repairIntents,
-    estimate_lines: lines,
-    warnings: warnings.slice(0, 6),
+    title:
+      authorizedScopeItems.length > 0
+        ? "Technician-Authorized Estimate Draft"
+        : "Technician Scope Required",
+    customerDescription:
+      authorizedScopeItems.length > 0
+        ? "This estimate is based only on the repair scope provided by the technician."
+        : "Additional technician confirmation is required before this estimate can be sent.",
+    repairScope: {
+      scopeKey:
+        authorizedScopeItems.length > 0
+          ? "technician_authorized_estimate_scope"
+          : "technician_scope_required",
+      serviceCategory: normalizeApplianceCategory(input.applianceType),
+      repairGroup: "Technician Provided Scope",
+      repairItem:
+        authorizedScopeItems.map((item) => item.label).join(", ") ||
+        "Technician confirmation required",
+      customerSummary:
+        authorizedScopeItems.length > 0
+          ? "Technician-authorized repair scope formatted for customer review."
+          : "Technician must confirm repair scope and pricing.",
+    },
+    diagnosisNormalization: {
+      providerMode: "local",
+      detectedLanguage: "unknown",
+      normalizedEnglishDiagnosis: normalizedDiagnosis,
+      repairIntents: [],
+      confidence: authorizedScopeItems.length > 0 ? "medium" : "low",
+      matchedTerms: authorizedScopeItems.map((item) => item.id),
+    },
+    lines,
+    warrantyText: "90 days labor and installed parts unless otherwise specified.",
+    internalNotes: `Estimate writer fallback. Missing information: ${missingInformation.join("; ")}`,
+    confidence: authorizedScopeItems.length > 0 ? "medium" : "low",
+    sourceReason,
   };
 }
 
-function createFallbackDraft(
+function createEstimateWriterPlanFromDraft(
   input: {
     applianceType: string | null;
     brand: string | null;
     modelNumber: string | null;
-    customerComplaint: string | null;
     technicianDiagnosis: string;
-    existingNotes: string[];
   },
-  sourceReason?: string,
-): EstimateDraftAgentResult {
-  const draft = generateEstimateDraft({
-    applianceType: input.applianceType,
-    brand: input.brand,
-    modelNumber: input.modelNumber,
-    customerProblem: input.customerComplaint,
-    technicianDiagnosis: input.technicianDiagnosis,
-    technicianNotes: input.existingNotes,
-    normalizerMode: "local",
-  });
-
-  return sourceReason ? { ...draft, sourceReason } : draft;
-}
-
-function createRepairPlanFromDraft(
-  input: {
-    applianceType: string | null;
-    brand: string | null;
-    modelNumber: string | null;
-    customerComplaint: string | null;
-    technicianDiagnosis: string;
-    existingNotes: string[];
-  },
-  draft: Pick<EstimateDraftAgentResult, "diagnosisNormalization">,
-): RepairPlan {
-  return createRepairPlan({
-    applianceType: input.applianceType,
-    brand: input.brand,
-    modelNumber: input.modelNumber,
-    customerComplaint: input.customerComplaint,
-    technicianDiagnosis: input.technicianDiagnosis,
-    normalizedDiagnosis:
-      draft.diagnosisNormalization.normalizedEnglishDiagnosis,
-    repairIntents: draft.diagnosisNormalization.repairIntents,
-    existingNotes: input.existingNotes,
-  });
-}
-
-function applyRepairPlanToDraft(
   draft: EstimateDraftAgentResult,
-  repairPlan: RepairPlan,
-): {
-  draft: EstimateDraftAgentResult;
-  pricingWarnings: string[];
-} {
-  const planEstimate = createEstimateFromRepairPlan(repairPlan);
-
+  authorizedScopeItems: AuthorizedScopeItem[],
+  missingInformation: string[],
+): RepairPlan {
   return {
-    draft: {
-      ...draft,
-      title: repairPlan.detectedRepairType.replaceAll("_", " "),
-      customerDescription: repairPlan.customerFacingExplanation,
-      repairScope: {
-        scopeKey: repairPlan.detectedRepairType,
-        serviceCategory: repairPlan.applianceCategory,
-        repairGroup: repairPlan.detectedRepairType,
-        repairItem: repairPlan.detectedRepairType.replaceAll("_", " "),
-        customerSummary: repairPlan.estimateStrategy.customerSummary,
-      },
-      diagnosisNormalization: {
-        ...draft.diagnosisNormalization,
-        repairIntents: repairPlan.repairIntents,
-        confidence: repairPlan.confidence,
-      },
-      lines: planEstimate.lines.length > 0 ? planEstimate.lines : draft.lines,
-      warrantyText: repairPlan.warrantyRecommendation.text,
-      internalNotes: [
-        draft.internalNotes,
-        `Repair plan: ${repairPlan.detectedRepairType}. Knowledge: ${repairPlan.matchedKnowledgeKeys.join(", ") || "general"}.`,
-        repairPlan.laborConsiderations.length > 0
-          ? `Labor considerations: ${repairPlan.laborConsiderations.join("; ")}`
-          : "",
-      ]
-        .filter(Boolean)
-        .join(" "),
-      confidence: repairPlan.confidence,
-      sourceReason:
-        "Estimate generated from Repair Intelligence Engine repair plan.",
+    applianceCategory: normalizeApplianceCategory(input.applianceType),
+    brand: input.brand,
+    modelNumber: input.modelNumber,
+    problemSummary:
+      draft.diagnosisNormalization.normalizedEnglishDiagnosis ||
+      input.technicianDiagnosis,
+    detectedRepairType:
+      authorizedScopeItems.length > 0
+        ? "technician_authorized_estimate_scope"
+        : "technician_scope_required",
+    requiredOperations: draft.lines
+      .filter((line) => line.lineType === "labor" || line.lineType === "custom")
+      .map((line, index) => ({
+        id: `estimate-writer-operation-${index + 1}`,
+        title: line.customerName,
+        description:
+          line.publicDescription ||
+          line.notes ||
+          "Technician-authorized estimate line.",
+        estimateLineType: line.lineType,
+        customerVisible: true,
+      })),
+    likelyParts: draft.lines
+      .filter((line) => line.lineType === "part")
+      .map((line, index) => ({
+        id: `estimate-writer-part-${index + 1}`,
+        customerName: line.customerName,
+        internalName: line.internalName,
+        reason: "Technician-authorized estimate line.",
+        quantity: line.quantity ?? 1,
+        required: true,
+      })),
+    materials: draft.lines
+      .filter((line) => line.lineType === "material")
+      .map((line, index) => ({
+        id: `estimate-writer-material-${index + 1}`,
+        customerName: line.customerName,
+        internalName: line.internalName,
+        reason: "Technician-authorized estimate line.",
+        quantity: line.quantity ?? 1,
+        required: true,
+      })),
+    laborConsiderations: missingInformation,
+    riskNotes:
+      missingInformation.length > 0
+        ? [
+            {
+              id: "estimate-writer-missing-information",
+              severity: "caution",
+              note: missingInformation.join("; "),
+              customerVisible: false,
+            },
+          ]
+        : [],
+    customerFacingExplanation: draft.customerDescription,
+    estimateStrategy: {
+      strategy: "detailed",
+      customerSummary: draft.customerDescription,
+      pricingWarning:
+        missingInformation.length > 0
+          ? "Some estimate information requires technician confirmation before sending."
+          : undefined,
     },
-    pricingWarnings: planEstimate.pricingWarnings,
+    warrantyRecommendation: {
+      text: draft.warrantyText,
+      days: 90,
+      scope: "labor_and_installed_parts",
+    },
+    confidence: draft.confidence,
+    repairIntents: draft.diagnosisNormalization.repairIntents,
+    matchedKnowledgeKeys: ["estimate_writer.technician_authority"],
   };
 }
 
@@ -714,6 +707,10 @@ function buildEstimateAgentSchema() {
       repair_intents: {
         type: "array",
         items: { type: "string", enum: allowedRepairIntents },
+      },
+      missing_information: {
+        type: "array",
+        items: { type: "string" },
       },
       likely_repair_scope: {
         type: "object",
@@ -736,7 +733,7 @@ function buildEstimateAgentSchema() {
       customer_facing_summary: { type: "string" },
       estimate_lines: {
         type: "array",
-        minItems: 2,
+        minItems: 1,
         maxItems: 8,
         items: {
           type: "object",
@@ -788,6 +785,7 @@ function buildEstimateAgentSchema() {
       "detected_language",
       "normalized_english_diagnosis",
       "repair_intents",
+      "missing_information",
       "likely_repair_scope",
       "customer_facing_summary",
       "estimate_lines",
@@ -807,43 +805,46 @@ function buildEstimateAgentPrompt(input: {
   technicianDiagnosis: string;
   existingNotes: string[];
   languageHint: string | null;
+  authorizedScopeItems: AuthorizedScopeItem[];
 }) {
   return {
     role: "user",
     content: JSON.stringify({
-      task: "Create a professional appliance-repair estimate draft for a field technician to review and send to a customer.",
+      task: "Format a professional appliance-repair estimate draft from technician-approved scope only.",
       role_guidance:
-        "Act like an experienced appliance repair estimator. Infer repair scope from natural technician shorthand in English, Russian, Ukrainian, Spanish, or mixed language. In Slavic/Russian technician slang, words like фен/фэн can refer to a fan or fan motor in appliance repair context.",
+        "You are an estimate writer, not a repair decision maker. The technician findings are the single source of truth. Rewrite and organize only the operations explicitly provided by the technician.",
       safety_rules: [
         "Return strict JSON only.",
+        "The technician findings are the single source of truth.",
+        "The AI is not allowed to determine repair scope.",
+        "The AI is not allowed to diagnose.",
+        "The AI is not allowed to replace technician decisions.",
+        "The AI formats estimates. It does not create repairs.",
+        "Expand only the language. Do not expand the repair itself.",
+        "Only rewrite operations explicitly provided by the technician.",
+        "Do not infer failed components from symptoms.",
+        "Do not add common industry practice repairs.",
+        "Do not add parts, labor operations, quantities, prices, or part numbers unless the technician explicitly provided them or they appear in authorized_scope_items.",
+        "If required information is missing, use missing_information and line notes with placeholders such as [PART PRICE REQUIRED], [LABOR PRICE REQUIRED], [TECHNICIAN CONFIRMATION REQUIRED], or [MODEL NUMBER REQUIRED].",
         "Use customer-friendly line names and keep part numbers/internal names in internal_name.",
         "Return customer-facing line item titles in English by default, even when the technician diagnosis is Russian, Ukrainian, Spanish, or mixed language.",
         "In estimate_lines, customer_name means the customer-facing line item title. It must never be a person name or the word Customer.",
-        "Never use generic line names like Diagnostic and repair labor or Repair materials or replacement component when the diagnosis describes a real repair.",
-        "Separate labor, parts, service operations, and other charges into separate lines.",
+        "Never use generic line names like Diagnostic and repair labor or Repair materials or replacement component when the technician provided a specific repair operation.",
+        "Separate only the labor, parts, service operations, and other charges explicitly provided by the technician.",
         "Use line_type labor for technician labor, part for replacement parts, material for service operations such as manual defrost/testing/cleanup, and custom for other charges.",
         "Labor, service, and other lines are normally non-taxable. Part lines are normally taxable.",
         "Generate practical customer-facing line names and descriptions. Keep wording professional and sales-friendly.",
-        "Do not claim the repair is guaranteed. Use suspected/likely language when diagnosis is uncertain.",
+        "Do not claim the repair is guaranteed.",
         "Avoid unsafe DIY instructions or technical step-by-step procedures.",
         "Do not include payment, SMS, customer approval, inventory, or vendor actions.",
         "Use warranty_text for warranty/disclaimer text, not a priced estimate line.",
-        "Technician explicit requested work has priority over generic inference. If the technician says replace/change X, create a specific estimate line for X unless it is clearly unsafe or impossible.",
-        "Do not merge explicitly named replacement parts into vague labor. Named replacement parts must remain separate line items from labor and testing.",
+        "Technician explicit requested work has priority. If the technician says replace/change X, create a specific estimate line for X using placeholders for missing prices.",
+        "Do not merge explicitly named replacement parts into vague labor.",
         "Understand Russian and technician slang: хитинг/heating/heater means heater or defrost heater when evaporator/ice/defrost context exists; эвапорейтор means evaporator; эвик can mean evaporator; фен/фэн means fan; не кулит means not cooling; забит льдом means iced over.",
         "Understand dispenser slang: вотер валв means water valve; центральный вотер валв means main/central water inlet valve; трубочка подачи воды в двери means dispenser water tube in the door.",
-        "If the diagnosis says замена хитинга with evaporator, ice, or defrost context, include a Defrost Heater Replacement / Evaporator Defrost Heating Element line.",
-        "If the diagnosis says refrigerator dispenser is not working and replace water valve, include a water inlet valve / dispenser water valve replacement line.",
-        "If the diagnosis says to defrost/thaw the water supply tube in the door, include a frozen dispenser water line thawing service line.",
-        "For LG refrigerator linear compressor running but no cooling, strongly consider sealed system/compressor failure instead of generic labor.",
-        "For evaporator fan replacement plus iced evaporator/manual defrost, include repair-specific lines such as replacing the evaporator fan motor, manually defrosting/removing ice buildup, and testing airflow/cooling after repair.",
-        "Include every separate repair action the technician names. If the diagnosis says change evaporator fan, manually defrost evaporator, and change the water valve, the estimate_lines must include evaporator fan replacement, manual evaporator defrost/ice removal, and water inlet valve replacement.",
-        "For water valve wording in refrigerator/ice-maker context, infer water inlet valve replacement unless the context clearly says otherwise.",
-        "Do not create a parts-only estimate when a replacement part is named. Include appropriate diagnostic/repair labor and final testing/reassembly scope when useful.",
-        "If an evaporator fan is replaced, include labor for access/replacement/testing plus the evaporator fan motor assembly as separate lines when pricing can reasonably be separated.",
-        "If evaporator ice buildup or manual defrost is named, include a manual evaporator defrost / ice removal service line.",
-        "If compressor, linear compressor, sealed system, or no-cooling with compressor running is named, use sealed-system diagnosis and compressor/sealed-system repair scope. Do not add vague or cheap generic material lines unless refrigerant/recovery/service materials are actually relevant to the sealed-system scope.",
-        "Do not add unrelated parts that the technician did not name and the symptom does not support. For example, a linear compressor running with no cooling should not automatically add evaporator fan or defrost heater lines unless fan, heater, ice, or defrost symptoms are also present.",
+        "Use authorized_scope_items as the only allowed estimate scope. If authorized_scope_items is empty, return one placeholder line requiring technician confirmation.",
+        "For LG refrigerator linear compressor running but no cooling, do not add compressor, sealed-system, refrigerant, or filter-drier lines unless the technician explicitly says to replace or perform that repair.",
+        "If the technician only describes symptoms, summarize the symptoms and ask for technician confirmation instead of creating repair lines.",
       ],
       bad_output_examples: [
         "Diagnostic and repair labor",
@@ -859,6 +860,9 @@ function buildEstimateAgentPrompt(input: {
       ],
       allowed_repair_intents: allowedRepairIntents,
       allowed_line_types: allowedLineTypes,
+      authorized_scope_items: input.authorizedScopeItems,
+      future_architecture:
+        "Repair Intelligence should later produce a validated repair scope. This Estimate Builder only transforms validated technician scope into customer-facing estimate language.",
       job_context: {
         job_id: input.jobId,
         appliance_type: input.applianceType,
@@ -960,10 +964,6 @@ function validateOpenAiDraft(value: unknown): OpenAiEstimateDraft {
       )
     : [];
 
-  if (repairIntents.length === 0) {
-    throw new Error("OpenAI draft did not return any supported repair intents.");
-  }
-
   const lines = Array.isArray(draft.estimate_lines)
     ? draft.estimate_lines
         .map((line): OpenAiEstimateLine | null => {
@@ -1014,6 +1014,12 @@ function validateOpenAiDraft(value: unknown): OpenAiEstimateDraft {
       1200,
     ),
     repair_intents: repairIntents,
+    missing_information: Array.isArray(draft.missing_information)
+      ? draft.missing_information
+          .map((item) => cleanText(item, 160))
+          .filter(Boolean)
+          .slice(0, 10)
+      : [],
     likely_repair_scope: {
       scope_key: cleanText(draft.likely_repair_scope.scope_key, 80),
       service_category: cleanText(
@@ -1078,8 +1084,17 @@ function mapOpenAiDraftToAgentResult(
     lines,
     warrantyText: draft.warranty_text,
     internalNotes:
-      draft.warnings.length > 0
-        ? `Estimate agent warnings: ${draft.warnings.join("; ")}`
+      draft.warnings.length > 0 || draft.missing_information.length > 0
+        ? [
+            draft.warnings.length > 0
+              ? `Estimate agent warnings: ${draft.warnings.join("; ")}`
+              : "",
+            draft.missing_information.length > 0
+              ? `Missing estimate information: ${draft.missing_information.join("; ")}`
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" ")
         : "Estimate generated by server-side estimate agent. Technician must review before sending.",
     confidence: draft.confidence,
     sourceReason: "Server-side OpenAI estimate agent structured draft.",
@@ -1097,7 +1112,7 @@ async function callOpenAiEstimateAgent(
     existingNotes: string[];
     languageHint: string | null;
   },
-  explicitScope: ExplicitEstimateScope,
+  authorizedScopeItems: AuthorizedScopeItem[],
 ) {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
 
@@ -1129,9 +1144,9 @@ async function callOpenAiEstimateAgent(
             {
               role: "system",
               content:
-                "You are a professional home-service estimate draft agent for appliance repair technicians. Return only the JSON schema requested. Keep customer-facing wording concise and safe. Use repair-specific reasoning, especially for refrigeration sealed-system symptoms.",
+                "You are a professional home-service estimate writer for appliance repair technicians. Return only the JSON schema requested. The technician findings are the single source of truth. You format estimates; you do not diagnose, infer repair scope, invent parts, invent labor, or replace technician decisions.",
             },
-            buildEstimateAgentPrompt(input),
+            buildEstimateAgentPrompt({ ...input, authorizedScopeItems }),
           ],
           temperature: 0.1,
           max_output_tokens: 1500,
@@ -1165,14 +1180,19 @@ async function callOpenAiEstimateAgent(
       const text = extractOpenAiText(payload);
       const parsedDraft = parseJsonDraft(text);
       const validatedDraft = validateOpenAiDraft(parsedDraft);
+      const technicianScopedDraft = enforceTechnicianScopeAuthority(
+        validatedDraft,
+        authorizedScopeItems,
+      );
 
       logEstimateAgentDev("openai_response", {
         elapsedMs: Date.now() - startedAt,
         timeoutMs: ESTIMATE_AGENT_TIMEOUT_MS,
         openAiStatus,
+        authorizedScopeCount: authorizedScopeItems.length,
       });
 
-      return ensureExplicitScopeLines(validatedDraft, explicitScope);
+      return technicianScopedDraft;
     } catch (error) {
       const elapsedMs = Date.now() - startedAt;
 
@@ -1286,32 +1306,34 @@ export async function POST(request: Request) {
     existingNotes: cleanNotes(payload.existingNotes),
     languageHint: cleanText(payload.language, 40) || null,
   };
-  const explicitScope = extractExplicitEstimateScope(
+  const authorizedScopeItems = buildAuthorizedScopeItems(
     agentInput.technicianDiagnosis,
   );
 
   logEstimateAgentDev("request_start", {
     jobId: agentInput.jobId,
     diagnosisLength: agentInput.technicianDiagnosis.length,
-    explicitScope,
+    authorizedScopeItems: authorizedScopeItems.map((item) => item.id),
   });
 
   try {
     const aiDraft = await openAiEstimateAgentProvider.generateDraft(
       agentInput,
-      explicitScope,
+      authorizedScopeItems,
     );
-    const baseDraft = mapOpenAiDraftToAgentResult(aiDraft);
-    const repairPlan = createRepairPlanFromDraft(agentInput, baseDraft);
-    const { draft, pricingWarnings } = applyRepairPlanToDraft(
-      baseDraft,
-      repairPlan,
+    const draft = mapOpenAiDraftToAgentResult(aiDraft);
+    const repairPlan = createEstimateWriterPlanFromDraft(
+      agentInput,
+      draft,
+      authorizedScopeItems,
+      aiDraft.missing_information,
     );
     const modelConfig = getEstimateAgentModelConfig();
+    const pricingWarnings = aiDraft.missing_information;
 
     logEstimateAgentDev("request_complete", {
       finalSource: "openai",
-      explicitScope,
+      authorizedScopeItems: authorizedScopeItems.map((item) => item.id),
       repairType: repairPlan.detectedRepairType,
       matchedKnowledgeKeys: repairPlan.matchedKnowledgeKeys,
       lineCount: draft.lines.length,
@@ -1359,7 +1381,7 @@ export async function POST(request: Request) {
     if (isDev) {
       logEstimateAgentDev("request_complete", {
         finalSource: "error",
-        explicitScope,
+        authorizedScopeItems: authorizedScopeItems.map((item) => item.id),
         fallbackReason,
         ...openAiFailureDetails,
       });
@@ -1380,19 +1402,33 @@ export async function POST(request: Request) {
       );
     }
 
-    const baseDraft = createFallbackDraft(
+    const draft = createAuthorityFallbackDraft(
       agentInput,
+      authorizedScopeItems,
       "Local deterministic estimate draft fallback after server-side estimate agent was unavailable.",
     );
-    const repairPlan = createRepairPlanFromDraft(agentInput, baseDraft);
-    const { draft, pricingWarnings } = applyRepairPlanToDraft(
-      baseDraft,
-      repairPlan,
+    const missingInformation = Array.from(
+      new Set(
+        authorizedScopeItems.length > 0
+          ? authorizedScopeItems.flatMap((item) => item.requiredPlaceholders)
+          : [
+              "[TECHNICIAN CONFIRMATION REQUIRED]",
+              "[PART PRICE REQUIRED]",
+              "[LABOR PRICE REQUIRED]",
+            ],
+      ),
     );
+    const repairPlan = createEstimateWriterPlanFromDraft(
+      agentInput,
+      draft,
+      authorizedScopeItems,
+      missingInformation,
+    );
+    const pricingWarnings = missingInformation;
 
     logEstimateAgentDev("request_complete", {
       finalSource: "fallback",
-      explicitScope,
+      authorizedScopeItems: authorizedScopeItems.map((item) => item.id),
       repairType: repairPlan.detectedRepairType,
       matchedKnowledgeKeys: repairPlan.matchedKnowledgeKeys,
       fallbackReason,

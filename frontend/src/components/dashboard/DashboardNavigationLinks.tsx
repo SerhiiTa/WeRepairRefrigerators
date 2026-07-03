@@ -281,6 +281,7 @@ function NavigationIcon({ label }: { label: string }) {
   const pathByLabel: Record<string, string> = {
     Dashboard: "M4 11.5 12 4l8 7.5M6 10.5V20h5v-5h2v5h5v-9.5",
     Jobs: "M7 7h10M7 12h10M7 17h6M5 3h14v18H5z",
+    Intake: "M4 5h16v10H8l-4 4zM8 9h8M8 12h5",
     Schedule: "M7 3v4M17 3v4M4 9h16M5 5h14v16H5z",
     Customers: "M8 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm8 2a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM2 21a6 6 0 0 1 12 0M14 21a5 5 0 0 1 8 0",
     Estimates: "M5 4h14v16H5zM8 8h8M8 12h8M8 16h4",

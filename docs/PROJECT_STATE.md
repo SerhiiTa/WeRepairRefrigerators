@@ -21,6 +21,12 @@ The primary project context and permanent source of truth now lives in `docs/pla
 
 Read `docs/platform-bible/README.md` first, then use `docs/platform-bible/WRA_00_ROADMAP_MASTER.docx`, `docs/platform-bible/WRA_09_IMPLEMENTATION_HISTORY_AND_PROJECT_STATE.docx`, and `docs/platform-bible/WRA_10_EXECUTION_ROADMAP_AND_DEVELOPMENT_PLAN.docx` as the main roadmap, implementation-state, and execution-plan references before starting future major work.
 
+## Product Principles
+
+`docs/WRA_PRODUCT_PRINCIPLES.md` is now a permanent internal product philosophy document. Future implementation must keep WRA positioned as the operating system for a service business, not another CRM. The core product rules are technician authority, AI as assistant only, mobile-first workflows, hidden complexity, progressive disclosure, intelligent defaults, and fewer clicks.
+
+Every future task should use these principles alongside the Platform Bible and should avoid exposing implementation details, provider terms, prompt internals, confidence/debug data, or database language in normal production workflows.
+
 ## Houston MVP scope
 
 The MVP is focused on Houston only and refrigerator repair only. The first product surface is a dark SaaS frontend for technicians and service business owners, with dashboard placeholders and a repair case creation UI.
@@ -32,7 +38,14 @@ The MVP is focused on Houston only and refrigerator repair only. The first produ
 - `docs/CODEX_OPERATING_RULES.md` exists and is mandatory reading before every task.
 - Task 148 is COMPLETE. Repair Intelligence estimate workflow was verified end-to-end in the authenticated Job Workspace.
 - Final Task 148 QA generated a real OpenAI Repair Intelligence estimate, reviewed the repair plan, sent/saved estimate `EST-2026-41A58909`, left the job, reopened it, and verified the estimate number, 11 persisted lines, and persisted total `$4,319.00`.
-- Task 149 has not been started.
+- Task 149 is complete as Workiz Exit Phase 1 for the technician Job Workspace.
+- Task 150 is complete as Workiz Exit Phase 2 intake foundation. It adds a unified Intake Inbox without changing authentication, existing jobs, appointments, estimates, customer portal, dashboard behavior, or environment configuration.
+- Task 150.1 is complete as Intake Inbox QA hardening. It fixes conversion ownership/access, first/last customer names, address autocomplete support, appliance/brand helpers, appointment window validation, duplicate candidate review, and clearer conversion UX. Task 151 has not been started.
+- Task 150.2 is complete as Intake UI cleanup and conversion access stabilization. It adds structured Apt/Unit/Suite intake capture, removes the duplicate visible Customer Name field, makes appliance/brand/address helpers appear only while actively editing, adds soft Dismiss behavior, and adds `0049` to harden conversion ownership before a job is created. Task 151 has not been started.
+- Task 150.3 is complete as Intake lifecycle hardening. It adds `0050`, idempotent conversion, archived intake status, protected converted-intake behavior, duplicate-candidate filtering, and an intentional no-hard-delete policy. Task 151 has not been started.
+- Task 150.4 is complete as the Technician Authority estimate architecture pass. Estimate AI is an estimate writer, not a diagnosis/repair decision maker.
+- Task 150.5 is complete as the product principles and estimate review simplification pass. `docs/WRA_PRODUCT_PRINCIPLES.md` was created, the estimate review card now emphasizes what the draft understood, repairs included, parts included, and missing information, and normal UI copy avoids AI/debug implementation terminology. Task 151 has not been started.
+- Task 150.6 is complete as the estimate approval immediate refresh fix. Customer approval now shows a loading state, updates local estimate status immediately after a successful response, rehydrates from freshly loaded public estimate data, refreshes the public route, and the Job Workspace refreshes service request/estimate state when the technician returns to the tab. Task 151 has not been started.
 
 ## Workiz Exit / HomeFix Pilot
 
@@ -47,6 +60,126 @@ Success definition:
 - Workiz is not opened for 30 days.
 
 Every future task must answer: `Does this help HomeFix stop using Workiz within two months?` If no, move it to backlog.
+
+## Task 149 Job Workspace Completion
+
+Task 149 audits and upgrades the Job Workspace as the primary technician operating screen for the Workiz Exit milestone.
+
+Confirmed existing workflow before Task 149:
+
+- Job Workspace already had customer/job summary, status dropdown, address editing and navigation links, dispatcher preview, appointment booking, Repair Intelligence estimates, estimate send/approval lifecycle, invoices, notes, photos, and timeline.
+- The remaining gap was not missing backend objects; it was operational guidance. Technicians still had to infer the next action and jump between tabs during field work.
+
+Task 149 improvements:
+
+- Added a safety checkpoint at `docs/BACKUP_TASK149.md`.
+- Added a prominent Next Action block inside Job Workspace Overview.
+- Added one-tap workflow actions for Arrived, Diagnosing, Estimate Sent, Waiting Approval, Parts Ordered, Parts Received, Return Visit, Completed, and Closed using the existing status RPC.
+- Added customer communication shortcuts for call, text, and email using existing customer phone/email fields. No SMS automation, telephony provider, or customer messaging backend was added.
+- Added an appliance/diagnosis workflow card that keeps customer complaint, latest technician findings, estimate status, and invoice status visible.
+- Added a technician findings capture panel that saves diagnostic notes through the existing notes API and prepares a clean future voice/dictation entry point.
+- Added a parts workflow panel for Parts Needed, Parts Ordered, Parts Received, and Return Visit statuses without adding inventory, purchasing, vendor search, or warehouse logic.
+- Added a compact current-job history summary for notes, photos, and timeline. Cross-job customer repair history remains future work.
+
+Task 149 does not add schema, migrations, new APIs, SMS automation, payments, dispatcher-board changes, calendar changes, vendor marketplace, inventory, community, or Task 150 work.
+
+## Task 150 Unified Intake Inbox Foundation
+
+Task 150 adds the first unified intake layer for Workiz Exit Phase 2. The audit found existing intake paths were split across public service request submission, customer asset booking, appointment booking, and dashboard job management. Those flows remain unchanged.
+
+Implemented foundation:
+
+- New forward-only migration `supabase/migrations/0047_unified_intake_inbox_foundation_apply_ready.sql` creates `intake_requests`, company-scoped RLS, explicit grants, and narrow RPCs for create, update/review, and conversion.
+- Server-side intake services under `frontend/src/server/intake/` normalize intake payloads, optionally extract structured fields with server-side OpenAI when configured, and fall back to local deterministic extraction without blocking intake creation.
+- New authenticated API routes under `frontend/src/app/api/intake/` support list/create/read/update/convert. Webhook-ready Retell/Telnyx and website receivers exist as disabled-safe foundations and do not store unauthenticated provider payloads yet.
+- New `/dashboard/intake` page and `IntakeInbox` UI let dispatchers review intake requests, edit extracted customer/job fields, set source/status, prepare appointment fields, and convert qualified intake into a real CRM job through the trusted RPC.
+- Dashboard navigation includes an `Intake` operations link for dashboard-capable roles.
+
+Task 150 intentionally does not add production Telnyx/Retell ingestion, SMS/call automation, provider credentials, authentication changes, login/register changes, environment edits, dispatcher board/calendar changes, or Task 151 work. Apply `0047` manually before expecting live intake persistence.
+
+## Task 150.1 Intake Inbox QA Hardening
+
+Task 150.1 stabilizes `/dashboard/intake` after real QA on migration `0047`.
+
+Fixes:
+
+- New forward-only migration `supabase/migrations/0048_intake_inbox_qa_hardening_apply_ready.sql` adds split customer name fields, address metadata fields, duplicate candidate metadata, and hardened create/update/convert RPCs.
+- Conversion now stores the selected public technician slug/business snapshot when an assigned technician exists, then verifies `public.can_view_service_request(...)` before marking the intake converted. This fixes the converted-job dispatcher preview 403 class of bug.
+- Conversion remains transaction-like inside the RPC: if service request visibility, appointment creation, duplicate review, or validation fails, the function raises and the intake is not marked converted.
+- The Intake Inbox UI now supports first/last names, Google Places address autocomplete fallback, appliance helper chips, brand helper chips with common typo/transliteration support, appointment window validation, duplicate warning/confirmation, and a clear Open Job action after conversion.
+- Duplicate protection is a foundation: active intake/service request matches by phone, address, appliance, ZIP, and recent status are surfaced as duplicate candidates. Dispatchers can explicitly confirm before continuing. Full provider-level dedupe and source-specific idempotency remain future Retell/Telnyx/Yelp/website ingestion work.
+
+Task 150.1 does not modify authentication, Supabase Auth settings, `.env.local`, login/registration flows, production Telnyx/Retell, SMS/call automation, or Task 151.
+
+## Task 150.2 Intake UI Cleanup And Conversion Access Stabilization
+
+Task 150.2 fixes post-QA usability and access issues in `/dashboard/intake`.
+
+Fixes:
+
+- New forward-only migration `supabase/migrations/0049_intake_conversion_access_and_ui_cleanup_apply_ready.sql` adds `intake_requests.unit`, updates create/update RPCs to persist Apt/Unit/Suite, and replaces conversion with a stricter ownership resolver.
+- Conversion root cause: some converted intake jobs were inserted without either a company id visible to the converter or a selected public technician slug matching the converter. The post-insert `can_view_service_request(...)` check caught the problem, but only after attempting conversion.
+- The new conversion RPC resolves an effective company from the intake, assigned technician, current profile, or active company membership. If no assigned technician exists, it safely falls back to the current user's own technician profile when available. If neither company access nor technician slug access can be established, conversion stops before inserting a service request.
+- The intake form now edits first and last names only. `customer_name` remains generated internally for legacy service request compatibility.
+- Address entry now has a separate Apt/Unit/Suite field. Address autocomplete closes after selection and reopens only while actively typing.
+- Appliance and brand helper chips now appear only while the field is focused/being edited, with expanded appliance and brand vocabulary plus transliteration aliases.
+- The bottom primary action is now `Create Intake` or `Save Intake`; it no longer clears a filled form unexpectedly.
+- `Dismiss Intake` is a soft status update. Dismissed intakes are hidden from the default Active filter but remain available through Dismissed or All filters.
+
+Task 150.2 does not modify authentication, Supabase Auth settings, `.env.local`, login/registration flows, production Telnyx/Retell, SMS/call automation, Settings, or Task 151.
+
+## Task 150.3 Intake Duplicate Protection And Lifecycle Hardening
+
+Task 150.3 stabilizes Intake Inbox lifecycle behavior before real Telnyx/Retell/provider traffic.
+
+Implemented:
+
+- New forward-only migration `supabase/migrations/0050_intake_lifecycle_duplicate_archive_hardening_apply_ready.sql`.
+- Intake status now supports `archived` in addition to new/review/needs-info/customer-matched/ready/converted/dismissed.
+- Intake records now have optional `dismissal_reason`, `archived_at`, and `archived_by` metadata.
+- Conversion is idempotent. If an intake already has `linked_service_request_id`, repeated conversion returns the existing linked job instead of creating another service request.
+- Converted intakes are protected from operational edits. The dispatcher must open the linked Job Workspace to change customer/job/appointment/estimate/invoice/status data.
+- Conversion blocks dismissed or archived unlinked records.
+- Duplicate detection before conversion checks recent active service requests and active intake records by phone, address plus unit, appliance, ZIP, and brand. Possible duplicates move to `needs_info` unless explicitly confirmed.
+- Intake filters now include Active, New, Needs Review, Ready to Convert, Converted, Dismissed, Archived, Duplicate Candidates, and All.
+- Converted intake cards show Open Job instead of Convert. Dismissed/archived records are hidden from Active but remain visible through explicit filters.
+- Delete is intentionally blocked. Intake cleanup should use Dismiss or Archive; linked jobs, appointments, invoices, estimates, and service request history are never deleted through intake cleanup.
+
+Existing duplicate QA data should not be destructively cleaned. Identify duplicate jobs from the Jobs list or linked intake records, then use the existing job status lifecycle to mark duplicate test jobs `canceled` or `closed` when appropriate, and archive the intake history record. Do not hard-delete jobs casually.
+
+Task 150.3 does not modify authentication, Supabase Auth settings, `.env.local`, Estimate AI, production Telnyx/Retell, SMS/call automation, Settings, or Task 151.
+
+## Task 150.5 Product Principles And Estimate Review Simplification
+
+Task 150.5 establishes `docs/WRA_PRODUCT_PRINCIPLES.md` as permanent internal product philosophy.
+
+Implemented:
+
+- Product principles now codify WRA as an operating system for service businesses, with technician authority, AI assistance without override, mobile-first workflows, progressive disclosure, hidden complexity, intelligent defaults, and fewer clicks.
+- Estimate review now feels like reviewing a prepared estimate instead of debugging AI. The card emphasizes what the draft understood, repairs included, parts included, and missing information requiring technician confirmation.
+- Normal estimate-generation success copy no longer exposes AI/local source terminology in the primary technician workflow.
+- Intake review copy was softened to avoid provider and implementation language, and the disabled hard-delete button was removed from the primary action row. Archive remains the intended cleanup workflow.
+
+Future simplification opportunities:
+
+- Replace remaining free-text technician/profile selectors with guided selections where safe.
+- Move intake extraction confidence and other operational metadata behind disclosure if it starts distracting dispatchers.
+- Continue reducing duplicate estimate/intake actions so each screen has one obvious primary action.
+- Let future voice/photo/provider capture prefill fields before asking technicians or dispatchers to type.
+
+Task 150.5 does not modify authentication, `.env.local`, Telnyx, Retell, Settings, dashboard redesign, or Task 151.
+
+## Task 150.6 Estimate Approval Immediate Refresh Fix
+
+Task 150.6 fixes stale customer approval UI without changing the approval backend.
+
+Implemented:
+
+- `/api/estimates/[token]/respond` still calls the existing public response RPC, then reloads the public estimate by token and returns the refreshed estimate payload.
+- The public estimate approval page shows an approving/declining loading label, updates local estimate status and response timestamp after success, uses the refreshed payload when available, and calls `router.refresh()` so the visible status changes without a manual browser refresh.
+- Job Workspace now refreshes the service request, estimates, and notes on window focus or visibility return. If a technician has the job open while a customer approves an estimate in another tab/device, returning to the Job Workspace reflects `Estimate Approved` and the updated estimate list.
+
+Task 150.6 does not modify authentication, `.env.local`, approval RPC behavior, estimate lifecycle rules, SMS/calls, Telnyx, Retell, or Task 151.
 
 ## Current stack
 
@@ -755,6 +888,16 @@ Use the webpack build command for verification because it has been the stable bu
 - Warranty is a compact footer with default text: `90 days labor and installed parts unless otherwise specified on the estimate.` Editing is hidden behind `Edit warranty`.
 - Smart draft diagnostics were reduced to a compact source/status message, with normalization/intents only behind a dev-only details disclosure.
 - OpenAI prompt guidance now requires complete repair scope: named parts should include labor/testing coverage, evaporator ice should include manual defrost service, and sealed-system/compressor symptoms should produce proper sealed-system scope rather than vague material filler.
+
+## Task 150.4 estimate AI architecture redesign
+
+- The Estimate AI route has been redesigned around the Technician Authority Principle: technician findings are the single source of truth, and the AI is an estimate writer rather than a repair decision maker.
+- `/api/estimate-agent/draft` now instructs OpenAI to rewrite, format, and organize only technician-authorized repair operations. The prompt explicitly forbids diagnosis, repair-scope inference, replacement of technician decisions, invented parts, invented labor, invented prices, invented quantities, and common-practice expansion.
+- The route now extracts a narrow authorized scope only from explicit technician actions such as replace/change/install/defrost. If the diagnosis contains symptoms only, the estimate writer returns a technician-confirmation placeholder instead of inventing compressor, sealed-system, board, fan, or other repair lines.
+- Missing information must be surfaced with placeholders such as `[PART PRICE REQUIRED]`, `[LABOR PRICE REQUIRED]`, `[TECHNICIAN CONFIRMATION REQUIRED]`, and `[MODEL NUMBER REQUIRED]` rather than guessed.
+- OpenAI output is filtered against the authorized technician scope. Unsupported AI-generated lines are removed, and required explicit technician items are restored as placeholder-priced lines when the model omits them.
+- Repair Intelligence is now architecturally separated from Estimate AI. Future Repair Intelligence should produce a validated repair scope; the Estimate Builder should transform that validated scope into customer-facing estimate language and pricing without deciding what repairs exist.
+- `frontend/.env.local` was not modified, authentication was not changed, Intake was not changed, and Task 151 was not started.
 
 ## Current git workflow
 

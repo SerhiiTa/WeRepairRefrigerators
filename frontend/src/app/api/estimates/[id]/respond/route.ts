@@ -82,8 +82,16 @@ export async function POST(
     return fail(formatRespondError(error.message), 403);
   }
 
+  const { data: refreshedEstimate } = await supabase.rpc(
+    "get_public_estimate_by_token_rpc",
+    {
+      p_token: token,
+    },
+  );
+
   return NextResponse.json({
     ok: true,
     result: data,
+    estimate: refreshedEstimate ?? null,
   });
 }

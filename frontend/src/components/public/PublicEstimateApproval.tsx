@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import {
@@ -58,12 +59,16 @@ export function PublicEstimateApproval({
   token,
   initialEstimate,
 }: PublicEstimateApprovalProps) {
+  const router = useRouter();
   const [estimate, setEstimate] =
     useState<PublicEstimatePayload>(initialEstimate);
   const [responseState, setResponseState] = useState<ResponseState>({
     status: "idle",
     message: null,
   });
+  const [pendingResponse, setPendingResponse] = useState<
+    "approved" | "declined" | null
+  >(null);
 
   const isOpenForResponse = estimate.estimate.estimate_status === "sent";
   const businessName =
@@ -79,18 +84,31 @@ export function PublicEstimateApproval({
 
   async function submitResponse(response: "approved" | "declined") {
     setResponseState({ status: "saving", message: null });
+    setPendingResponse(response);
 
-    const result = await fetch(`/api/estimates/${token}/respond`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ response }),
-    });
+    let result: Response;
+
+    try {
+      result = await fetch(`/api/estimates/${token}/respond`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ response }),
+      });
+    } catch {
+      setResponseState({
+        status: "error",
+        message: "We could not reach the estimate approval service.",
+      });
+      setPendingResponse(null);
+      return;
+    }
 
     const payload = (await result.json().catch(() => null)) as {
       ok?: boolean;
       message?: string;
+      estimate?: PublicEstimatePayload | null;
       result?: {
         estimate_status?: string;
         customer_responded_at?: string | null;
@@ -102,20 +120,27 @@ export function PublicEstimateApproval({
         status: "error",
         message: payload?.message ?? "We could not save your response.",
       });
+      setPendingResponse(null);
       return;
     }
 
+    const respondedAt =
+      payload.result?.customer_responded_at ?? new Date().toISOString();
     setEstimate((current) => ({
       ...current,
       estimate: {
         ...current.estimate,
         estimate_status:
-          payload.result?.estimate_status ?? current.estimate.estimate_status,
-        customer_responded_at:
-          payload.result?.customer_responded_at ??
-          current.estimate.customer_responded_at,
+          payload.result?.estimate_status ?? response,
+        customer_responded_at: respondedAt,
       },
     }));
+
+    if (payload.estimate) {
+      setEstimate(payload.estimate);
+    }
+
+    router.refresh();
     setResponseState({
       status: "success",
       message:
@@ -123,6 +148,7 @@ export function PublicEstimateApproval({
           ? "Estimate approved. The technician can now schedule the next step."
           : "Estimate declined. The technician will see your response.",
     });
+    setPendingResponse(null);
   }
 
   return (
@@ -279,7 +305,9 @@ export function PublicEstimateApproval({
                     onClick={() => void submitResponse("approved")}
                     type="button"
                   >
-                    Approve Estimate
+                    {pendingResponse === "approved"
+                      ? "Approving..."
+                      : "Approve Estimate"}
                   </button>
                   <button
                     className="rounded-md border border-amber-200/40 px-4 py-3 text-sm font-black text-amber-50 transition hover:bg-amber-200/10 disabled:cursor-not-allowed disabled:opacity-60"
@@ -287,7 +315,7 @@ export function PublicEstimateApproval({
                     onClick={() => void submitResponse("declined")}
                     type="button"
                   >
-                    Decline
+                    {pendingResponse === "declined" ? "Declining..." : "Decline"}
                   </button>
                 </div>
               </>

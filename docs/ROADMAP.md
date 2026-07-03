@@ -15,6 +15,12 @@ The official WeRepairRefrigerators source-of-truth documentation is now organize
 
 Before starting major architecture, workflow, customer, technician, marketplace, CRM, AI, inventory, vendor, or dashboard work, read `docs/platform-bible/README.md` and align implementation with the Platform Bible documents.
 
+## Product Principles
+
+`docs/WRA_PRODUCT_PRINCIPLES.md` is now a required product philosophy reference for future work. WRA should behave like an operating system for service businesses: technician authority first, AI assistance without overriding decisions, mobile-first operation, one primary action per screen, progressive disclosure, defaults over configuration, hidden complexity, and customer-facing professionalism.
+
+Use this document as the simplicity filter for future roadmap work. If a feature adds clicks, exposes internal terminology, or distracts from real daily operations, move it to backlog unless it is required for security, stability, or the Workiz Exit milestone.
+
 ## Milestone: Workiz Exit / HomeFix Pilot
 
 Primary two-month goal: HomeFix must stop using Workiz and run daily operations inside WRA.
@@ -40,7 +46,30 @@ Focus:
 - Improve practical workflow only.
 - Technician can open job, call customer, view address, notes, photos, appointments, estimate, invoice, status, and close job from mobile.
 
-### Task 150 — Dispatcher Board + Real Calendar
+Status:
+
+- Task 149 is complete as Workiz Exit Phase 1.
+- The Job Workspace Overview now starts with an operational Next Action block, customer call/text/email shortcuts, appliance and diagnosis summary, current estimate/invoice status, technician findings capture, parts workflow controls, and one-tap job lifecycle actions.
+- All changes use existing status, notes, estimate, invoice, appointment, photo, and address paths. No schema, migrations, SMS automation, payment work, dispatcher board work, calendar work, vendor marketplace, inventory, community, or Task 150 work was started.
+
+### Task 150 — Unified Intake Inbox Foundation
+
+Status:
+
+- Task 150 is complete as Workiz Exit Phase 2.
+- Added a company-scoped `intake_requests` foundation, trusted create/update/convert RPCs, authenticated `/api/intake/*` routes, disabled-safe website and Retell/Telnyx webhook receiver foundations, server-side intake extraction with local fallback, and `/dashboard/intake` for dispatcher review.
+- Conversion is additive: reviewed intake can become a real CRM job, and an appointment can be created when appointment date/window and assigned technician data are present.
+- Existing service requests, customer booking, appointments, estimates, dashboard, customer portal, and authentication remain unchanged.
+- Apply `supabase/migrations/0047_unified_intake_inbox_foundation_apply_ready.sql` manually before live intake persistence.
+- Task 150.1 hardening is complete. Apply `supabase/migrations/0048_intake_inbox_qa_hardening_apply_ready.sql` after `0047` to add split names, address metadata, duplicate candidate metadata, hardened conversion access checks, and safer conversion behavior that does not mark intake converted after partial failure.
+- Task 150.2 stabilization is complete. Apply `supabase/migrations/0049_intake_conversion_access_and_ui_cleanup_apply_ready.sql` after `0048` to add Apt/Unit/Suite persistence, remove duplicate customer-name entry, add soft dismiss workflow, and harden conversion so a service request is not created unless company or technician dashboard access can be resolved before insert.
+- Task 150.3 lifecycle hardening is complete. Apply `supabase/migrations/0050_intake_lifecycle_duplicate_archive_hardening_apply_ready.sql` after `0049` to make conversion idempotent, protect converted intakes from operational edits, add archived lifecycle metadata, add duplicate-candidate filtering, and keep hard delete intentionally blocked.
+- Task 150.4 estimate architecture redesign is complete. Estimate AI must preserve technician authority and format only explicit technician-provided repair scope.
+- Task 150.5 product principles and estimate review simplification is complete. Future estimate UX should show the technician what the draft understood, what repairs/parts are included, and what information needs confirmation, without normalizing/debug/confidence internals in the primary workflow.
+- Task 150.6 estimate approval refresh is complete. Public estimate approval now updates the customer page immediately after approval/decline and returns refreshed estimate data from the existing approval route; Job Workspace refreshes estimates/status when the technician returns to the tab.
+- Remaining intake work before production provider launch: Retell/Telnyx signature verification, source-specific idempotency keys, real inbound SMS/call ingestion, source management UI, and richer technician selector/rescheduling UI.
+
+### Future Task — Dispatcher Board + Real Calendar
 
 Focus:
 
@@ -404,6 +433,7 @@ Onboarding backend progress:
 - Task 148.6 connects the one-card Estimate Draft Agent to a server-only OpenAI API route. The route uses `OPENAI_API_KEY`, `ESTIMATE_AGENT_MODEL`, and a reserved `ESTIMATE_AGENT_ADVANCED_MODEL` boundary, validates strict JSON output, and falls back to the local deterministic agent on timeout/error/invalid JSON. OpenAI is called only when the technician clicks `Generate Estimate`; no client-side OpenAI calls or API key exposure were added.
 - Task 148.7 makes the estimate builder API-first and field-usable. OpenAI remains the primary reasoning path when configured, the prompt now rejects generic repair lines, and the editor supports Labor/Part/Service/Other rows with title, description, quantity, unit price, taxable toggle, line total, discount/tax review, and confirmation before regenerated drafts replace technician edits. Persisted discount/tax remains a future schema task because current estimate RPCs store line-subtotal totals and tax `0`.
 - Task 148.8 compacts the estimate card for field use. Default visible flow is diagnosis, Generate Estimate, compact editable lines, total, and Send Estimate. Line descriptions/quantity/taxable controls, tax/discount settings, warranty editing, and normalization diagnostics are collapsed by default. Future estimate work should preserve this technician-first density unless a later task explicitly redesigns the workflow.
+- Task 150.4 corrects the Estimate AI architecture. Estimate AI is now an estimate writer only: it may improve wording, structure, customer-facing explanation, warranty text, and formatting, but it must not diagnose, infer parts, broaden repair scope, invent quantities/prices, or replace technician judgment. Future Repair Intelligence must be built as a separate subsystem that outputs validated repair operations and replacement parts; only then should the Estimate Builder format those structured decisions into the customer estimate.
 
 
 ## Estimate MVP Completed
