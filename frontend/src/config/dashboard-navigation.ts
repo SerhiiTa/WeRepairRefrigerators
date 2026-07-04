@@ -149,7 +149,7 @@ export const dashboardNavigationItems: DashboardNavigationItem[] = [
   },
   {
     label: "Calls & Messages",
-    href: "/dashboard/customers",
+    href: "/dashboard/communications",
     allowedRoles: TECHNICIAN_ROLES,
     allowedStatuses: ACTIVE_PROFILE_STATUSES,
     requiresCompletedOnboarding: true,

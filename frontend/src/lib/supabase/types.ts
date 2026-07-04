@@ -167,6 +167,52 @@ export type DatabaseIntakeStatus =
   | "dismissed"
   | "archived";
 
+export type DatabaseCommunicationSourceType =
+  | "phone"
+  | "sms"
+  | "website_form"
+  | "email"
+  | "yelp"
+  | "google_business_messages"
+  | "facebook_messenger"
+  | "whatsapp"
+  | "manual"
+  | "other";
+
+export type DatabaseCommunicationConversationStatus =
+  | "open"
+  | "needs_action"
+  | "linked"
+  | "resolved"
+  | "archived";
+
+export type DatabaseCommunicationDirection =
+  | "inbound"
+  | "outbound"
+  | "internal";
+
+export type DatabaseCommunicationSenderRole =
+  | "customer"
+  | "dispatcher"
+  | "technician"
+  | "system";
+
+export type DatabaseCommunicationTimelineEventType =
+  | "incoming_call"
+  | "incoming_sms"
+  | "website_request"
+  | "incoming_email"
+  | "customer_replied"
+  | "appointment_scheduled"
+  | "appointment_changed"
+  | "estimate_sent"
+  | "estimate_approved"
+  | "invoice_sent"
+  | "payment_received"
+  | "repair_completed"
+  | "customer_canceled"
+  | "note_added";
+
 export type Database = {
   public: {
     Tables: {
@@ -252,6 +298,135 @@ export type Database = {
         };
         Insert: Partial<Database["public"]["Tables"]["intake_requests"]["Row"]>;
         Update: Partial<Database["public"]["Tables"]["intake_requests"]["Row"]>;
+        Relationships: [];
+      };
+      communication_conversations: {
+        Row: {
+          id: string;
+          company_id: string | null;
+          owner_profile_id: string | null;
+          source_account_id: string | null;
+          provider_name: string | null;
+          external_conversation_id: string | null;
+          primary_source_type: DatabaseCommunicationSourceType;
+          status: DatabaseCommunicationConversationStatus;
+          customer_id: string | null;
+          intake_request_id: string | null;
+          service_request_id: string | null;
+          appointment_id: string | null;
+          estimate_id: string | null;
+          invoice_id: string | null;
+          payment_reference: string | null;
+          customer_display_name: string | null;
+          customer_phone: string | null;
+          customer_email: string | null;
+          service_address: string | null;
+          summary: string | null;
+          next_action: string | null;
+          last_event_at: string | null;
+          call_status: string | null;
+          call_started_at: string | null;
+          call_ended_at: string | null;
+          provider_metadata: Json;
+          created_by: string | null;
+          updated_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Partial<
+          Database["public"]["Tables"]["communication_conversations"]["Row"]
+        >;
+        Update: Partial<
+          Database["public"]["Tables"]["communication_conversations"]["Row"]
+        >;
+        Relationships: [];
+      };
+      communication_source_accounts: {
+        Row: {
+          id: string;
+          company_id: string;
+          source_type: DatabaseCommunicationSourceType;
+          provider_name: "telnyx" | "retell" | "email" | "website" | "manual" | "other";
+          source_identifier: string;
+          display_name: string | null;
+          is_active: boolean;
+          metadata: Json;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Partial<
+          Database["public"]["Tables"]["communication_source_accounts"]["Row"]
+        >;
+        Update: Partial<
+          Database["public"]["Tables"]["communication_source_accounts"]["Row"]
+        >;
+        Relationships: [];
+      };
+      communication_messages: {
+        Row: {
+          id: string;
+          conversation_id: string;
+          source_type: DatabaseCommunicationSourceType;
+          direction: DatabaseCommunicationDirection;
+          sender_role: DatabaseCommunicationSenderRole;
+          sender_display_name: string | null;
+          body: string | null;
+          attachments: Json;
+          external_message_id: string | null;
+          transcript_id: string | null;
+          occurred_at: string;
+          created_at: string;
+        };
+        Insert: Partial<
+          Database["public"]["Tables"]["communication_messages"]["Row"]
+        >;
+        Update: Partial<
+          Database["public"]["Tables"]["communication_messages"]["Row"]
+        >;
+        Relationships: [];
+      };
+      communication_transcripts: {
+        Row: {
+          id: string;
+          conversation_id: string;
+          source_type: DatabaseCommunicationSourceType;
+          transcript_text: string | null;
+          speaker_segments: Json;
+          recording_reference: string | null;
+          started_at: string | null;
+          ended_at: string | null;
+          created_at: string;
+        };
+        Insert: Partial<
+          Database["public"]["Tables"]["communication_transcripts"]["Row"]
+        >;
+        Update: Partial<
+          Database["public"]["Tables"]["communication_transcripts"]["Row"]
+        >;
+        Relationships: [];
+      };
+      communication_timeline_events: {
+        Row: {
+          id: string;
+          conversation_id: string;
+          event_type: DatabaseCommunicationTimelineEventType;
+          title: string;
+          body: string | null;
+          event_time: string;
+          intake_request_id: string | null;
+          service_request_id: string | null;
+          appointment_id: string | null;
+          estimate_id: string | null;
+          invoice_id: string | null;
+          payment_reference: string | null;
+          created_at: string;
+        };
+        Insert: Partial<
+          Database["public"]["Tables"]["communication_timeline_events"]["Row"]
+        >;
+        Update: Partial<
+          Database["public"]["Tables"]["communication_timeline_events"]["Row"]
+        >;
         Relationships: [];
       };
       profiles: {
@@ -699,6 +874,18 @@ export type Database = {
       };
     };
     Functions: {
+      can_access_communication_conversation: {
+        Args: {
+          target_conversation_id: string;
+        };
+        Returns: boolean;
+      };
+      create_communication_conversation_rpc: {
+        Args: {
+          p_payload: Json;
+        };
+        Returns: Json;
+      };
       can_access_intake_request: {
         Args: {
           target_intake_request_id: string;

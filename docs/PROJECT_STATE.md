@@ -46,6 +46,9 @@ The MVP is focused on Houston only and refrigerator repair only. The first produ
 - Task 150.4 is complete as the Technician Authority estimate architecture pass. Estimate AI is an estimate writer, not a diagnosis/repair decision maker.
 - Task 150.5 is complete as the product principles and estimate review simplification pass. `docs/WRA_PRODUCT_PRINCIPLES.md` was created, the estimate review card now emphasizes what the draft understood, repairs included, parts included, and missing information, and normal UI copy avoids AI/debug implementation terminology. Task 151 has not been started.
 - Task 150.6 is complete as the estimate approval immediate refresh fix. Customer approval now shows a loading state, updates local estimate status immediately after a successful response, rehydrates from freshly loaded public estimate data, refreshes the public route, and the Job Workspace refreshes service request/estimate state when the technician returns to the tab. Task 151 has not been started.
+- Task 151 is complete as the Communications Hub foundation. It adds provider-neutral conversation storage, business-only timeline rules, transcript foundations, disabled provider adapter boundaries, and `/dashboard/communications`. No authentication, `.env.local`, production phone numbers, outbound SMS/calls/email, Retell, Telnyx, Estimate AI, Settings, or Task 152 work was added.
+- Task 152 is complete as the First Live Phone Workflow foundation. It adds server-side Telnyx/Retell-style phone ingestion into WRA-owned Communications Hub records and Intake Inbox records, plus `0052` source-account mapping. It does not connect production phone numbers, send SMS, create jobs directly from provider payloads, modify authentication, modify `.env.local`, or start Task 153.
+- Task 152.1 is complete as Retell webhook ingestion stabilization. Retell `call_analyzed` payloads under `call.*` are now supported, source phone matching handles `+1`/digits/formatted variants, safe structural diagnostics were added, and repeated `call_id` events no longer duplicate conversations/intakes/transcripts/messages/timeline entries. Task 153 has not been started.
 
 ## Workiz Exit / HomeFix Pilot
 
@@ -180,6 +183,109 @@ Implemented:
 - Job Workspace now refreshes the service request, estimates, and notes on window focus or visibility return. If a technician has the job open while a customer approves an estimate in another tab/device, returning to the Job Workspace reflects `Estimate Approved` and the updated estimate list.
 
 Task 150.6 does not modify authentication, `.env.local`, approval RPC behavior, estimate lifecycle rules, SMS/calls, Telnyx, Retell, or Task 151.
+
+## Task 151 Communications Hub Foundation
+
+Task 151 begins Workiz Exit Phase 2 communication architecture.
+
+Implemented:
+
+- New architecture doc: `docs/COMMUNICATIONS_HUB_FOUNDATION_TASK151.md`.
+- New forward-only migration: `supabase/migrations/0051_communications_hub_foundation_apply_ready.sql`.
+- New provider-neutral tables: `communication_conversations`, `communication_messages`, `communication_transcripts`, and `communication_timeline_events`.
+- New authenticated RLS helper and create RPC for provider-neutral conversations. Browser users get read access only through company/profile-scoped policies; normal writes should go through trusted WRA services/RPCs.
+- New communications domain helpers under `frontend/src/lib/communications/` for customer recognition, business-only timeline filtering, and disabled provider adapter boundaries.
+- New internal dashboard route `/dashboard/communications`, linked from the existing `Calls & Messages` navigation item.
+
+Conversation model:
+
+- WRA owns the customer conversation.
+- Conversations can link to customers, intake requests, jobs, appointments, estimates, invoices, payment references, messages, transcripts, attachments, and business timeline events.
+- Telnyx, Retell, email, website forms, Yelp, Google Business Messages, Facebook Messenger, and WhatsApp are future adapters, not sources of truth.
+
+Timeline rules:
+
+- Normal technician UI shows only business events such as incoming call, incoming SMS, website request, appointment scheduled/changed, estimate sent/approved, invoice sent, payment received, repair completed, customer replied, and customer canceled.
+- Internal implementation events such as AI answered, transcript parsed, confidence, language detection, normalization, extraction, ZIP validation, and provider webhook metadata must stay out of normal technician workflow.
+
+Customer recognition flow:
+
+- Match by phone/email first, then address, known appliances, brand, and model.
+- If a strong customer match exists, link the conversation and load useful customer context.
+- If no strong match exists, create/review intake only.
+- Do not automatically create duplicate customers from communication payloads.
+
+Task 151 does not modify authentication, `.env.local`, production phone numbers, Estimate AI, Settings, SMS/call/email sending, provider credentials, Telnyx, Retell, or Task 152.
+
+## Task 152 First Live Phone Workflow Foundation
+
+Task 152 creates the first safe server-side phone workflow path for Workiz Exit.
+
+Implemented:
+
+- New architecture note: `docs/FIRST_LIVE_PHONE_WORKFLOW_TASK152.md`.
+- New forward-only migration: `supabase/migrations/0052_first_live_phone_workflow_foundation_apply_ready.sql`.
+- New `communication_source_accounts` table so an inbound provider event must map to an owned WRA phone/source before records are written.
+- New call/source metadata columns on `communication_conversations` for sanitized support/idempotency context.
+- New server-only Supabase service-role helper used only by server ingestion code.
+- New server-side phone normalization and ingestion modules under `frontend/src/server/communications/`.
+- New phone webhook endpoint: `/api/communications/phone-webhook`.
+- Existing `/api/intake/webhook-retell-telnyx` now routes through the same WRA Communications Hub ingestion path.
+- `/dashboard/communications` now links a conversation to Intake review when a call has created intake but not yet become a job.
+
+Conversation flow:
+
+- Telnyx/Retell-shaped JSON is normalized into a WRA phone workflow envelope.
+- WRA resolves the destination phone number against `communication_source_accounts`.
+- If the source is known, WRA creates/reuses a `communication_conversations` row, stores transcript/message content when available, creates a business-only `Incoming call` timeline event, and creates an `intake_requests` row for dispatcher review.
+- If the source is unknown or server-side configuration is missing, the webhook returns a safe `accepted: false` response and does not write operational records.
+
+Customer recognition flow:
+
+- The first implementation matches existing customers by phone and email.
+- Matched customers are linked to the conversation and intake.
+- Unmatched calls create intake only and do not create duplicate customers automatically.
+- Address/appliance/history-based recognition remains future hardening.
+
+Important boundary:
+
+- Provider payloads do not directly create service requests, jobs, or appointments in Task 152.
+- If a call appears booked, WRA still creates conversation plus intake and prepares the path for SMS confirmation later; dispatcher conversion through the existing Intake Inbox remains the safe job/appointment creation path.
+- No outbound SMS, calls, emails, Retell production agent, production phone number, auth change, or `.env.local` change was added.
+
+Manual real-call QA remains pending until `0051`/`0052` are applied in dev/staging, a development phone source row is created, and a Telnyx/Retell webhook is pointed at `/api/communications/phone-webhook`.
+
+## Task 152.1 Retell Webhook Ingestion Debug
+
+Task 152.1 fixes the first live Retell webhook stabilization issue.
+
+Observed issue:
+
+- Vercel showed `POST /api/communications/phone-webhook 202`.
+- No rows were created in `communication_conversations`, `communication_transcripts`, `communication_timeline_events`, or `intake_requests`.
+
+Root cause:
+
+- The webhook URL was working, but the first Task 152 normalizer did not fully support Retell's real `call_analyzed` payload shape.
+- The real payload nests call data under `body.call.*`, including `call_id`, `from_number`, `to_number`, `transcript`, `call_analysis.call_summary`, and `call_analysis.custom_analysis_data`.
+- The live source account stores `source_identifier = '+13466461949'`; source lookup now compares normalized phone variants so `+13466461949`, `13466461949`, and formatted equivalents can match the same source.
+
+Implemented:
+
+- Safe Vercel diagnostics for event name, top-level keys, call keys, call id, from/to number, transcript presence/length, call analysis presence, custom analysis keys, source result, and skip reason.
+- Exact Retell `call_analyzed` field mapping for name, best phone, address, ZIP, brand, appliance type, issues, appointment date, and appointment time.
+- Non-`call_analyzed` Retell events now return a safe skipped `202` response without writing records.
+- Repeated `call_id` is idempotent: the existing conversation and intake are reused, and duplicate transcript/message/timeline rows are avoided.
+- Database write errors for transcript/message/timeline/conversation update now throw server-side errors instead of returning a misleading success.
+
+Manual post-deploy QA still required:
+
+1. Deploy to Vercel.
+2. Trigger a Retell test webhook.
+3. Place one real phone call.
+4. Check safe Vercel diagnostics.
+5. Verify rows in `communication_conversations`, `communication_transcripts`, `communication_timeline_events`, and `intake_requests`.
+6. Repeat the same `call_id` and confirm no duplicates.
 
 ## Current stack
 

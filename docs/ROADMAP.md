@@ -80,19 +80,50 @@ Focus:
 - Google Calendar outbound sync validation.
 - Mobile/tablet friendly dispatcher view.
 
-### Task 151 — Real SMS Automation
+### Task 151 — Communications Hub Foundation
 
-Focus:
+Status:
 
-- Twilio or selected provider.
-- Appointment confirmation.
-- On-my-way message.
-- Estimate sent.
-- Appointment reminder.
-- Review request.
-- No demo messaging.
+- Task 151 is complete as a provider-neutral Communications Hub foundation.
+- Added `supabase/migrations/0051_communications_hub_foundation_apply_ready.sql` for conversations, messages, transcript foundations, and business-only timeline events.
+- Added `/dashboard/communications` as the minimal Calls & Messages workspace.
+- Added `frontend/src/lib/communications/` for customer recognition, timeline filtering, and disabled provider adapters.
+- No production Telnyx, Retell, SMS, email, phone number, outbound messaging, authentication, `.env.local`, Settings, Estimate AI, or Task 152 work was added.
 
-### Task 152 — Invoice + Payment Completion
+Remaining future communication work:
+
+- Select and configure production provider credentials outside git.
+- Add source authentication/signature verification.
+- Add trusted inbound Telnyx/Retell/email/web form ingestion.
+- Link provider-created conversations into Intake Inbox.
+- Add outbound templates for appointment confirmation, on-my-way, estimate sent, appointment reminder, and review request.
+- Add consent/audit rules before sending real messages.
+
+### Task 152 — First Live Phone Workflow
+
+Status:
+
+- Task 152 is complete as the first live-phone workflow foundation.
+- Added `supabase/migrations/0052_first_live_phone_workflow_foundation_apply_ready.sql` for `communication_source_accounts` and sanitized call metadata on conversations.
+- Added server-side phone normalization/ingestion under `frontend/src/server/communications/`.
+- Added `POST /api/communications/phone-webhook` and routed the existing `/api/intake/webhook-retell-telnyx` endpoint through the same WRA-owned ingestion flow.
+- Accepted provider events create or reuse WRA conversation records, transcript/message records when present, business-only timeline entries, and Intake Inbox records for dispatcher review.
+- Customer recognition currently matches by phone/email and avoids automatic duplicate customer creation.
+- Provider payloads do not directly create jobs or appointments yet; the dispatcher still converts reviewed intake through the trusted Intake Inbox path.
+- No production phone numbers, outbound SMS, Retell production agent, authentication changes, `.env.local` edits, Estimate AI changes, dashboard redesign, or Task 153 work was added.
+- Task 152.1 is complete as Retell webhook ingestion stabilization. The phone webhook now supports Retell `event = call_analyzed` payloads under `call.*`, logs safe structural diagnostics, matches owned source numbers across `+1`/digits/formatted variants, and reuses existing conversation/intake records for repeated `call_id` events.
+
+Remaining phone-workflow work before replacing Workiz:
+
+- Apply `0051` and `0052` in dev/staging.
+- Add a development `communication_source_accounts` row for the owned test number.
+- Configure provider webhook verification/signatures.
+- Deploy and place a real call through the development phone number.
+- Verify safe Vercel diagnostics, conversation, transcript, business timeline, intake, customer recognition, and no duplicates on repeated `call_id`.
+- Add controlled dispatcher conversion/booking rules for AI-booked calls.
+- Add SMS confirmation templates and consent/audit rules before sending real SMS.
+
+### Future Task — Invoice + Payment Completion
 
 Focus:
 
