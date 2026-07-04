@@ -49,6 +49,7 @@ The MVP is focused on Houston only and refrigerator repair only. The first produ
 - Task 151 is complete as the Communications Hub foundation. It adds provider-neutral conversation storage, business-only timeline rules, transcript foundations, disabled provider adapter boundaries, and `/dashboard/communications`. No authentication, `.env.local`, production phone numbers, outbound SMS/calls/email, Retell, Telnyx, Estimate AI, Settings, or Task 152 work was added.
 - Task 152 is complete as the First Live Phone Workflow foundation. It adds server-side Telnyx/Retell-style phone ingestion into WRA-owned Communications Hub records and Intake Inbox records, plus `0052` source-account mapping. It does not connect production phone numbers, send SMS, create jobs directly from provider payloads, modify authentication, modify `.env.local`, or start Task 153.
 - Task 152.1 is complete as Retell webhook ingestion stabilization. Retell `call_analyzed` payloads under `call.*` are now supported, source phone matching handles `+1`/digits/formatted variants, safe structural diagnostics were added, and repeated `call_id` events no longer duplicate conversations/intakes/transcripts/messages/timeline entries. Task 153 has not been started.
+- Task 152.5 adds `0053_communications_service_role_grants_apply_ready.sql` after production Retell QA showed PostgreSQL error `42501` (`permission denied for table communication_source_accounts`) during service-role phone ingestion. The migration grants the minimum service-role privileges needed for source lookup, conversation/transcript/message/timeline writes, intake insert, and customer lookup. Apply `0053`, then rerun live Retell QA. Task 153 has not been started.
 
 ## Workiz Exit / HomeFix Pilot
 
@@ -286,6 +287,35 @@ Manual post-deploy QA still required:
 4. Check safe Vercel diagnostics.
 5. Verify rows in `communication_conversations`, `communication_transcripts`, `communication_timeline_events`, and `intake_requests`.
 6. Repeat the same `call_id` and confirm no duplicates.
+
+## Task 152.5 Service Role Grants
+
+Production Retell QA after Task 152.1 confirmed the webhook receives the real `call_analyzed` payload, but ingestion stopped before source matching completed:
+
+- table: `communication_source_accounts`
+- operation: `select_source_account`
+- message: `permission denied for table communication_source_accounts`
+- code: `42501`
+
+This confirmed the remaining blocker is PostgreSQL table privileges for the server-side `service_role` role, not Retell, Vercel, webhook routing, or payload normalization.
+
+New migration:
+
+- `supabase/migrations/0053_communications_service_role_grants_apply_ready.sql`
+
+The migration grants only the minimum phone-ingestion operations:
+
+- `SELECT` on `communication_source_accounts`
+- `SELECT, INSERT, UPDATE` on `communication_conversations`
+- `SELECT, INSERT` on `communication_transcripts`
+- `SELECT, INSERT` on `communication_messages`
+- `SELECT, INSERT` on `communication_timeline_events`
+- `INSERT` on `intake_requests`
+- `SELECT` on `customers`
+
+It does not disable RLS, weaken anon/authenticated policies, modify authentication, alter Communications Hub architecture, create jobs/appointments, or start Task 153.
+
+After applying `0053` in Supabase, rerun one real Retell `call_analyzed` phone call and verify conversation, transcript, message, timeline, and intake rows.
 
 ## Current stack
 

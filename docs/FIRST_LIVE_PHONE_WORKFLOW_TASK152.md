@@ -190,3 +190,33 @@ Idempotency:
 - Duplicate transcript/message/timeline rows are not created for the same conversation.
 
 Non-`call_analyzed` Retell events return a safe `202` skipped response and do not create operational records.
+
+## Task 152.5 Service Role Grant Fix
+
+Production Retell QA confirmed the real `call_analyzed` payload reaches WRA, but ingestion stopped at source-account lookup with:
+
+- table: `communication_source_accounts`
+- operation: `select_source_account`
+- message: `permission denied for table communication_source_accounts`
+- code: `42501`
+- hint: `Grant the required privileges to the current role with: GRANT SELECT ON public.communication_source_accounts TO service_role;`
+
+Root cause:
+
+- `0051` and `0052` created the Communications Hub tables and authenticated dashboard policies, but did not explicitly grant the PostgreSQL `service_role` role the table privileges used by the server-side phone ingestion workflow.
+- The issue is database privileges, not Retell, Vercel, payload normalization, or webhook routing.
+
+Fix:
+
+- Apply `supabase/migrations/0053_communications_service_role_grants_apply_ready.sql`.
+- The migration grants only the minimum operations used by phone ingestion:
+  - `SELECT` on `communication_source_accounts`
+  - `SELECT, INSERT, UPDATE` on `communication_conversations`
+  - `SELECT, INSERT` on `communication_transcripts`
+  - `SELECT, INSERT` on `communication_messages`
+  - `SELECT, INSERT` on `communication_timeline_events`
+  - `INSERT` on `intake_requests`
+  - `SELECT` on `customers`
+- It does not disable RLS, change anon/authenticated policies, modify auth, connect providers, or create jobs/appointments.
+
+After applying `0053`, rerun live Retell QA with one real `call_analyzed` phone call and verify records in Communications Hub plus Intake Inbox.
