@@ -50,6 +50,7 @@ The MVP is focused on Houston only and refrigerator repair only. The first produ
 - Task 152 is complete as the First Live Phone Workflow foundation. It adds server-side Telnyx/Retell-style phone ingestion into WRA-owned Communications Hub records and Intake Inbox records, plus `0052` source-account mapping. It does not connect production phone numbers, send SMS, create jobs directly from provider payloads, modify authentication, modify `.env.local`, or start Task 153.
 - Task 152.1 is complete as Retell webhook ingestion stabilization. Retell `call_analyzed` payloads under `call.*` are now supported, source phone matching handles `+1`/digits/formatted variants, safe structural diagnostics were added, and repeated `call_id` events no longer duplicate conversations/intakes/transcripts/messages/timeline entries. Task 153 has not been started.
 - Task 152.5 adds `0053_communications_service_role_grants_apply_ready.sql` after production Retell QA showed PostgreSQL error `42501` (`permission denied for table communication_source_accounts`) during service-role phone ingestion. The migration grants the minimum service-role privileges needed for source lookup, conversation/transcript/message/timeline writes, intake insert, and customer lookup. Apply `0053`, then rerun live Retell QA. Task 153 has not been started.
+- Task 152.6 fixes the next phone-ingestion blocker without another live call. Production reached intake insert but PostgREST returned `PGRST204` because phone ingestion sent RPC-only `duplicate_confirmed` to the physical `intake_requests` table. The phone workflow now strips that control field before direct service-role insert. No migration is needed. Task 153 has not been started.
 
 ## Workiz Exit / HomeFix Pilot
 
@@ -316,6 +317,29 @@ The migration grants only the minimum phone-ingestion operations:
 It does not disable RLS, weaken anon/authenticated policies, modify authentication, alter Communications Hub architecture, create jobs/appointments, or start Task 153.
 
 After applying `0053` in Supabase, rerun one real Retell `call_analyzed` phone call and verify conversation, transcript, message, timeline, and intake rows.
+
+## Task 152.6 Intake Payload Schema Fix
+
+After `0053`, live Retell QA created a `communication_conversations` row and then failed at `intake_requests` insert:
+
+- table: `intake_requests`
+- operation: `insert_phone_intake`
+- message: `Could not find the 'duplicate_confirmed' column of 'intake_requests' in the schema cache`
+- code: `PGRST204`
+
+Root cause:
+
+- `duplicate_confirmed` is a JSON control flag consumed by dashboard intake RPCs.
+- The physical table uses `duplicate_confirmed_at` and `duplicate_confirmed_by`.
+- Phone ingestion inserts directly into `intake_requests`, so it must not send RPC-only control keys.
+
+Fix:
+
+- `frontend/src/server/communications/phone-workflow.ts` now removes `duplicate_confirmed` from the normalized intake payload before direct table insert.
+- No database migration was created because adding a physical `duplicate_confirmed` boolean would duplicate the existing timestamp/user model.
+- The sent phone-ingestion fields now align with the existing intake schema: source/customer/address/appliance/problem/window/raw/transcript/raw payload/extracted data/duplicate candidate/status/company/customer link/audit fields.
+
+Do not make another paid Retell call solely for Task 152.6. Deploy first and use safe replay-style validation where possible; a final real call is needed only to confirm the complete phone workflow after all schema/payload blockers are cleared.
 
 ## Current stack
 

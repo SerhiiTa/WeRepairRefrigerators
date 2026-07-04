@@ -85,6 +85,18 @@ function safeJsonObject(value: Record<string, unknown>): Record<string, Json> {
   return JSON.parse(JSON.stringify(value)) as Record<string, Json>;
 }
 
+function buildPhoneIntakeInsertPayload(
+  normalizedPayload: Record<string, Json>,
+): Record<string, Json> {
+  // `duplicate_confirmed` is an RPC control flag, not an intake_requests column.
+  // The RPC maps it onto duplicate_confirmed_at/by; direct service-role inserts
+  // must not send it to PostgREST.
+  const insertPayload = { ...normalizedPayload };
+  delete insertPayload.duplicate_confirmed;
+
+  return insertPayload;
+}
+
 function phoneVariants(phone: string | null): string[] {
   if (!phone) {
     return [];
@@ -199,7 +211,7 @@ async function createPhoneIntake(
   }
 
   const name = splitName(normalized.customerName ?? customer?.full_name ?? null);
-  const intakePayload = normalizeIntakeWritePayload({
+  const intakePayload = buildPhoneIntakeInsertPayload(normalizeIntakeWritePayload({
     sourceType: normalized.provider === "retell" ? "retell_ai" : "phone",
     sourceName: `${normalized.provider} phone call`,
     sourceIdentifier: normalized.externalConversationId ?? normalized.fromPhone,
@@ -233,7 +245,7 @@ async function createPhoneIntake(
       booking_status: normalized.bookingStatus,
     },
     status: customer ? "customer_matched" : "new",
-  });
+  }));
 
   const { data, error } = await supabase
     .from("intake_requests")

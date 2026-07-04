@@ -220,3 +220,27 @@ Fix:
 - It does not disable RLS, change anon/authenticated policies, modify auth, connect providers, or create jobs/appointments.
 
 After applying `0053`, rerun live Retell QA with one real `call_analyzed` phone call and verify records in Communications Hub plus Intake Inbox.
+
+## Task 152.6 Intake Payload Schema Fix
+
+Production Retell QA after the service-role grant fix created a `communication_conversations` row, then failed while inserting `intake_requests`:
+
+- table: `intake_requests`
+- operation: `insert_phone_intake`
+- message: `Could not find the 'duplicate_confirmed' column of 'intake_requests' in the schema cache`
+- code: `PGRST204`
+
+Root cause:
+
+- `normalizeIntakeWritePayload()` returns `duplicate_confirmed` because dashboard intake create/update RPCs accept it as a JSON control flag.
+- The real table stores duplicate confirmation as `duplicate_confirmed_at` and `duplicate_confirmed_by`.
+- `duplicate_confirmed` is not, and should not become, a physical `intake_requests` column.
+- Phone ingestion inserts directly with the server-side service-role client, so it must not send RPC-only control fields to PostgREST table insert.
+
+Fix:
+
+- Phone ingestion now strips `duplicate_confirmed` before inserting into `intake_requests`.
+- No migration is required for this mismatch.
+- Other phone-ingestion intake fields match the schema from migrations `0047` through `0050`: source/customer/address/appliance/problem/preferred-window/raw/transcript/extracted/duplicate-candidate/status/company/link/audit fields.
+
+Do not spend another live Retell call on this step unless production has been deployed and a replay/safe test cannot prove the insert payload shape.
