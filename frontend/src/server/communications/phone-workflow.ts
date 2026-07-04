@@ -42,6 +42,28 @@ type CustomerRow = {
   email: string | null;
 };
 
+type SupabaseErrorMetadata = {
+  message?: string;
+  code?: string;
+  details?: string;
+  hint?: string;
+};
+
+function logSupabasePhoneIngestionError(
+  table: string,
+  operation: string,
+  error: SupabaseErrorMetadata,
+) {
+  console.error("[communications-phone-ingestion-supabase-error]", {
+    table,
+    operation,
+    message: error.message ?? null,
+    code: error.code ?? null,
+    details: error.details ?? null,
+    hint: error.hint ?? null,
+  });
+}
+
 function splitName(name: string | null): {
   firstName: string | null;
   lastName: string | null;
@@ -105,6 +127,11 @@ async function findSourceAccount(
     .maybeSingle();
 
   if (error) {
+    logSupabasePhoneIngestionError(
+      "communication_source_accounts",
+      "select_source_account",
+      error,
+    );
     return { account: null, reason: error.message };
   }
 
@@ -221,6 +248,11 @@ async function createPhoneIntake(
     .single();
 
   if (error) {
+    logSupabasePhoneIngestionError(
+      "intake_requests",
+      "insert_phone_intake",
+      error,
+    );
     throw new Error(`Phone intake creation failed: ${error.message}`);
   }
 
@@ -265,7 +297,7 @@ export async function ingestPhoneCommunication(
   const customerDisplayName =
     customer?.full_name ?? normalized.customerName ?? normalized.fromPhone ?? "Phone customer";
 
-  const { data: existingConversation } = normalized.externalConversationId
+  const existingConversationResult = normalized.externalConversationId
     ? await supabase
         .from("communication_conversations")
         .select("id,intake_request_id")
@@ -273,6 +305,19 @@ export async function ingestPhoneCommunication(
         .eq("external_conversation_id", normalized.externalConversationId)
         .maybeSingle()
     : { data: null };
+
+  if ("error" in existingConversationResult && existingConversationResult.error) {
+    logSupabasePhoneIngestionError(
+      "communication_conversations",
+      "select_existing_conversation",
+      existingConversationResult.error,
+    );
+    throw new Error(
+      `Phone conversation lookup failed: ${existingConversationResult.error.message}`,
+    );
+  }
+
+  const existingConversation = existingConversationResult.data;
 
   let conversationId =
     typeof existingConversation?.id === "string" ? existingConversation.id : null;
@@ -308,12 +353,17 @@ export async function ingestPhoneCommunication(
       .single();
 
     if (error) {
+      logSupabasePhoneIngestionError(
+        "communication_conversations",
+        "insert_conversation",
+        error,
+      );
       throw new Error(`Phone conversation creation failed: ${error.message}`);
     }
 
     conversationId = data.id;
   } else {
-    await supabase
+    const { error } = await supabase
       .from("communication_conversations")
       .update({
         customer_id: customer?.id ?? null,
@@ -330,18 +380,38 @@ export async function ingestPhoneCommunication(
         provider_metadata: normalized.providerMetadata,
       })
       .eq("id", conversationId);
+
+    if (error) {
+      logSupabasePhoneIngestionError(
+        "communication_conversations",
+        "update_existing_conversation",
+        error,
+      );
+      throw new Error(`Phone conversation update failed: ${error.message}`);
+    }
   }
 
   if (!intakeRequestId) {
     intakeRequestId = await createPhoneIntake(normalized, sourceAccount, customer);
   }
 
-  const { data: existingTranscript } = await supabase
+  const { data: existingTranscript, error: existingTranscriptError } = await supabase
     .from("communication_transcripts")
     .select("id")
     .eq("conversation_id", conversationId)
     .limit(1)
     .maybeSingle();
+
+  if (existingTranscriptError) {
+    logSupabasePhoneIngestionError(
+      "communication_transcripts",
+      "select_existing_transcript",
+      existingTranscriptError,
+    );
+    throw new Error(
+      `Phone transcript lookup failed: ${existingTranscriptError.message}`,
+    );
+  }
 
   if (
     (normalized.transcriptText || normalized.transcriptSegments.length > 0) &&
@@ -359,11 +429,16 @@ export async function ingestPhoneCommunication(
     });
 
     if (error) {
+      logSupabasePhoneIngestionError(
+        "communication_transcripts",
+        "insert_transcript",
+        error,
+      );
       throw new Error(`Phone transcript creation failed: ${error.message}`);
     }
   }
 
-  const { data: existingMessage } = normalized.externalMessageId
+  const existingMessageResult = normalized.externalMessageId
     ? await supabase
         .from("communication_messages")
         .select("id")
@@ -379,6 +454,19 @@ export async function ingestPhoneCommunication(
         .limit(1)
         .maybeSingle();
 
+  if (existingMessageResult.error) {
+    logSupabasePhoneIngestionError(
+      "communication_messages",
+      "select_existing_message",
+      existingMessageResult.error,
+    );
+    throw new Error(
+      `Phone message lookup failed: ${existingMessageResult.error.message}`,
+    );
+  }
+
+  const existingMessage = existingMessageResult.data;
+
   if ((normalized.summary || normalized.transcriptText) && !existingMessage) {
     const { error } = await supabase.from("communication_messages").insert({
       conversation_id: conversationId,
@@ -392,17 +480,33 @@ export async function ingestPhoneCommunication(
     });
 
     if (error) {
+      logSupabasePhoneIngestionError(
+        "communication_messages",
+        "insert_message",
+        error,
+      );
       throw new Error(`Phone message creation failed: ${error.message}`);
     }
   }
 
-  const { data: existingTimelineEvent } = await supabase
+  const { data: existingTimelineEvent, error: existingTimelineEventError } = await supabase
     .from("communication_timeline_events")
     .select("id")
     .eq("conversation_id", conversationId)
     .eq("event_type", "incoming_call")
     .limit(1)
     .maybeSingle();
+
+  if (existingTimelineEventError) {
+    logSupabasePhoneIngestionError(
+      "communication_timeline_events",
+      "select_existing_timeline_event",
+      existingTimelineEventError,
+    );
+    throw new Error(
+      `Phone timeline lookup failed: ${existingTimelineEventError.message}`,
+    );
+  }
 
   if (!existingTimelineEvent) {
     const { error } = await supabase.from("communication_timeline_events").insert({
@@ -415,6 +519,11 @@ export async function ingestPhoneCommunication(
     });
 
     if (error) {
+      logSupabasePhoneIngestionError(
+        "communication_timeline_events",
+        "insert_timeline_event",
+        error,
+      );
       throw new Error(`Phone timeline creation failed: ${error.message}`);
     }
   }
@@ -431,6 +540,11 @@ export async function ingestPhoneCommunication(
     .eq("id", conversationId);
 
   if (conversationUpdateError) {
+    logSupabasePhoneIngestionError(
+      "communication_conversations",
+      "update_conversation_links",
+      conversationUpdateError,
+    );
     throw new Error(
       `Phone conversation update failed: ${conversationUpdateError.message}`,
     );
