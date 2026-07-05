@@ -1,4 +1,4 @@
--- Task 152.9B: Repair dashboard user company access for Communications UI.
+-- Task 152.9C: Repair dashboard user company access for Communications UI.
 --
 -- APPLY-READY.
 -- Purpose:
@@ -19,14 +19,10 @@
 --   - This does not alter RLS policies.
 --   - This does not grant public/anon access.
 --   - This repairs only one known dashboard user/company relationship.
+--   - This does not update profiles.company_id because production protects
+--     company assignment changes behind admin-review triggers.
 
 begin;
-
-update public.profiles
-set
-  company_id = 'f0639d2c-6fcf-4ab5-93a2-cde8f3ba9633'::uuid,
-  updated_at = now()
-where id = '7d4195e4-572f-4640-a15f-d954123b34d7'::uuid;
 
 insert into public.company_members (
   company_id,
@@ -50,7 +46,7 @@ values (
   null,
   null,
   null,
-  'Task 152.9B: repaired dashboard access to Communications Hub production call records.',
+  'Task 152.9C: repaired dashboard access to Communications Hub production call records through active company membership.',
   now(),
   now()
 )
@@ -70,7 +66,7 @@ do update set
   notes = concat_ws(
     E'\n',
     nullif(public.company_members.notes, ''),
-    'Task 152.9B: repaired dashboard access to Communications Hub production call records.'
+    'Task 152.9C: repaired dashboard access to Communications Hub production call records through active company membership.'
   );
 
 commit;
