@@ -115,12 +115,14 @@ Status:
 - Task 152.5 adds `supabase/migrations/0053_communications_service_role_grants_apply_ready.sql` after production Retell QA showed PostgreSQL error `42501` (`permission denied for table communication_source_accounts`) during service-role source lookup. Apply `0053` before rerunning live Retell QA.
 - Task 152.6 fixes the direct phone-ingestion intake insert payload. `duplicate_confirmed` is an RPC-only control flag, not a table column, so phone ingestion now strips it before inserting `intake_requests`. No migration was created.
 - Task 152.7 displays real ingested phone calls in `/dashboard/communications` and adds `0054_communications_dashboard_visibility_profile_company_apply_ready.sql` so authenticated dashboard users can read company-scoped provider-created conversations through existing owner/creator, company-member, or active profile-company access.
+- Task 152.9B adds `0055_communications_dashboard_user_access_repair_apply_ready.sql` to repair the production operator access relationship for `info@refrigeratorhoustonrepair.com` and company `f0639d2c-6fcf-4ab5-93a2-cde8f3ba9633`. Apply it after `0054` if `/dashboard/communications` still shows zero conversations for that user.
 
 Remaining phone-workflow work before replacing Workiz:
 
 - Apply `0051` and `0052` in dev/staging.
 - Apply `0053` in production/staging so server-side phone ingestion has the minimum `service_role` table grants for source lookup, conversation/transcript/message/timeline writes, intake insert, and customer lookup.
 - Apply `0054` in production/staging so existing ingested phone conversations are visible in the dashboard Communications UI for company-scoped operators.
+- Apply `0055` in production if the known operator account still needs its active `company_members` and `profiles.company_id` relationship repaired for existing production Retell calls.
 - Add a development `communication_source_accounts` row for the owned test number.
 - Use safe replay/probe validation where possible before spending another live Retell call.
 - Configure provider webhook verification/signatures.

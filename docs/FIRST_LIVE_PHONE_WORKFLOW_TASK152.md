@@ -275,3 +275,19 @@ Fix:
 - New forward-only migration `0054_communications_dashboard_visibility_profile_company_apply_ready.sql` updates `can_access_communication_conversation(...)` to keep existing owner/creator/company-member access and add a narrow active dashboard `profiles.company_id = conversation.company_id` compatibility path.
 
 Task 152 is not operationally complete until the production UI shows these existing ingested calls to an authenticated dashboard user after `0054` is applied.
+
+## Task 152.9B Dashboard User Access Repair
+
+Production diagnostics confirmed real Retell conversations exist, but `/dashboard/communications` still showed `Conversations: 0` for `info@refrigeratorhoustonrepair.com`.
+
+The latest production conversation was company-scoped to `f0639d2c-6fcf-4ab5-93a2-cde8f3ba9633`, while the dashboard user must pass company-scoped Communications RLS through either active `company_members` access or the `profiles.company_id` compatibility path from `0054`.
+
+Fix:
+
+- Apply `supabase/migrations/0055_communications_dashboard_user_access_repair_apply_ready.sql`.
+- The migration updates `public.profiles.company_id` for profile `7d4195e4-572f-4640-a15f-d954123b34d7`.
+- It inserts or repairs an active `public.company_members` row for company `f0639d2c-6fcf-4ab5-93a2-cde8f3ba9633`.
+- It preserves existing `owner`, `manager`, or `dispatcher` membership roles when already present; otherwise it repairs the role to `owner`.
+- It does not disable RLS, weaken policies, grant public access, modify the Communications UI, or require another live Retell call.
+
+After applying `0055`, refresh `/dashboard/communications` as `info@refrigeratorhoustonrepair.com`. Existing production calls should appear without spending another Retell call.
