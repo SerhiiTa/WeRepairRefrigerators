@@ -244,3 +244,34 @@ Fix:
 - Other phone-ingestion intake fields match the schema from migrations `0047` through `0050`: source/customer/address/appliance/problem/preferred-window/raw/transcript/extracted/duplicate-candidate/status/company/link/audit fields.
 
 Do not spend another live Retell call on this step unless production has been deployed and a replay/safe test cannot prove the insert payload shape.
+
+## Task 152.7 Communications UI Visibility
+
+Production Retell QA confirmed the full ingestion workflow completed:
+
+- `phase: completed`
+- `accepted: true`
+- `conversationCreated: true`
+- `intakeCreated: true`
+- `customerRecognitionStatus: matched`
+- `timelineEventsCreated: 1`
+- `transcriptCreated: true`
+
+Rows now exist in:
+
+- `communication_conversations`
+- `communication_transcripts`
+- `communication_messages`
+- `communication_timeline_events`
+- `intake_requests`
+
+The missing piece was dashboard visibility. The initial Communications UI read the real table, but did not surface all call fields needed by dispatchers. Production rows are company-scoped, and legacy/operator dashboard accounts may rely on `profiles.company_id` while the first communication RLS helper checked only owner/creator or `company_members`.
+
+Fix:
+
+- `/dashboard/communications` now selects and displays `provider_name`, `status`, `last_event_at`, `call_started_at`, `call_ended_at`, and `intake_request_id`.
+- Conversation cards show provider, source, status, call window, and whether intake was created.
+- Conversation detail shows source/provider, status, call window, last activity, summary, next action, and intake-created state.
+- New forward-only migration `0054_communications_dashboard_visibility_profile_company_apply_ready.sql` updates `can_access_communication_conversation(...)` to keep existing owner/creator/company-member access and add a narrow active dashboard `profiles.company_id = conversation.company_id` compatibility path.
+
+Task 152 is not operationally complete until the production UI shows these existing ingested calls to an authenticated dashboard user after `0054` is applied.

@@ -54,6 +54,7 @@ export type CommunicationConversation = {
   id: string;
   sourceType: CommunicationSourceType;
   status: CommunicationConversationStatus;
+  providerName: string | null;
   customerDisplayName: string | null;
   customerPhone: string | null;
   customerEmail: string | null;
@@ -61,6 +62,8 @@ export type CommunicationConversation = {
   summary: string | null;
   nextAction: string | null;
   lastEventAt: string | null;
+  callStartedAt: string | null;
+  callEndedAt: string | null;
   linkedIntakeRequestId: string | null;
   linkedServiceRequestId: string | null;
   createdAt: string;

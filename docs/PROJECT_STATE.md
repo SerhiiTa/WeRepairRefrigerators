@@ -51,6 +51,7 @@ The MVP is focused on Houston only and refrigerator repair only. The first produ
 - Task 152.1 is complete as Retell webhook ingestion stabilization. Retell `call_analyzed` payloads under `call.*` are now supported, source phone matching handles `+1`/digits/formatted variants, safe structural diagnostics were added, and repeated `call_id` events no longer duplicate conversations/intakes/transcripts/messages/timeline entries. Task 153 has not been started.
 - Task 152.5 adds `0053_communications_service_role_grants_apply_ready.sql` after production Retell QA showed PostgreSQL error `42501` (`permission denied for table communication_source_accounts`) during service-role phone ingestion. The migration grants the minimum service-role privileges needed for source lookup, conversation/transcript/message/timeline writes, intake insert, and customer lookup. Apply `0053`, then rerun live Retell QA. Task 153 has not been started.
 - Task 152.6 fixes the next phone-ingestion blocker without another live call. Production reached intake insert but PostgREST returned `PGRST204` because phone ingestion sent RPC-only `duplicate_confirmed` to the physical `intake_requests` table. The phone workflow now strips that control field before direct service-role insert. No migration is needed. Task 153 has not been started.
+- Task 152.7 makes successfully ingested production phone calls visible in `/dashboard/communications`. Production rows now exist across conversations, transcripts, messages, timeline events, and intake. The UI now displays provider, source, status, call timestamps, summary, next action, and intake-created state. New migration `0054_communications_dashboard_visibility_profile_company_apply_ready.sql` keeps company-scoped RLS and adds a narrow active `profiles.company_id` dashboard visibility path for legacy/operator accounts. Task 153 has not been started.
 
 ## Workiz Exit / HomeFix Pilot
 
@@ -340,6 +341,33 @@ Fix:
 - The sent phone-ingestion fields now align with the existing intake schema: source/customer/address/appliance/problem/window/raw/transcript/raw payload/extracted data/duplicate candidate/status/company/customer link/audit fields.
 
 Do not make another paid Retell call solely for Task 152.6. Deploy first and use safe replay-style validation where possible; a final real call is needed only to confirm the complete phone workflow after all schema/payload blockers are cleared.
+
+## Task 152.7 Communications UI Visibility
+
+Production Retell QA now confirms full ingestion completion:
+
+- `phase: completed`
+- `accepted: true`
+- `conversationCreated: true`
+- `intakeCreated: true`
+- `customerRecognitionStatus: matched`
+- `timelineEventsCreated: 1`
+- `transcriptCreated: true`
+
+Rows were verified in production `communication_conversations`, including Retell phone calls with provider, source, customer, summary, next action, call start/end timestamps, and `intake_request_id`.
+
+Root cause of missing UI:
+
+- `/dashboard/communications` was pointed at the correct table, but did not display provider/status/call-time/intake metadata from real phone rows.
+- The initial RLS helper required owner/creator or active `company_members` access. Existing operator/dashboard accounts may rely on active `profiles.company_id` company scope, so real provider-created rows with `owner_profile_id` and `created_by` set to `null` could be hidden from those accounts.
+
+Fix:
+
+- `CommunicationsHub.tsx` now selects and displays `provider_name`, `status`, `last_event_at`, `call_started_at`, `call_ended_at`, and `intake_request_id`.
+- Conversation cards and detail panels show whether intake was created and link to `/dashboard/intake` when present.
+- New migration `supabase/migrations/0054_communications_dashboard_visibility_profile_company_apply_ready.sql` updates `public.can_access_communication_conversation(uuid)` to keep existing owner/creator/company-member access and add a narrow active dashboard profile-company compatibility path.
+
+Apply `0054` in Supabase, then open `/dashboard/communications` as an authenticated dashboard user to verify the existing production calls are visible. No new live Retell call is required for this UI visibility check.
 
 ## Current stack
 

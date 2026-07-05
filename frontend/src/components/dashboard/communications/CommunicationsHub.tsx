@@ -33,6 +33,7 @@ type ConversationRow = {
   id: string;
   primary_source_type: DatabaseCommunicationSourceType;
   status: CommunicationConversation["status"];
+  provider_name: string | null;
   customer_display_name: string | null;
   customer_phone: string | null;
   customer_email: string | null;
@@ -40,6 +41,8 @@ type ConversationRow = {
   summary: string | null;
   next_action: string | null;
   last_event_at: string | null;
+  call_started_at: string | null;
+  call_ended_at: string | null;
   intake_request_id: string | null;
   service_request_id: string | null;
   created_at: string;
@@ -63,6 +66,7 @@ function mapConversation(row: ConversationRow): CommunicationConversation {
     id: row.id,
     sourceType: row.primary_source_type,
     status: row.status,
+    providerName: row.provider_name,
     customerDisplayName: row.customer_display_name,
     customerPhone: row.customer_phone,
     customerEmail: row.customer_email,
@@ -70,6 +74,8 @@ function mapConversation(row: ConversationRow): CommunicationConversation {
     summary: row.summary,
     nextAction: row.next_action,
     lastEventAt: row.last_event_at,
+    callStartedAt: row.call_started_at,
+    callEndedAt: row.call_ended_at,
     linkedIntakeRequestId: row.intake_request_id,
     linkedServiceRequestId: row.service_request_id,
     createdAt: row.created_at,
@@ -106,6 +112,48 @@ function getSourceLabel(sourceType: DatabaseCommunicationSourceType): string {
   };
 
   return labels[sourceType];
+}
+
+function getStatusLabel(status: CommunicationConversation["status"]): string {
+  const labels: Record<CommunicationConversation["status"], string> = {
+    open: "Open",
+    needs_action: "Needs action",
+    linked: "Linked",
+    resolved: "Resolved",
+    archived: "Archived",
+  };
+
+  return labels[status];
+}
+
+function formatProviderName(providerName: string | null): string {
+  if (!providerName) {
+    return "Provider pending";
+  }
+
+  return providerName
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function formatCallWindow(conversation: CommunicationConversation): string {
+  if (conversation.callStartedAt && conversation.callEndedAt) {
+    return `${formatServiceRequestDate(conversation.callStartedAt)} - ${formatServiceRequestDate(
+      conversation.callEndedAt,
+    )}`;
+  }
+
+  if (conversation.callStartedAt) {
+    return `Started ${formatServiceRequestDate(conversation.callStartedAt)}`;
+  }
+
+  if (conversation.lastEventAt) {
+    return `Last activity ${formatServiceRequestDate(conversation.lastEventAt)}`;
+  }
+
+  return "Call time pending";
 }
 
 function getHubReadError(message: string) {
@@ -154,7 +202,7 @@ export function CommunicationsHub() {
       const { data, error } = await supabase
         .from("communication_conversations")
         .select(
-          "id,primary_source_type,status,customer_display_name,customer_phone,customer_email,service_address,summary,next_action,last_event_at,intake_request_id,service_request_id,created_at,updated_at",
+          "id,primary_source_type,status,provider_name,customer_display_name,customer_phone,customer_email,service_address,summary,next_action,last_event_at,call_started_at,call_ended_at,intake_request_id,service_request_id,created_at,updated_at",
         )
         .order("updated_at", { ascending: false })
         .limit(50);
@@ -313,8 +361,8 @@ export function CommunicationsHub() {
                   No conversations yet
                 </p>
                 <p className="mt-1 text-sm font-semibold leading-6 text-[#64748B]">
-                  Calls, messages, forms, and email will appear here after
-                  communication sources are enabled.
+                  Calls, messages, forms, and email will appear here when this
+                  account has access to the company conversations.
                 </p>
               </div>
             ) : (
@@ -345,6 +393,22 @@ export function CommunicationsHub() {
                         {getSourceLabel(conversation.sourceType)}
                       </span>
                     </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <span className="rounded-full bg-[#F8FAFC] px-2 py-1 text-[11px] font-black text-[#64748B]">
+                        {formatProviderName(conversation.providerName)}
+                      </span>
+                      <span className="rounded-full bg-amber-50 px-2 py-1 text-[11px] font-black text-amber-700">
+                        {getStatusLabel(conversation.status)}
+                      </span>
+                      {conversation.linkedIntakeRequestId ? (
+                        <span className="rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-black text-emerald-700">
+                          Intake created
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-2 text-[11px] font-bold text-[#64748B]">
+                      {formatCallWindow(conversation)}
+                    </p>
                     {conversation.nextAction ? (
                       <p className="mt-2 rounded-lg bg-white px-2 py-1 text-xs font-black text-[#0F6BFF]">
                         {conversation.nextAction}
@@ -400,6 +464,32 @@ export function CommunicationsHub() {
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 <div className="rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3">
                   <p className="text-[11px] font-black uppercase tracking-[0.14em] text-[#64748B]">
+                    Source
+                  </p>
+                  <p className="mt-1 text-sm font-semibold leading-6 text-[#334155]">
+                    {getSourceLabel(selectedConversation.sourceType)} via{" "}
+                    {formatProviderName(selectedConversation.providerName)}
+                  </p>
+                  <p className="mt-1 text-xs font-bold text-[#64748B]">
+                    {getStatusLabel(selectedConversation.status)}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3">
+                  <p className="text-[11px] font-black uppercase tracking-[0.14em] text-[#64748B]">
+                    Call window
+                  </p>
+                  <p className="mt-1 text-sm font-semibold leading-6 text-[#334155]">
+                    {formatCallWindow(selectedConversation)}
+                  </p>
+                  <p className="mt-1 text-xs font-bold text-[#64748B]">
+                    Last activity:{" "}
+                    {selectedConversation.lastEventAt
+                      ? formatServiceRequestDate(selectedConversation.lastEventAt)
+                      : "Pending"}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3 md:col-span-2">
+                  <p className="text-[11px] font-black uppercase tracking-[0.14em] text-[#64748B]">
                     What they need
                   </p>
                   <p className="mt-1 text-sm font-semibold leading-6 text-[#334155]">
@@ -413,6 +503,15 @@ export function CommunicationsHub() {
                   <p className="mt-1 text-sm font-semibold leading-6 text-[#334155]">
                     {selectedConversation.nextAction ?? "Review conversation."}
                   </p>
+                  {selectedConversation.linkedIntakeRequestId ? (
+                    <p className="mt-2 text-xs font-bold text-emerald-700">
+                      Intake request created
+                    </p>
+                  ) : (
+                    <p className="mt-2 text-xs font-bold text-[#64748B]">
+                      No intake linked yet
+                    </p>
+                  )}
                 </div>
               </div>
 

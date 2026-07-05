@@ -114,11 +114,13 @@ Status:
 - Task 152.1 is complete as Retell webhook ingestion stabilization. The phone webhook now supports Retell `event = call_analyzed` payloads under `call.*`, logs safe structural diagnostics, matches owned source numbers across `+1`/digits/formatted variants, and reuses existing conversation/intake records for repeated `call_id` events.
 - Task 152.5 adds `supabase/migrations/0053_communications_service_role_grants_apply_ready.sql` after production Retell QA showed PostgreSQL error `42501` (`permission denied for table communication_source_accounts`) during service-role source lookup. Apply `0053` before rerunning live Retell QA.
 - Task 152.6 fixes the direct phone-ingestion intake insert payload. `duplicate_confirmed` is an RPC-only control flag, not a table column, so phone ingestion now strips it before inserting `intake_requests`. No migration was created.
+- Task 152.7 displays real ingested phone calls in `/dashboard/communications` and adds `0054_communications_dashboard_visibility_profile_company_apply_ready.sql` so authenticated dashboard users can read company-scoped provider-created conversations through existing owner/creator, company-member, or active profile-company access.
 
 Remaining phone-workflow work before replacing Workiz:
 
 - Apply `0051` and `0052` in dev/staging.
 - Apply `0053` in production/staging so server-side phone ingestion has the minimum `service_role` table grants for source lookup, conversation/transcript/message/timeline writes, intake insert, and customer lookup.
+- Apply `0054` in production/staging so existing ingested phone conversations are visible in the dashboard Communications UI for company-scoped operators.
 - Add a development `communication_source_accounts` row for the owned test number.
 - Use safe replay/probe validation where possible before spending another live Retell call.
 - Configure provider webhook verification/signatures.
