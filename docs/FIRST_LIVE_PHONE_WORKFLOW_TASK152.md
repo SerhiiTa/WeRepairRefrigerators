@@ -215,11 +215,15 @@ Fix:
   - `SELECT, INSERT` on `communication_transcripts`
   - `SELECT, INSERT` on `communication_messages`
   - `SELECT, INSERT` on `communication_timeline_events`
-  - `INSERT` on `intake_requests`
+  - `SELECT, INSERT` on `intake_requests`
   - `SELECT` on `customers`
 - It does not disable RLS, change anon/authenticated policies, modify auth, connect providers, or create jobs/appointments.
 
-After applying `0053`, rerun live Retell QA with one real `call_analyzed` phone call and verify records in Communications Hub plus Intake Inbox.
+Production note:
+
+- The first version of `0053` granted only `INSERT` on `intake_requests`.
+- Live phone ingestion uses `insert(...).select("id").single()` for intake creation, so `GRANT SELECT ON public.intake_requests TO service_role;` was manually applied in production.
+- The repository `0053` migration now reflects the final required state with `SELECT, INSERT` on `intake_requests`.
 
 ## Task 152.6 Intake Payload Schema Fix
 
@@ -274,9 +278,9 @@ Fix:
 - Conversation detail shows source/provider, status, call window, last activity, summary, next action, and intake-created state.
 - New forward-only migration `0054_communications_dashboard_visibility_profile_company_apply_ready.sql` updates `can_access_communication_conversation(...)` to keep existing owner/creator/company-member access and add a narrow active dashboard `profiles.company_id = conversation.company_id` compatibility path.
 
-Task 152 is not operationally complete until the production UI shows these existing ingested calls to an authenticated dashboard user after `0054` is applied.
+At this stage, Task 152 still needed production dashboard visibility confirmation for an authenticated dashboard user after `0054` was applied.
 
-## Task 152.9B Dashboard User Access Repair
+## Task 152.9B/152.9C Dashboard User Access Repair
 
 Production diagnostics confirmed real Retell conversations exist, but `/dashboard/communications` still showed `Conversations: 0` for `info@refrigeratorhoustonrepair.com`.
 
@@ -285,9 +289,52 @@ The latest production conversation was company-scoped to `f0639d2c-6fcf-4ab5-93a
 Fix:
 
 - Apply `supabase/migrations/0055_communications_dashboard_user_access_repair_apply_ready.sql`.
-- The migration updates `public.profiles.company_id` for profile `7d4195e4-572f-4640-a15f-d954123b34d7`.
-- It inserts or repairs an active `public.company_members` row for company `f0639d2c-6fcf-4ab5-93a2-cde8f3ba9633`.
+- The final migration does not update `public.profiles.company_id`.
+- An earlier attempt to update `profiles.company_id` failed correctly because production trigger `prevent_unsafe_profile_updates()` blocks unsafe company assignment changes.
+- The successful production repair used only the authoritative `public.company_members` relationship.
+- It inserts or repairs an active `public.company_members` row for profile `7d4195e4-572f-4640-a15f-d954123b34d7` and company `f0639d2c-6fcf-4ab5-93a2-cde8f3ba9633`.
 - It preserves existing `owner`, `manager`, or `dispatcher` membership roles when already present; otherwise it repairs the role to `owner`.
 - It does not disable RLS, weaken policies, grant public access, modify the Communications UI, or require another live Retell call.
 
 After applying `0055`, refresh `/dashboard/communications` as `info@refrigeratorhoustonrepair.com`. Existing production calls should appear without spending another Retell call.
+
+## Task 152 Final Production State
+
+Task 152 is complete in production.
+
+Verified final production webhook result:
+
+- `phase: completed`
+- `accepted: true`
+- `conversationCreated: true`
+- `intakeCreated: true`
+- `customerRecognitionStatus: matched`
+- `timelineEventsCreated: 1`
+- `transcriptCreated: true`
+
+Verified production behavior:
+
+- Retell `call_analyzed` reaches the production webhook.
+- The webhook normalizes the real Retell payload.
+- Source phone `+13466461949` is matched.
+- `communication_conversations` rows are created.
+- `communication_transcripts` rows are created.
+- `communication_messages` rows are created.
+- `communication_timeline_events` rows are created.
+- `intake_requests` rows are created.
+- `/dashboard/communications` displays existing production phone calls.
+
+Manual production SQL applied during Task 152:
+
+```sql
+grant select on table public.intake_requests to service_role;
+```
+
+Reason: phone ingestion uses `insert(...).select("id").single()` for `intake_requests`, so `service_role` requires `SELECT` in addition to `INSERT`.
+
+The targeted dashboard visibility repair was also applied through `public.company_members` only:
+
+- `profile_id = 7d4195e4-572f-4640-a15f-d954123b34d7`
+- `company_id = f0639d2c-6fcf-4ab5-93a2-cde8f3ba9633`
+
+`profiles.company_id` was not updated. No further paid Retell calls are needed for Task 152. Task 153 has not started.

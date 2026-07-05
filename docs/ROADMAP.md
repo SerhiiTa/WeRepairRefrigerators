@@ -103,7 +103,7 @@ Remaining future communication work:
 
 Status:
 
-- Task 152 is complete as the first live-phone workflow foundation.
+- Task 152 is complete in Production as the first live-phone workflow.
 - Added `supabase/migrations/0052_first_live_phone_workflow_foundation_apply_ready.sql` for `communication_source_accounts` and sanitized call metadata on conversations.
 - Added server-side phone normalization/ingestion under `frontend/src/server/communications/`.
 - Added `POST /api/communications/phone-webhook` and routed the existing `/api/intake/webhook-retell-telnyx` endpoint through the same WRA-owned ingestion flow.
@@ -112,17 +112,17 @@ Status:
 - Provider payloads do not directly create jobs or appointments yet; the dispatcher still converts reviewed intake through the trusted Intake Inbox path.
 - No production phone numbers, outbound SMS, Retell production agent, authentication changes, `.env.local` edits, Estimate AI changes, dashboard redesign, or Task 153 work was added.
 - Task 152.1 is complete as Retell webhook ingestion stabilization. The phone webhook now supports Retell `event = call_analyzed` payloads under `call.*`, logs safe structural diagnostics, matches owned source numbers across `+1`/digits/formatted variants, and reuses existing conversation/intake records for repeated `call_id` events.
-- Task 152.5 adds `supabase/migrations/0053_communications_service_role_grants_apply_ready.sql` after production Retell QA showed PostgreSQL error `42501` (`permission denied for table communication_source_accounts`) during service-role source lookup. Apply `0053` before rerunning live Retell QA.
+- Task 152.5 adds `supabase/migrations/0053_communications_service_role_grants_apply_ready.sql` after production Retell QA showed PostgreSQL error `42501` (`permission denied for table communication_source_accounts`) during service-role source lookup. The final production grant set includes `SELECT, INSERT` on `intake_requests`; `GRANT SELECT ON public.intake_requests TO service_role;` was manually applied after the first `0053` apply.
 - Task 152.6 fixes the direct phone-ingestion intake insert payload. `duplicate_confirmed` is an RPC-only control flag, not a table column, so phone ingestion now strips it before inserting `intake_requests`. No migration was created.
 - Task 152.7 displays real ingested phone calls in `/dashboard/communications` and adds `0054_communications_dashboard_visibility_profile_company_apply_ready.sql` so authenticated dashboard users can read company-scoped provider-created conversations through existing owner/creator, company-member, or active profile-company access.
-- Task 152.9B adds `0055_communications_dashboard_user_access_repair_apply_ready.sql` to repair the production operator access relationship for `info@refrigeratorhoustonrepair.com` and company `f0639d2c-6fcf-4ab5-93a2-cde8f3ba9633`. Apply it after `0054` if `/dashboard/communications` still shows zero conversations for that user.
+- Task 152.9B/152.9C finalizes the production operator access relationship for `info@refrigeratorhoustonrepair.com` and company `f0639d2c-6fcf-4ab5-93a2-cde8f3ba9633`. The final successful production repair used `company_members` only. `profiles.company_id` was not updated because `prevent_unsafe_profile_updates()` blocks unsafe company assignment changes.
 
 Remaining phone-workflow work before replacing Workiz:
 
 - Apply `0051` and `0052` in dev/staging.
-- Apply `0053` in production/staging so server-side phone ingestion has the minimum `service_role` table grants for source lookup, conversation/transcript/message/timeline writes, intake insert, and customer lookup.
-- Apply `0054` in production/staging so existing ingested phone conversations are visible in the dashboard Communications UI for company-scoped operators.
-- Apply `0055` in production if the known operator account still needs its active `company_members` and `profiles.company_id` relationship repaired for existing production Retell calls.
+- Production Task 152 phone ingestion and Communications UI visibility are verified complete. No additional paid Retell call is needed for Task 152.
+- Keep `0053` as the required service-role grants baseline, including `SELECT, INSERT` on `intake_requests`.
+- Keep `0055` company-members-only; do not reintroduce direct `profiles.company_id` updates.
 - Add a development `communication_source_accounts` row for the owned test number.
 - Use safe replay/probe validation where possible before spending another live Retell call.
 - Configure provider webhook verification/signatures.

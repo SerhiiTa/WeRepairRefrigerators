@@ -12,6 +12,10 @@
 --   Communications Hub tables created in 0051/0052 did not explicitly grant the
 --   PostgreSQL service_role role the table privileges used by ingestion.
 --
+--   Final Task 152 production note:
+--   Phone ingestion inserts intake_requests with insert(...).select("id").single(),
+--   so service_role needs SELECT on intake_requests in addition to INSERT.
+--
 -- Safety model:
 --   - This does not disable RLS.
 --   - This does not modify anon/authenticated policies.
@@ -35,7 +39,7 @@ grant select, insert on table public.communication_messages
 grant select, insert on table public.communication_timeline_events
   to service_role;
 
-grant insert on table public.intake_requests
+grant select, insert on table public.intake_requests
   to service_role;
 
 grant select on table public.customers
