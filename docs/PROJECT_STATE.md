@@ -1094,6 +1094,26 @@ Use the webpack build command for verification because it has been the stable bu
 - Repair Intelligence is now architecturally separated from Estimate AI. Future Repair Intelligence should produce a validated repair scope; the Estimate Builder should transform that validated scope into customer-facing estimate language and pricing without deciding what repairs exist.
 - `frontend/.env.local` was not modified, authentication was not changed, Intake was not changed, and Task 151 was not started.
 
+## Task 152.2 production phone intake workflow audit
+
+- Created `docs/TASK152_2_PHONE_WORKFLOW_AUDIT.md` to document the verified production Phone Intake chain from Retell conversation through transcript/message/timeline/intake and converted CRM job.
+- Existing production records confirm Retell calls create `communication_conversations`, `communication_transcripts`, `communication_messages`, `communication_timeline_events`, and `intake_requests`; the audited intake was converted to a service request/job through `linked_service_request_id`.
+- Hardened `phone-normalization.ts` so Retell date/window/address data maps into structured intake fields instead of only display strings.
+- Hardened `phone-workflow.ts` so parsed unit/city/state/country and safe normalization metadata are persisted during phone intake creation.
+- Added apply-ready migration `supabase/migrations/0056_phone_intake_mapping_hardening_apply_ready.sql` to link/create customer appliances and format service request addresses after intake conversion. Apply `0056` in Supabase before expecting production backfill.
+- No Retell call was made, no Communications UI redesign was added, and Task 153 was not started.
+
+## Task 152.4 phone intake production bug fixes
+
+- Created `docs/TASK152_4_PHONE_INTAKE_PRODUCTION_BUGFIXES.md` for the post-`0056` production bugfix notes.
+- `phone-normalization.ts` now handles Retell address text like `3306 South Fry Road, apartment 437, Katy` as street `3306 South Fry Road`, unit `apartment 437`, and city `Katy`.
+- Retell relative dates such as `tomorrow` now resolve from the call start timestamp in `America/Chicago`, not server/browser time.
+- Retell appointment windows such as `9 to 11 AM`, `9 AM to 11 AM`, `between 9 and 11`, `tomorrow morning between 9 and 11`, `from 9 to 11`, and `9-11 AM` now map to structured start/end times.
+- `phone-workflow.ts` now persists the parsed address/window metadata and parsed unit/city/state/country on phone-created intakes.
+- Added deterministic phone normalization cases in `frontend/src/server/communications/phone-normalization-cases.ts`.
+- Added internal Retell recording lookup and playback for `/dashboard/communications` through a server-only Retell API helper. Recordings are fetched live with `RETELL_API_KEY`, are not stored in Supabase Storage, and are not customer-facing.
+- No new schema migration was required, no additional paid Retell call was made, authentication was not changed, and Task 153 was not started.
+
 ## Current git workflow
 
 - Work from the repository root: `/Users/serhiitatarenko/Desktop/WeRepairRefrigerators`

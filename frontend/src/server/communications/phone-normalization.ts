@@ -8,6 +8,8 @@ export type PhoneWorkflowProvider = "telnyx" | "retell";
 
 export type PhoneTranscriptSpeaker = "customer" | "ai" | "human_transfer";
 
+const PHONE_WORKFLOW_TIME_ZONE = "America/Chicago";
+
 export type NormalizedPhoneTranscriptSegment = {
   speaker: PhoneTranscriptSpeaker;
   text: string;
@@ -27,6 +29,10 @@ export type NormalizedPhoneWorkflow = {
   customerName: string | null;
   customerEmail: string | null;
   serviceAddress: string | null;
+  serviceUnit: string | null;
+  serviceCity: string | null;
+  serviceState: string | null;
+  serviceCountry: string | null;
   applianceType: string | null;
   brand: string | null;
   modelNumber: string | null;
@@ -84,9 +90,163 @@ function cleanIsoDate(value: unknown): string | null {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
-function cleanDate(value: unknown): string | null {
-  const text = cleanText(value, 20);
-  return text && /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null;
+type DateParts = {
+  year: number;
+  month: number;
+  day: number;
+};
+
+function datePartsFromReference(referenceIso?: string): DateParts {
+  const referenceDate = referenceIso ? new Date(referenceIso) : new Date();
+  const reference = Number.isNaN(referenceDate.getTime())
+    ? new Date()
+    : referenceDate;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: PHONE_WORKFLOW_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(reference);
+
+  return {
+    year: Number(parts.find((part) => part.type === "year")?.value),
+    month: Number(parts.find((part) => part.type === "month")?.value),
+    day: Number(parts.find((part) => part.type === "day")?.value),
+  };
+}
+
+function toDateOnly(parts: DateParts): string | null {
+  const date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
+  if (
+    Number.isNaN(date.getTime()) ||
+    date.getUTCFullYear() !== parts.year ||
+    date.getUTCMonth() !== parts.month - 1 ||
+    date.getUTCDate() !== parts.day
+  ) {
+    return null;
+  }
+
+  return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+function addDays(parts: DateParts, days: number): DateParts {
+  const date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
+  date.setUTCDate(date.getUTCDate() + days);
+
+  return {
+    year: date.getUTCFullYear(),
+    month: date.getUTCMonth() + 1,
+    day: date.getUTCDate(),
+  };
+}
+
+function weekdayIndex(value: string): number | null {
+  const weekdays = [
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+  ];
+  const normalized = value.toLowerCase();
+  const index = weekdays.findIndex((day) => normalized.includes(day));
+
+  return index >= 0 ? index : null;
+}
+
+function monthIndex(value: string): number | null {
+  const months = [
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+  ];
+  const lower = value.toLowerCase();
+  const index = months.findIndex((month) => lower.includes(month));
+
+  return index >= 0 ? index + 1 : null;
+}
+
+function cleanDate(value: unknown, referenceIso?: string): string | null {
+  const text = cleanText(value, 80);
+  if (!text) {
+    return null;
+  }
+
+  const referenceParts = datePartsFromReference(referenceIso);
+  const lower = text
+    .toLowerCase()
+    .replace(/\b(\d{1,2})(st|nd|rd|th)\b/g, "$1")
+    .replace(/,/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return text;
+  }
+
+  if (lower.includes("today")) {
+    return toDateOnly(referenceParts);
+  }
+
+  if (lower.includes("tomorrow")) {
+    return toDateOnly(addDays(referenceParts, 1));
+  }
+
+  const slashMatch = text.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/);
+  if (slashMatch) {
+    const month = Number(slashMatch[1]);
+    const day = Number(slashMatch[2]);
+    const yearText = slashMatch[3];
+    const year = yearText
+      ? Number(yearText.length === 2 ? `20${yearText}` : yearText)
+      : referenceParts.year;
+    return toDateOnly({ year, month, day });
+  }
+
+  const month = monthIndex(lower);
+  if (month) {
+    const dayMatch = lower.match(/\b(\d{1,2})\b/);
+    if (dayMatch) {
+      let year = Number(lower.match(/\b(20\d{2})\b/)?.[1] ?? referenceParts.year);
+      const day = Number(dayMatch[1]);
+      let normalized = toDateOnly({ year, month, day });
+
+      if (
+        normalized &&
+        !/\b(20\d{2})\b/.test(lower) &&
+        normalized < toDateOnly(referenceParts)!
+      ) {
+        year += 1;
+        normalized = toDateOnly({ year, month, day });
+      }
+
+      return normalized;
+    }
+  }
+
+  const targetWeekday = weekdayIndex(lower);
+  if (targetWeekday !== null) {
+    const referenceDate = new Date(
+      Date.UTC(referenceParts.year, referenceParts.month - 1, referenceParts.day),
+    );
+    const currentWeekday = referenceDate.getUTCDay();
+    const delta = (targetWeekday - currentWeekday + 7) % 7 || 7;
+
+    return toDateOnly(addDays(referenceParts, delta));
+  }
+
+  return null;
 }
 
 function cleanZip(value: unknown): string | null {
@@ -98,6 +258,185 @@ function cleanTime(value: unknown): string | null {
   const text = cleanText(value, 16);
   const match = text?.match(/^([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$/);
   return match ? `${match[1]}:${match[2]}:${match[3] ?? "00"}` : null;
+}
+
+type ParsedAddressParts = {
+  street: string | null;
+  unit: string | null;
+  city: string | null;
+  state: string | null;
+  zip: string | null;
+  country: string | null;
+};
+
+type ParsedWindow = {
+  start: string | null;
+  end: string | null;
+};
+
+function parseServiceAddressParts(value: unknown): ParsedAddressParts {
+  const raw = cleanText(value, 300);
+  if (!raw) {
+    return {
+      street: null,
+      unit: null,
+      city: null,
+      state: null,
+      zip: null,
+      country: null,
+    };
+  }
+
+  const parts = raw
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  let street = parts[0] ?? raw;
+  let city: string | null = null;
+  let state: string | null = null;
+  let zip = cleanZip(raw);
+  let country: string | null = null;
+  let unit: string | null = null;
+
+  const unitMatch = street.match(
+    /\b(?:apt|apartment|unit|suite|ste|#)\s*[A-Za-z0-9-]+(?:\b|$)/i,
+  );
+  unit = unitMatch?.[0]?.trim() ?? null;
+  if (unit && unitMatch) {
+    street = street.replace(unitMatch[0], "").replace(/[,\s]+$/, "").trim();
+  }
+
+  for (const part of parts.slice(1)) {
+    const partUnit = part.match(
+      /\b(?:apt|apartment|unit|suite|ste|#)\s*[A-Za-z0-9-]+(?:\b|$)/i,
+    )?.[0]?.trim();
+    if (!unit && partUnit) {
+      unit = partUnit;
+      continue;
+    }
+
+    const stateZipMatch = part.match(/\b([A-Za-z]{2})\b(?:\s+(\d{5})(?:-\d{4})?)?/);
+    if (stateZipMatch && (stateZipMatch[2] || part.trim().length <= 12)) {
+      state = stateZipMatch[1].toUpperCase();
+      zip = stateZipMatch[2] ?? zip;
+      continue;
+    }
+
+    const partZip = cleanZip(part);
+    if (partZip && !zip) {
+      zip = partZip;
+      continue;
+    }
+
+    if (!city && /^[A-Za-z][A-Za-z\s.'-]{1,80}$/.test(part)) {
+      city = cleanText(part, 120);
+      continue;
+    }
+
+    if (!country && /\b(united states|usa|us)\b/i.test(part)) {
+      country = cleanText(part, 20);
+    }
+  }
+
+  return {
+    street: cleanText(street, 240) ?? raw,
+    unit,
+    city,
+    state,
+    zip,
+    country,
+  };
+}
+
+function parseClockToken(
+  token: string,
+  fallbackMeridiem?: "am" | "pm" | null,
+): { hour: number; minute: number; meridiem: "am" | "pm" | null } | null {
+  const match = token
+    .trim()
+    .toLowerCase()
+    .match(/^(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?$/);
+  if (!match) {
+    return null;
+  }
+
+  const rawHour = Number(match[1]);
+  const minute = Number(match[2] ?? "0");
+  const explicitMeridiem = match[3]?.startsWith("p")
+    ? "pm"
+    : match[3]?.startsWith("a")
+      ? "am"
+      : null;
+  const meridiem = explicitMeridiem ?? fallbackMeridiem ?? null;
+  if (rawHour < 1 || rawHour > 23 || minute > 59) {
+    return null;
+  }
+
+  let hour = rawHour;
+  if (meridiem === "pm" && hour < 12) {
+    hour += 12;
+  }
+  if (meridiem === "am" && hour === 12) {
+    hour = 0;
+  }
+
+  return { hour, minute, meridiem };
+}
+
+function formatTime(hour: number, minute: number): string {
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00`;
+}
+
+function parseAppointmentWindow(value: unknown): ParsedWindow {
+  const text = cleanText(value, 180)?.toLowerCase();
+  if (!text) {
+    return { start: null, end: null };
+  }
+
+  const normalized = text
+    .replace(/[–—]/g, "-")
+    .replace(/\bbetween\b|\bfrom\b/g, " ")
+    .replace(/\bto\b|\band\b|\buntil\b|\bthrough\b/g, "-")
+    .replace(/\s+/g, " ");
+  const rangeMatch = normalized.match(
+    /(\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?)\s*-\s*(\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?)/,
+  );
+
+  if (!rangeMatch) {
+    return { start: null, end: null };
+  }
+
+  const contextMeridiem = text.includes("afternoon") || text.includes("evening")
+    ? "pm"
+    : text.includes("morning")
+      ? "am"
+      : null;
+  const endMeridiem = rangeMatch[2].toLowerCase().includes("p")
+    ? "pm"
+    : rangeMatch[2].toLowerCase().includes("a")
+      ? "am"
+      : contextMeridiem;
+  const startMeridiem = rangeMatch[1].toLowerCase().includes("p")
+    ? "pm"
+    : rangeMatch[1].toLowerCase().includes("a")
+      ? "am"
+      : endMeridiem ?? contextMeridiem ?? "am";
+  const start = parseClockToken(rangeMatch[1], startMeridiem);
+  const end = parseClockToken(rangeMatch[2], endMeridiem);
+
+  if (
+    !start ||
+    !end ||
+    start.hour > end.hour ||
+    (start.hour === end.hour && start.minute >= end.minute)
+  ) {
+    return { start: null, end: null };
+  }
+
+  return {
+    start: formatTime(start.hour, start.minute),
+    end: formatTime(end.hour, end.minute),
+  };
 }
 
 export function normalizePhoneNumber(value?: unknown): string | null {
@@ -130,9 +469,9 @@ function pickText(payload: unknown, paths: string[], maxLength = 500): string | 
   return null;
 }
 
-function pickDate(payload: unknown, paths: string[]): string | null {
+function pickDate(payload: unknown, paths: string[], referenceIso?: string): string | null {
   for (const path of paths) {
-    const date = cleanDate(getPath(payload, path));
+    const date = cleanDate(getPath(payload, path), referenceIso);
     if (date) {
       return date;
     }
@@ -307,6 +646,69 @@ export function normalizePhoneWorkflowPayload(
   ], 120);
 
   const bookingStatus = inferBookingStatus(payload);
+  const callStartedAt = pickIso(payload, [
+    "start_time",
+    "started_at",
+    "call.start_timestamp",
+    "data.payload.start_time",
+  ]);
+  const callEndedAt = pickIso(payload, [
+    "end_time",
+    "ended_at",
+    "call.end_timestamp",
+    "data.payload.end_time",
+  ]);
+  const rawServiceAddress = pickText(payload, [
+    "call.call_analysis.custom_analysis_data.address",
+    "call_analysis.custom_analysis_data.address",
+    "service_address",
+    "address",
+    "customer.address",
+    "call_analysis.custom_analysis_data.service_address",
+    "call.call_analysis.custom_analysis_data.service_address",
+  ], 300);
+  const rawAppointmentDate = pickText(payload, [
+    "call.call_analysis.custom_analysis_data.appointment_date",
+    "call.call_analysis.custom_analysis_data.requested_date",
+    "call.call_analysis.custom_analysis_data.preferred_date",
+    "call_analysis.custom_analysis_data.appointment_date",
+    "call_analysis.custom_analysis_data.requested_date",
+    "call_analysis.custom_analysis_data.preferred_date",
+    "appointment_date",
+    "requested_date",
+    "preferred_date",
+  ], 120);
+  const parsedAddress = parseServiceAddressParts(rawServiceAddress);
+  const structuredUnit = pickText(payload, [
+    "call.call_analysis.custom_analysis_data.unit",
+    "call.call_analysis.custom_analysis_data.apartment",
+    "call_analysis.custom_analysis_data.unit",
+    "call_analysis.custom_analysis_data.apartment",
+    "unit",
+    "apartment",
+  ], 80);
+  const structuredCity = pickText(payload, [
+    "call.call_analysis.custom_analysis_data.city",
+    "call_analysis.custom_analysis_data.city",
+    "city",
+  ], 120);
+  const structuredState = pickText(payload, [
+    "call.call_analysis.custom_analysis_data.state",
+    "call_analysis.custom_analysis_data.state",
+    "state",
+  ], 20)?.toUpperCase() ?? null;
+  const structuredCountry = pickText(payload, [
+    "call.call_analysis.custom_analysis_data.country",
+    "call_analysis.custom_analysis_data.country",
+    "country",
+  ], 20);
+  const preferredAppointmentWindow = pickText(payload, [
+    "call.call_analysis.custom_analysis_data.appointment_time",
+    "call_analysis.custom_analysis_data.appointment_time",
+    "preferred_appointment_window",
+    "preferredAppointmentWindow",
+  ], 180);
+  const parsedAppointmentWindow = parseAppointmentWindow(preferredAppointmentWindow);
 
   return {
     provider,
@@ -356,15 +758,11 @@ export function normalizePhoneWorkflowPayload(
       "call_analysis.custom_analysis_data.customer_email",
       "call.call_analysis.custom_analysis_data.customer_email",
     ], 180),
-    serviceAddress: pickText(payload, [
-      "call.call_analysis.custom_analysis_data.address",
-      "call_analysis.custom_analysis_data.address",
-      "service_address",
-      "address",
-      "customer.address",
-      "call_analysis.custom_analysis_data.service_address",
-      "call.call_analysis.custom_analysis_data.service_address",
-    ], 240),
+    serviceAddress: parsedAddress.street ?? rawServiceAddress,
+    serviceUnit: structuredUnit ?? parsedAddress.unit,
+    serviceCity: structuredCity ?? parsedAddress.city,
+    serviceState: structuredState ?? parsedAddress.state,
+    serviceCountry: structuredCountry ?? parsedAddress.country,
     applianceType: pickText(payload, [
       "call.call_analysis.custom_analysis_data.appliance_type",
       "call_analysis.custom_analysis_data.appliance_type",
@@ -397,47 +795,38 @@ export function normalizePhoneWorkflowPayload(
         "zip",
         "zip_code",
       ], 20),
-    ),
+    ) ?? parsedAddress.zip,
     appointmentDate: pickDate(payload, [
       "call.call_analysis.custom_analysis_data.appointment_date",
+      "call.call_analysis.custom_analysis_data.requested_date",
+      "call.call_analysis.custom_analysis_data.preferred_date",
       "call_analysis.custom_analysis_data.appointment_date",
+      "call_analysis.custom_analysis_data.requested_date",
+      "call_analysis.custom_analysis_data.preferred_date",
       "appointment_date",
+      "requested_date",
+      "preferred_date",
       "call_analysis.custom_analysis_data.appointment_date",
       "call.call_analysis.custom_analysis_data.appointment_date",
-    ]),
-    preferredAppointmentWindow: pickText(payload, [
-      "call.call_analysis.custom_analysis_data.appointment_time",
-      "call_analysis.custom_analysis_data.appointment_time",
-      "preferred_appointment_window",
-      "preferredAppointmentWindow",
-    ], 180),
+    ], callStartedAt ?? occurredAt),
+    preferredAppointmentWindow,
     windowStartTime: pickTime(payload, [
       "window_start_time",
       "call.call_analysis.custom_analysis_data.window_start_time",
       "call_analysis.custom_analysis_data.window_start_time",
       "call.call_analysis.custom_analysis_data.window_start_time",
-    ]),
+    ]) ?? parsedAppointmentWindow.start,
     windowEndTime: pickTime(payload, [
       "window_end_time",
       "call.call_analysis.custom_analysis_data.window_end_time",
       "call_analysis.custom_analysis_data.window_end_time",
       "call.call_analysis.custom_analysis_data.window_end_time",
-    ]),
+    ]) ?? parsedAppointmentWindow.end,
     bookingStatus,
     callStatus,
     occurredAt,
-    callStartedAt: pickIso(payload, [
-      "start_time",
-      "started_at",
-      "call.start_timestamp",
-      "data.payload.start_time",
-    ]),
-    callEndedAt: pickIso(payload, [
-      "end_time",
-      "ended_at",
-      "call.end_timestamp",
-      "data.payload.end_time",
-    ]),
+    callStartedAt,
+    callEndedAt,
     transcriptText,
     transcriptSegments,
     summary,
@@ -450,6 +839,19 @@ export function normalizePhoneWorkflowPayload(
       payload_shape: isRecord(payload) ? Object.keys(payload).slice(0, 20) : [],
       call_status: callStatus,
       booking_status: bookingStatus,
+      normalized_fields: {
+        parsed_address: Boolean(
+          parsedAddress.street || parsedAddress.city || parsedAddress.zip,
+        ),
+        parsed_window: Boolean(
+          parsedAppointmentWindow.start && parsedAppointmentWindow.end,
+        ),
+      },
+      raw_inputs: {
+        service_address: rawServiceAddress,
+        appointment_date: rawAppointmentDate,
+        appointment_window: preferredAppointmentWindow,
+      },
     },
   };
 }

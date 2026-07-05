@@ -29,6 +29,26 @@ type TimelineState =
   | { status: "ready"; events: CommunicationTimelineEvent[]; error: null }
   | { status: "error"; events: CommunicationTimelineEvent[]; error: string };
 
+type RecordingState =
+  | { status: "idle"; recording: null; message: null }
+  | { status: "loading"; recording: null; message: null }
+  | {
+      status: "ready";
+      recording: RetellRecording | null;
+      audioUrl: string | null;
+      message: string | null;
+    }
+  | { status: "error"; recording: null; message: string };
+
+type RetellRecording = {
+  recordingUrl: string | null;
+  recordingMultiChannelUrl: string | null;
+  scrubbedRecordingUrl: string | null;
+  durationMs: number | null;
+  startTimestamp: string | null;
+  endTimestamp: string | null;
+};
+
 type ConversationRow = {
   id: string;
   primary_source_type: DatabaseCommunicationSourceType;
@@ -156,6 +176,18 @@ function formatCallWindow(conversation: CommunicationConversation): string {
   return "Call time pending";
 }
 
+function formatDuration(durationMs: number | null): string | null {
+  if (!durationMs || durationMs <= 0) {
+    return null;
+  }
+
+  const totalSeconds = Math.round(durationMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
 function getHubReadError(message: string) {
   if (
     message.includes("communication_conversations") ||
@@ -180,6 +212,11 @@ export function CommunicationsHub() {
     status: "idle",
     events: [],
     error: null,
+  });
+  const [recordingState, setRecordingState] = useState<RecordingState>({
+    status: "idle",
+    recording: null,
+    message: null,
   });
 
   useEffect(() => {
@@ -295,6 +332,123 @@ export function CommunicationsHub() {
     };
   }, [selectedConversationId]);
 
+  useEffect(() => {
+    let isMounted = true;
+    let audioObjectUrl: string | null = null;
+
+    async function loadRecording() {
+      if (!selectedConversationId) {
+        setRecordingState({ status: "idle", recording: null, message: null });
+        return;
+      }
+
+      const supabase = getSupabaseBrowserClient();
+      if (!supabase) {
+        setRecordingState({
+          status: "error",
+          recording: null,
+          message: "Recording lookup is not configured for this workspace.",
+        });
+        return;
+      }
+
+      setRecordingState({ status: "loading", recording: null, message: null });
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        if (isMounted) {
+          setRecordingState({
+            status: "error",
+            recording: null,
+            message: "Log in again to load call recordings.",
+          });
+        }
+        return;
+      }
+
+      const response = await fetch(
+        `/api/communications/retell-recording?conversationId=${encodeURIComponent(
+          selectedConversationId,
+        )}`,
+        {
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+          },
+        },
+      );
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            ok?: boolean;
+            recording?: RetellRecording | null;
+            message?: string | null;
+          }
+        | null;
+
+      if (!isMounted) {
+        return;
+      }
+
+      if (!response.ok || !payload?.ok) {
+        setRecordingState({
+          status: "error",
+          recording: null,
+          message: payload?.message ?? "Could not load call recording.",
+        });
+        return;
+      }
+
+      let audioUrl: string | null = null;
+      let message = payload.message ?? null;
+
+      if (payload.recording && !message) {
+        const audioResponse = await fetch(
+          `/api/communications/retell-recording/audio?conversationId=${encodeURIComponent(
+            selectedConversationId,
+          )}`,
+          {
+            headers: {
+              Authorization: `Bearer ${session.access_token}`,
+            },
+          },
+        );
+
+        if (!isMounted) {
+          return;
+        }
+
+        if (audioResponse.ok) {
+          const audioBlob = await audioResponse.blob();
+          if (!isMounted) {
+            return;
+          }
+          audioObjectUrl = URL.createObjectURL(audioBlob);
+          audioUrl = audioObjectUrl;
+        } else {
+          message = "Recording metadata loaded, but audio playback is unavailable.";
+        }
+      }
+
+      setRecordingState({
+        status: "ready",
+        recording: payload.recording ?? null,
+        audioUrl,
+        message,
+      });
+    }
+
+    void loadRecording();
+
+    return () => {
+      isMounted = false;
+      if (audioObjectUrl) {
+        URL.revokeObjectURL(audioObjectUrl);
+      }
+    };
+  }, [selectedConversationId]);
+
   const selectedConversation = useMemo(
     () =>
       hubState.conversations.find(
@@ -302,6 +456,8 @@ export function CommunicationsHub() {
       ) ?? null,
     [hubState.conversations, selectedConversationId],
   );
+  const recordingAudioUrl =
+    recordingState.status === "ready" ? recordingState.audioUrl : null;
 
   return (
     <main className="space-y-5">
@@ -487,6 +643,41 @@ export function CommunicationsHub() {
                       ? formatServiceRequestDate(selectedConversation.lastEventAt)
                       : "Pending"}
                   </p>
+                </div>
+                <div className="rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3 md:col-span-2">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-[11px] font-black uppercase tracking-[0.14em] text-[#64748B]">
+                        Call recording
+                      </p>
+                      <p className="mt-1 text-sm font-semibold leading-6 text-[#334155]">
+                        {recordingState.status === "loading"
+                          ? "Loading recording..."
+                          : recordingState.status === "error"
+                            ? recordingState.message
+                            : recordingAudioUrl
+                              ? "Recording available for internal review."
+                              : recordingState.message ?? "No recording available yet."}
+                      </p>
+                    </div>
+                    {recordingState.recording?.durationMs ? (
+                      <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-[#64748B]">
+                        {formatDuration(recordingState.recording.durationMs)}
+                      </span>
+                    ) : null}
+                  </div>
+                  {recordingAudioUrl ? (
+                    <div className="mt-3">
+                      <audio
+                        className="w-full"
+                        controls
+                        preload="none"
+                        src={recordingAudioUrl}
+                      >
+                        <track kind="captions" />
+                      </audio>
+                    </div>
+                  ) : null}
                 </div>
                 <div className="rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3 md:col-span-2">
                   <p className="text-[11px] font-black uppercase tracking-[0.14em] text-[#64748B]">

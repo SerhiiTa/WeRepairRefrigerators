@@ -338,3 +338,56 @@ The targeted dashboard visibility repair was also applied through `public.compan
 - `company_id = f0639d2c-6fcf-4ab5-93a2-cde8f3ba9633`
 
 `profiles.company_id` was not updated. No further paid Retell calls are needed for Task 152. Task 153 has not started.
+
+## Task 152.2 Production Phone Intake Workflow Audit
+
+Task 152.2 traced the existing production phone workflow using stored production records only. No new Retell call was made.
+
+Verified production chain:
+
+- `communication_conversations`
+- `communication_transcripts`
+- `communication_messages`
+- `communication_timeline_events`
+- `intake_requests`
+- converted `service_requests` via `intake_requests.linked_service_request_id`
+
+Audit findings:
+
+- Retell display windows such as `9 AM to 11 AM` were previously preserved as labels but not converted into structured `window_start_time` / `window_end_time`.
+- Flexible appointment dates were too strict because only `YYYY-MM-DD` was accepted.
+- Address components could stay collapsed in `service_address`.
+- Converted phone jobs used copied appliance fields but did not link/create `customer_appliances`.
+- The converted intake linked to the service request, but the conversation row itself did not back-fill `service_request_id`.
+
+Hardening added:
+
+- `phone-normalization.ts` now parses flexible dates, AM/PM arrival windows, and address components.
+- `phone-workflow.ts` now writes parsed unit/city/state/country plus safe normalization metadata into intake creation.
+- New apply-ready migration `0056_phone_intake_mapping_hardening_apply_ready.sql` adds post-conversion syncing so converted intakes link/create customer appliances and format service request addresses.
+
+Apply `0056` in Supabase before expecting production appliance backfill or future converted phone intakes to gain customer appliance links automatically. No additional paid Retell call is needed; verify with existing production records.
+
+## Task 152.4 Production Phone Intake Bug Fixes
+
+After `0056` was applied and a real Retell production call was tested, three intake mapping issues were found:
+
+1. Address text like `3306 South Fry Road, apartment 437, Katy` left unit/city data incomplete or shifted.
+2. Relative dates such as `tomorrow` needed to resolve from the Retell call start timestamp in `America/Chicago`, not server/browser date.
+3. Natural appointment windows such as `9 to 11 AM`, `between 9 and 11`, and `9-11 AM` needed structured `window_start_time` and `window_end_time`.
+
+Fixes:
+
+- `phone-normalization.ts` now parses unit markers from every comma-separated address segment and maps the remaining city segment correctly.
+- Relative date parsing now uses `call.start_timestamp` when present and calculates the date in Central time.
+- Window parsing supports common Retell/customer phrases including `9 to 11 AM`, `9 AM to 11 AM`, `between 9 and 11`, `tomorrow morning between 9 and 11`, `from 9 to 11`, and `9-11 AM`.
+- `phone-workflow.ts` persists parsed unit/city/state/country plus safe raw input/normalization metadata on phone-created intakes.
+- `frontend/src/server/communications/phone-normalization-cases.ts` captures deterministic address/date/window regression cases.
+
+Retell recording foundation:
+
+- `/dashboard/communications` now includes a small internal call recording panel for Retell conversations.
+- `/api/communications/retell-recording` loads the selected conversation through the authenticated dashboard session and then fetches Retell call metadata server-side.
+- The Retell API key remains server-only, no audio is stored in Supabase Storage, and recordings are not customer-facing.
+
+No new schema migration was required for Task 152.4. No additional paid Retell call was made. Task 153 has not started.
