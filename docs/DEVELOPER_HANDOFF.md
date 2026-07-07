@@ -924,3 +924,12 @@ Some existing files may be uncommitted from prior tasks. Check `git status` befo
 - Financial customer metrics are for `company_owner` and `admin` roles only. Do not show lifetime revenue or outstanding balance to normal technician roles by default.
 - Keep address semantics strict. Customer primary address and job service address are separate. The Job Workspace `Save Address` action updates only the job. `Save as Customer Primary Address` is the explicit path for promoting the current service address to the customer record.
 - Do not mix this dashboard Customer CRM with customer portal navigation, Retell/phone ingestion, auth, Estimate/Invoice redesign, or Property OS implementation without an explicit future task.
+
+## Task 158.5 / 158.6 Daily Operating Workflow Architecture
+
+- Read `docs/WRA_DAILY_OPERATING_WORKFLOW.md` before changing Dashboard, Communications Hub, Job Workspace, or `/dashboard/workspace`.
+- Owner QA determined that Workspace should not become a separate permanent main menu section. The correct daily model is Dashboard, Communications Hub, and Job Workspace.
+- Dashboard is the daily command center and business overview. Communications Hub processes calls/messages/intake/customer conversations. Job Workspace executes one specific job.
+- Customer is the daily operations anchor. Jobs are events inside the customer relationship.
+- Task 158.6 removes Workspace from the main navigation and removes the temporary `/dashboard/workspace` route/component. Do not restore it as a competing work center.
+- Fold useful prototype ideas only into Dashboard, Communications Hub, or Job Workspace through future explicit tasks. Do not add Retell changes, phone webhook changes, SMS/email sending, provider calls, AI Repair Assistant behavior, Vendor Intelligence, Community, Property OS implementation, notification delivery, Estimate/Invoice/Payment work, or dashboard redesign from this handoff note.

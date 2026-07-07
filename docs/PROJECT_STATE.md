@@ -1166,3 +1166,11 @@ Use the webpack build command for verification because it has been the stable bu
 - Historical sections are collapsed by default: profile, addresses, assets, estimates, invoices, communication history, internal notes, customer timeline, and repair history. Open jobs remain immediately visible because current work comes first.
 - Address behavior is explicit: job service address edits remain job-scoped, customer primary address can be saved separately from the Job Workspace, and historical job addresses are not rewritten.
 - No authentication, Retell/phone workflow, Communications architecture, Estimate/Invoice redesign, production provider work, or Property OS implementation was added.
+
+## Task 158.5 / 158.6 daily operating workflow architecture
+
+- Owner QA determined that the Task 158 `/dashboard/workspace` prototype should not become a separate permanent main menu section competing with Dashboard.
+- Task 158.5 created `docs/WRA_DAILY_OPERATING_WORKFLOW.md` and established the correct daily architecture: Dashboard is the business overview and daily command center, Communications Hub is the working center for calls/messages/intake/customer conversations, and Job Workspace is the working center for one specific job.
+- The central daily operations object is Customer, not Job. Jobs remain important, but they are events inside a customer relationship that also includes conversations, calls, appliances, estimates, invoices, payments, notes, service addresses, and repair history.
+- Task 158.6 removes the Workspace prototype from main navigation and removes the temporary `/dashboard/workspace` route/component. Useful ideas from the prototype should be folded into Dashboard, Communications Hub, or Job Workspace only through future explicit tasks.
+- No Dashboard redesign, Communications Hub redesign, Job Workspace redesign, database, Supabase, Retell, phone workflow, SMS/email, notification, estimate, invoice, payment, or provider work was added.

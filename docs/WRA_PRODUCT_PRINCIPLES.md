@@ -163,3 +163,27 @@ A solo technician should receive simple defaults and nearly zero routing setup. 
 Attention should be modeled before notifications. The system should first decide who needs to notice an operational event, how urgent it is, and whether it should be grouped, delayed, ignored, or escalated. Delivery channels such as dashboard, push, SMS, email, browser, mobile app, desktop, and future voice are outputs of that decision, not the operating model itself.
 
 See `docs/ATTENTION_ENGINE_AND_COMPANY_MODES.md` before implementing future notification, attention, routing, settings, communications, or operational queue work.
+
+## 26. Three Daily Work Centers
+
+WRA should not create competing home screens.
+
+Daily appliance repair operations should resolve into three centers:
+
+- Dashboard: the daily command center and business overview.
+- Communications Hub: the working center for calls, messages, intake, and customer conversations.
+- Job Workspace: the working center for one specific job.
+
+If a new screen duplicates one of these centers, fold the useful idea into the correct center instead of adding another daily destination.
+
+Task 158.6 removed the temporary Workspace prototype from main navigation and removed the `/dashboard/workspace` route/component. Do not restore a fourth competing daily work center without a new architecture decision.
+
+## 27. Customer First In Daily Operations
+
+The customer is the daily operations anchor.
+
+A job is one event in the customer relationship. The relationship also includes conversations, calls, SMS, leads, appliances, estimates, invoices, payments, notes, service addresses, and repair history.
+
+Workflows should make the current job fast to execute while preserving customer context and history.
+
+See `docs/WRA_DAILY_OPERATING_WORKFLOW.md` before changing the daily Dashboard, Communications Hub, Job Workspace, or navigation model.

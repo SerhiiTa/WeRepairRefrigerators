@@ -623,3 +623,15 @@ Onboarding backend progress:
 - Navigation should happen through clickable customer/job/asset/history objects; buttons should be reserved for state-changing actions.
 - Customer detail should keep current work and owner-relevant money visible while collapsing lower-priority history until requested.
 - Address workflows must preserve the distinction between customer primary address and job service address. Future property work should build on this distinction rather than merging the records.
+
+## Task 158.5 / 158.6 - Daily Operating Workflow Architecture
+
+- Creates `docs/WRA_DAILY_OPERATING_WORKFLOW.md`.
+- Owner QA after Task 158 clarified that WRA should not have Dashboard and Workspace competing as two main home screens.
+- The Workiz Exit daily architecture is now:
+  - Dashboard = business overview and daily command center.
+  - Communications Hub = calls, messages, conversations, intake, and customer-contact processing center.
+  - Job Workspace = execution center for one specific job.
+- Customer is the daily anchor object. A job is one event in the customer relationship.
+- Task 158.6 removes Workspace from main navigation and removes the temporary `/dashboard/workspace` route/component so it cannot become a fourth competing work center.
+- Useful Task 158 prototype ideas should be redistributed only into Dashboard, Communications Hub, or Job Workspace through future low-risk tasks. Do not build AI Repair Assistant, Vendor Intelligence, Community Intelligence, or platform expansion before the Workiz replacement workflow is stable.
