@@ -39,6 +39,14 @@ Task 153 establishes WRA as a property-centered operating system. Appliance repa
 
 The four core systems are Communications, Operations, Marketplace, and Company Operating System. AI is embedded into every workflow rather than treated as a standalone module.
 
+## Attention Engine And Company Modes
+
+`docs/ATTENTION_ENGINE_AND_COMPANY_MODES.md` is now the architecture reference for company operating modes and future attention routing.
+
+Task 157 defines three company modes: Solo, Team, and Enterprise. WRA should automatically start simple for one-person companies, suggest Team behavior as technicians/dispatchers/office users are added, and support enterprise queues, departments, branches, accounting, managers, and escalation without creating a separate product.
+
+The Attention Engine is not a notification system. Its purpose is to decide who needs to notice an operational event, how urgent it is, whether it can wait, whether it should be grouped or ignored, and which workflow surface should own the next action. Delivery channels such as dashboard, browser, push, SMS, email, mobile app, desktop, and future voice are later outputs, not the operating model.
+
 ## First production vertical
 
 The first production vertical is Houston/HomeFix appliance repair. This is the validation environment for the larger property operating model, not the final platform boundary.
@@ -66,6 +74,7 @@ The first production vertical is Houston/HomeFix appliance repair. This is the v
 - Task 152.7 makes successfully ingested production phone calls visible in `/dashboard/communications`. Production rows now exist across conversations, transcripts, messages, timeline events, and intake. The UI now displays provider, source, status, call timestamps, summary, next action, and intake-created state. New migration `0054_communications_dashboard_visibility_profile_company_apply_ready.sql` keeps company-scoped RLS and adds a narrow active `profiles.company_id` dashboard visibility path for legacy/operator accounts. Task 153 has not been started.
 - Task 152.9B/152.9C finalizes dashboard visibility for the production operator `info@refrigeratorhoustonrepair.com`. The attempted `profiles.company_id` repair failed correctly because production trigger `prevent_unsafe_profile_updates()` blocks unsafe company assignment changes. The successful production repair used only `public.company_members` for profile `7d4195e4-572f-4640-a15f-d954123b34d7` and company `f0639d2c-6fcf-4ab5-93a2-cde8f3ba9633`. The current `0055_communications_dashboard_user_access_repair_apply_ready.sql` does not update `public.profiles`. No further paid Retell calls are needed for Task 152. Task 153 has not been started.
 - Task 153 is a documentation-only platform vision rebase. It creates `docs/WRA_PLATFORM_OPERATING_MODEL.md` and establishes Property as the long-term central entity before additional implementation. It does not modify production code, database schema, migrations, UI, authentication, provider settings, or Task 154 work.
+- Task 157 is complete as documentation-only architecture. It creates `docs/ATTENTION_ENGINE_AND_COMPANY_MODES.md` and defines Solo/Team/Enterprise operating modes plus the Attention Engine model before any notification, push, SMS, browser notification, Communications Hub implementation, Settings UI, schema, or provider work.
 
 ## Workiz Exit / HomeFix Pilot
 

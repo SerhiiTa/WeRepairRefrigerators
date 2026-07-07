@@ -153,3 +153,13 @@ A customer has a primary address. A job has a service address. They are related,
 Creating a customer from intake may use the first service address as the customer primary address. Future jobs may default to the customer primary address. Changing a job service address must not rewrite customer history, and changing a customer primary address must not rewrite historical job addresses.
 
 If a dispatcher enters a new service address that should become the customer primary address, the UI must make that an explicit action.
+
+## 25. The Platform Grows With The Company
+
+WRA should adapt to company size instead of forcing every company through the same configuration burden.
+
+A solo technician should receive simple defaults and nearly zero routing setup. A team should gain role-aware operational ownership when additional technicians, dispatchers, or office staff are added. An enterprise should support departments, branches, queues, managers, accounting, and escalation without becoming a separate product.
+
+Attention should be modeled before notifications. The system should first decide who needs to notice an operational event, how urgent it is, and whether it should be grouped, delayed, ignored, or escalated. Delivery channels such as dashboard, push, SMS, email, browser, mobile app, desktop, and future voice are outputs of that decision, not the operating model itself.
+
+See `docs/ATTENTION_ENGINE_AND_COMPANY_MODES.md` before implementing future notification, attention, routing, settings, communications, or operational queue work.

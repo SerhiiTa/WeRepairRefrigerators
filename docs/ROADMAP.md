@@ -44,6 +44,20 @@ AI is embedded into each workflow as capture, extraction, drafting, recommendati
 
 Future expansion beyond appliances should add service categories and asset types without forking the platform or bypassing the shared Communications, Intake, Job, Estimate, Invoice, Payment, Document, and History architecture.
 
+## Attention Engine And Company Modes
+
+Task 157 establishes the future company operating-mode and attention-routing architecture in `docs/ATTENTION_ENGINE_AND_COMPANY_MODES.md`.
+
+WRA must support three operating modes without becoming three products:
+
+- Solo: one user owns owner, dispatcher, technician, accounting, and AI assistant review work. All operational attention routes to that user by default.
+- Team: owner, dispatcher, multiple technicians, and office/accounting roles can receive role-aware operational attention.
+- Enterprise: branches, departments, queues, multiple dispatchers, managers, accounting, and escalation rules can route operational attention by role, department, branch, territory, and priority.
+
+The roadmap must treat attention as the architecture before notifications. Future dashboard badges, browser notifications, push, SMS, email, mobile app alerts, desktop alerts, and voice handoffs should be delivery channels selected after WRA knows who needs attention, how urgent the event is, whether it can wait, and whether it should be grouped, ignored, or escalated.
+
+Do not start notification delivery before the Attention Engine ownership model is defined for the relevant workflow.
+
 ## Milestone: Workiz Exit / HomeFix Pilot
 
 Primary two-month goal: HomeFix must stop using Workiz and run daily operations inside WRA.
@@ -176,6 +190,18 @@ Status:
 - Defined the universal workflow from Customer Contact through History and Learning.
 - Clarified that appliance repair is the first vertical, not the platform boundary.
 - No production code, schema, migrations, UI implementation, provider settings, authentication, or Task 154 work was added.
+
+### Task 157 — Company Modes And Attention Engine Architecture
+
+Status:
+
+- Task 157 is complete as documentation only.
+- Created `docs/ATTENTION_ENGINE_AND_COMPANY_MODES.md`.
+- Defined Solo, Team, and Enterprise operating modes.
+- Defined the Attention Engine as the decision layer for who needs attention, urgency, grouping, waiting, ignoring, escalation, and workflow ownership.
+- Documented future delivery channels as outputs only: dashboard, browser, push, SMS, email, mobile app, desktop, and future voice.
+- Clarified the Communications relationship: provider/channel event -> WRA conversation -> Attention Engine -> assigned human -> CRM/Intake/Job.
+- No code, migrations, schema changes, providers, notification implementation, Communications Hub implementation, UI redesign, commits, or pushes were added.
 
 ### Future Task — HomeFix Daily Pilot
 

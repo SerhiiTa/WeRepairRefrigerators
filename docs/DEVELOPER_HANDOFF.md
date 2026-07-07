@@ -39,6 +39,18 @@ The four core systems are Communications, Operations, Marketplace, and Company O
 
 The universal workflow is: Customer Contact -> Communications -> AI Extraction -> Intake -> Review -> Job -> Dispatch -> Execution -> Estimate -> Approval -> Repair -> Invoice -> Payment -> History -> Learning.
 
+## Attention Engine And Company Modes
+
+Read `docs/ATTENTION_ENGINE_AND_COMPANY_MODES.md` before notification, attention, routing, Settings, Communications delivery, operational queue, dashboard badge, SMS alert, browser notification, push, or escalation work.
+
+Task 157 defines three company modes:
+
+- Solo: one person owns owner, dispatcher, technician, accounting, and AI assistant review work.
+- Team: routing becomes role-aware across owner, dispatcher, technicians, office staff, and accounting.
+- Enterprise: routing supports departments, branches, queues, managers, dispatchers, accounting, territories, and escalation.
+
+The Attention Engine is not a notification system. It decides who needs attention, how urgent the event is, whether it can wait, whether it should be grouped, whether it should be ignored, and which workflow surface should own the next action. Delivery channels such as dashboard, browser, push, SMS, email, mobile app, desktop, and future voice must remain downstream outputs.
+
 ## Fresh Chat Starting Point
 
 - Read `docs/CODEX_OPERATING_RULES.md` first before doing anything.
@@ -62,6 +74,7 @@ The universal workflow is: Customer Contact -> Communications -> AI Extraction -
 - Task 152.9B/152.9C finalizes dashboard visibility for the production operator `info@refrigeratorhoustonrepair.com`. The attempted `profiles.company_id` repair failed correctly because production trigger `prevent_unsafe_profile_updates()` blocks unsafe company assignment changes. The final successful repair used only active `company_members` access for profile `7d4195e4-572f-4640-a15f-d954123b34d7` and company `f0639d2c-6fcf-4ab5-93a2-cde8f3ba9633`. The current `0055` file must not update `public.profiles`. No further paid Retell call is needed for Task 152. Task 153 has not been started.
 - Task 152.4 fixes production phone intake parsing discovered after `0056`: comma address text with apartment/city now maps into street/unit/city, `today`/`tomorrow` resolve from the Retell call start timestamp in `America/Chicago`, and 9-11 natural-language appointment windows become structured start/end times. `/dashboard/communications` also has an internal Retell recording panel backed by a server-only Retell lookup route. Audio is fetched live, not stored in Supabase Storage, and is not customer-facing. No paid Retell call, auth change, `.env.local` edit, schema migration, or Task 153 work was added.
 - Task 153 is complete as a documentation-only Platform Vision Rebase. It creates `docs/WRA_PLATFORM_OPERATING_MODEL.md` and establishes Property as the long-term central platform object before additional implementation. It does not modify production code, database schema, migrations, authentication, provider settings, or UI, and Task 154 has not been started.
+- Task 157 is complete as documentation-only architecture. It creates `docs/ATTENTION_ENGINE_AND_COMPANY_MODES.md`, defines Solo/Team/Enterprise company modes, and defines the Attention Engine before any notification delivery, Communications implementation, Settings UI, schema, provider, migration, push, SMS, browser notification, or UI work.
 
 ## Workiz Exit / HomeFix Pilot Priority
 
