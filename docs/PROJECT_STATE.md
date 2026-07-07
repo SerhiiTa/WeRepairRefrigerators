@@ -13,7 +13,11 @@ WeRepairRefrigerators
 
 ## Goal
 
-Build a secure AI-powered refrigerator repair technician platform that helps repair businesses document repair cases, manage technician-facing workflows, and eventually turn completed work into local SEO content.
+Build WRA as an AI operating system for property ownership and service ecosystems.
+
+Appliance repair remains the first production vertical and HomeFix remains the first validation environment, but the long-term platform is not limited to refrigerator repair or appliance repair companies. The long-term central entity is `Property`, with customers/owners, assets, service providers, jobs, documents, communications, invoices, estimates, warranties, inspections, and full lifetime history attached to the property over time.
+
+Every future implementation should preserve the universal flow: Customer Contact -> Communications -> AI Extraction -> Intake -> Review -> Job -> Dispatch -> Execution -> Estimate -> Approval -> Repair -> Invoice -> Payment -> History -> Learning.
 
 ## Platform Bible Documentation
 
@@ -27,9 +31,17 @@ Read `docs/platform-bible/README.md` first, then use `docs/platform-bible/WRA_00
 
 Every future task should use these principles alongside the Platform Bible and should avoid exposing implementation details, provider terms, prompt internals, confidence/debug data, or database language in normal production workflows.
 
-## Houston MVP scope
+## Platform Operating Model
 
-The MVP is focused on Houston only and refrigerator repair only. The first product surface is a dark SaaS frontend for technicians and service business owners, with dashboard placeholders and a repair case creation UI.
+`docs/WRA_PLATFORM_OPERATING_MODEL.md` is now the architecture reference for the post-Task-152 platform rebase.
+
+Task 153 establishes WRA as a property-centered operating system. Appliance repair is the first vertical, but future work must be compatible with properties, owners, assets, service providers, jobs, documents, history, and knowledge across HVAC, electrical, plumbing, roofing, solar, pools, security, landscaping, cleaning, internet, smart home, commercial facilities, and other property services.
+
+The four core systems are Communications, Operations, Marketplace, and Company Operating System. AI is embedded into every workflow rather than treated as a standalone module.
+
+## First production vertical
+
+The first production vertical is Houston/HomeFix appliance repair. This is the validation environment for the larger property operating model, not the final platform boundary.
 
 ## Current confirmed handoff status
 
@@ -53,6 +65,7 @@ The MVP is focused on Houston only and refrigerator repair only. The first produ
 - Task 152.6 fixes the next phone-ingestion blocker without another live call. Production reached intake insert but PostgREST returned `PGRST204` because phone ingestion sent RPC-only `duplicate_confirmed` to the physical `intake_requests` table. The phone workflow now strips that control field before direct service-role insert. No migration is needed. Task 153 has not been started.
 - Task 152.7 makes successfully ingested production phone calls visible in `/dashboard/communications`. Production rows now exist across conversations, transcripts, messages, timeline events, and intake. The UI now displays provider, source, status, call timestamps, summary, next action, and intake-created state. New migration `0054_communications_dashboard_visibility_profile_company_apply_ready.sql` keeps company-scoped RLS and adds a narrow active `profiles.company_id` dashboard visibility path for legacy/operator accounts. Task 153 has not been started.
 - Task 152.9B/152.9C finalizes dashboard visibility for the production operator `info@refrigeratorhoustonrepair.com`. The attempted `profiles.company_id` repair failed correctly because production trigger `prevent_unsafe_profile_updates()` blocks unsafe company assignment changes. The successful production repair used only `public.company_members` for profile `7d4195e4-572f-4640-a15f-d954123b34d7` and company `f0639d2c-6fcf-4ab5-93a2-cde8f3ba9633`. The current `0055_communications_dashboard_user_access_repair_apply_ready.sql` does not update `public.profiles`. No further paid Retell calls are needed for Task 152. Task 153 has not been started.
+- Task 153 is a documentation-only platform vision rebase. It creates `docs/WRA_PLATFORM_OPERATING_MODEL.md` and establishes Property as the long-term central entity before additional implementation. It does not modify production code, database schema, migrations, UI, authentication, provider settings, or Task 154 work.
 
 ## Workiz Exit / HomeFix Pilot
 
@@ -1114,6 +1127,13 @@ Use the webpack build command for verification because it has been the stable bu
 - Added internal Retell recording lookup and playback for `/dashboard/communications` through a server-only Retell API helper. Recordings are fetched live with `RETELL_API_KEY`, are not stored in Supabase Storage, and are not customer-facing.
 - No new schema migration was required, no additional paid Retell call was made, authentication was not changed, and Task 153 was not started.
 
+## Task 154 customer CRM foundation
+
+- `/dashboard/customers` is now a real internal Customer CRM index for Workiz Exit Phase 1. It reads existing `customers`, linked `service_requests`, saved `customer_appliances`, and linked `communication_conversations` through the normal dashboard Supabase client and RLS.
+- The customer list supports search by name, phone, and email, and each row shows contact data, primary address from the latest linked job, total jobs, appliance count, customer-since date, last job, and last contact.
+- `/dashboard/customers/[id]` is now a customer workspace with profile/contact data, deterministic AI Customer Summary from existing records only, open/past jobs, appliances with repair history detail, estimates, invoices/payment placeholder state, communication history, internal job notes, and a chronological customer timeline.
+- This task did not add schema, provider integrations, phone/Retell changes, auth changes, customer portal changes, or Property OS implementation. Appliance repair remains the operational scope for the Workiz exit milestone.
+
 ## Current git workflow
 
 - Work from the repository root: `/Users/serhiitatarenko/Desktop/WeRepairRefrigerators`
@@ -1122,3 +1142,18 @@ Use the webpack build command for verification because it has been the stable bu
 - Run lint and build before reporting frontend changes.
 - Report changed files at the end of each task.
 - Keep `node_modules`, build output, secrets, and environment files out of commits.
+
+## Task 155 customer CRM write actions
+
+- Task 155 adds dashboard-only Customer CRM write actions for the Workiz Exit workflow. Apply-ready migration `0057_customer_crm_write_actions_apply_ready.sql` adds company-scoped customers, normalized customer addresses, internal customer notes, and trusted RPCs for customer/profile/address/appliance/note writes plus source-neutral intake customer matching.
+- `/dashboard/customers` now supports broader search across name, phone, email, saved address, job address, city, state, and ZIP. Dashboard users can create customers, edit customer profile/contact/address data, add/edit appliances, and add internal customer notes.
+- Intake and Communications Hub surfaces now link to customer records: linked records show `Open Customer`; unmatched intake records can use `Create / Match Customer`.
+- No auth, Retell/Telnyx, phone ingestion, Property OS, provider, or customer-facing workflow changes were added. See `docs/TASK155_CUSTOMER_CRM_WRITE_ACTIONS.md`.
+
+## Task 156 customer CRM UX refinement
+
+- Customer CRM UX is refined for dispatcher daily use. The customer list now uses clickable customer cards instead of navigation buttons, removes low-value stat blocks, and keeps each card focused on name, phone, primary address, last job, and status.
+- Customer detail now emphasizes a compact operational summary: open jobs, assets, last job, customer since, and owner/admin-only financial metrics such as lifetime revenue and outstanding balance.
+- Historical sections are collapsed by default: profile, addresses, assets, estimates, invoices, communication history, internal notes, customer timeline, and repair history. Open jobs remain immediately visible because current work comes first.
+- Address behavior is explicit: job service address edits remain job-scoped, customer primary address can be saved separately from the Job Workspace, and historical job addresses are not rewritten.
+- No authentication, Retell/phone workflow, Communications architecture, Estimate/Invoice redesign, production provider work, or Property OS implementation was added.

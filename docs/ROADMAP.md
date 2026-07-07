@@ -21,6 +21,29 @@ Before starting major architecture, workflow, customer, technician, marketplace,
 
 Use this document as the simplicity filter for future roadmap work. If a feature adds clicks, exposes internal terminology, or distracts from real daily operations, move it to backlog unless it is required for security, stability, or the Workiz Exit milestone.
 
+## Platform Operating Model
+
+Task 153 establishes the long-term WRA architecture in `docs/WRA_PLATFORM_OPERATING_MODEL.md`.
+
+WRA is no longer defined as an appliance repair CRM. Appliance repair remains the first production vertical, but the long-term platform is an AI operating system for property ownership and service ecosystems.
+
+The long-term central entity is `Property`, containing owners, occupants, assets, providers, jobs, communications, documents, estimates, invoices, warranties, inspections, payments, and lifetime service history.
+
+Future roadmap work must align with four core systems:
+
+- Communications
+- Operations
+- Marketplace
+- Company Operating System
+
+The universal workflow is:
+
+Customer Contact -> Communications -> AI Extraction -> Intake -> Review -> Job -> Dispatch -> Execution -> Estimate -> Approval -> Repair -> Invoice -> Payment -> History -> Learning.
+
+AI is embedded into each workflow as capture, extraction, drafting, recommendation, and learning support. It is not a standalone product module and must remain human-overridable.
+
+Future expansion beyond appliances should add service categories and asset types without forking the platform or bypassing the shared Communications, Intake, Job, Estimate, Invoice, Payment, Document, and History architecture.
+
 ## Milestone: Workiz Exit / HomeFix Pilot
 
 Primary two-month goal: HomeFix must stop using Workiz and run daily operations inside WRA.
@@ -142,7 +165,19 @@ Focus:
 - Receipt.
 - Customer payment page.
 
-### Task 153 — HomeFix Daily Pilot
+### Task 153 — Platform Vision Rebase
+
+Status:
+
+- Task 153 is complete as documentation only.
+- Created `docs/WRA_PLATFORM_OPERATING_MODEL.md`.
+- Established Property as the long-term central entity for WRA.
+- Defined the four core systems: Communications, Operations, Marketplace, and Company Operating System.
+- Defined the universal workflow from Customer Contact through History and Learning.
+- Clarified that appliance repair is the first vertical, not the platform boundary.
+- No production code, schema, migrations, UI implementation, provider settings, authentication, or Task 154 work was added.
+
+### Future Task — HomeFix Daily Pilot
 
 Focus:
 
@@ -475,6 +510,7 @@ Onboarding backend progress:
 - Task 148.8 compacts the estimate card for field use. Default visible flow is diagnosis, Generate Estimate, compact editable lines, total, and Send Estimate. Line descriptions/quantity/taxable controls, tax/discount settings, warranty editing, and normalization diagnostics are collapsed by default. Future estimate work should preserve this technician-first density unless a later task explicitly redesigns the workflow.
 - Task 150.4 corrects the Estimate AI architecture. Estimate AI is now an estimate writer only: it may improve wording, structure, customer-facing explanation, warranty text, and formatting, but it must not diagnose, infer parts, broaden repair scope, invent quantities/prices, or replace technician judgment. Future Repair Intelligence must be built as a separate subsystem that outputs validated repair operations and replacement parts; only then should the Estimate Builder format those structured decisions into the customer estimate.
 - Task 152.2 audits and hardens the production phone intake workflow without creating a new dispatcher flow. Existing production records confirm Retell ingestion, transcript/message/timeline/intake creation, Communications Dashboard visibility, and intake-to-job conversion. New hardening parses Retell date/window/address data into structured intake fields and adds apply-ready migration `0056_phone_intake_mapping_hardening_apply_ready.sql` so converted intakes can link/create customer appliances and format service request addresses. Task 152.4 follows up with production bug fixes for comma address/unit/city parsing, Central-time relative dates, 9-11 natural-language windows, and internal Retell recording playback. No paid Retell call is needed for this verification.
+- Task 154 starts the internal Customer CRM foundation for Workiz Exit Phase 1. The dashboard Customers module now exposes a real customer index and customer workspace from existing records: customer profile/contact, addresses from jobs, appliances, jobs, estimates, invoices, communications, internal notes, timeline, and a deterministic customer summary. This is appliance-repair operations only; it does not start Property OS implementation, customer portal expansion, phone workflow changes, or a Communications Hub redesign.
 
 
 ## Estimate MVP Completed
@@ -548,3 +584,16 @@ Onboarding backend progress:
 - Add multi-city support.
 - Add scalable profile, content, and routing patterns.
 - Introduce market-specific SEO and onboarding workflows.
+
+## Task 155 - Customer CRM write layer
+
+- Adds the first trusted dashboard write layer for Customer CRM: customer creation/editing, normalized addresses, customer-level internal notes, appliance add/edit actions, and intake customer match/create.
+- This supports the Workiz Exit milestone by allowing dispatchers to manage real customer records from WRA instead of treating customers as read-only linked data.
+- Apply `supabase/migrations/0057_customer_crm_write_actions_apply_ready.sql` before production use. Future tasks should build on this for richer duplicate review, multi-address workflows, and property-level relationships without weakening the dashboard/customer boundary.
+
+## Task 156 - Customer CRM UX refinement
+
+- Refines the Task 154/155 Customer CRM into a more usable Workiz Exit dispatcher workspace.
+- Navigation should happen through clickable customer/job/asset/history objects; buttons should be reserved for state-changing actions.
+- Customer detail should keep current work and owner-relevant money visible while collapsing lower-priority history until requested.
+- Address workflows must preserve the distinction between customer primary address and job service address. Future property work should build on this distinction rather than merging the records.

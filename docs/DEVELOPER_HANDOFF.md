@@ -27,6 +27,18 @@ Read `docs/WRA_PRODUCT_PRINCIPLES.md` before product, workflow, estimate, intake
 
 Key rules: WRA is an operating system for service businesses, the technician is the source of truth, AI assists without overriding decisions, manual typing is failure, every extra click is a bug, normal screens should have one goal and one primary action, complexity should be hidden behind progressive disclosure, and every workflow must work naturally on mobile.
 
+## Platform Operating Model
+
+Read `docs/WRA_PLATFORM_OPERATING_MODEL.md` before architecture, property, customer, marketplace, operations, communications, settings, asset, AI, or workflow tasks.
+
+Task 153 rebases the long-term vision: WRA is an AI operating system for property ownership and service ecosystems, not an appliance repair CRM. Appliance repair remains the first production vertical, but the long-term central entity is `Property`.
+
+Future work must support properties, owners, occupants, assets, service providers, jobs, communications, documents, estimates, invoices, warranties, inspections, payments, history, and learning across multiple service categories.
+
+The four core systems are Communications, Operations, Marketplace, and Company Operating System.
+
+The universal workflow is: Customer Contact -> Communications -> AI Extraction -> Intake -> Review -> Job -> Dispatch -> Execution -> Estimate -> Approval -> Repair -> Invoice -> Payment -> History -> Learning.
+
 ## Fresh Chat Starting Point
 
 - Read `docs/CODEX_OPERATING_RULES.md` first before doing anything.
@@ -49,6 +61,7 @@ Key rules: WRA is an operating system for service businesses, the technician is 
 - Task 152.7 makes real production phone calls visible in `/dashboard/communications`. Production ingestion completed successfully and created conversation/transcript/message/timeline/intake rows. The UI now displays provider, source, status, call timestamps, summary, next action, and intake-created state. Apply `0054_communications_dashboard_visibility_profile_company_apply_ready.sql` if company-scoped dashboard users still cannot see provider-created conversations. Task 153 has not been started.
 - Task 152.9B/152.9C finalizes dashboard visibility for the production operator `info@refrigeratorhoustonrepair.com`. The attempted `profiles.company_id` repair failed correctly because production trigger `prevent_unsafe_profile_updates()` blocks unsafe company assignment changes. The final successful repair used only active `company_members` access for profile `7d4195e4-572f-4640-a15f-d954123b34d7` and company `f0639d2c-6fcf-4ab5-93a2-cde8f3ba9633`. The current `0055` file must not update `public.profiles`. No further paid Retell call is needed for Task 152. Task 153 has not been started.
 - Task 152.4 fixes production phone intake parsing discovered after `0056`: comma address text with apartment/city now maps into street/unit/city, `today`/`tomorrow` resolve from the Retell call start timestamp in `America/Chicago`, and 9-11 natural-language appointment windows become structured start/end times. `/dashboard/communications` also has an internal Retell recording panel backed by a server-only Retell lookup route. Audio is fetched live, not stored in Supabase Storage, and is not customer-facing. No paid Retell call, auth change, `.env.local` edit, schema migration, or Task 153 work was added.
+- Task 153 is complete as a documentation-only Platform Vision Rebase. It creates `docs/WRA_PLATFORM_OPERATING_MODEL.md` and establishes Property as the long-term central platform object before additional implementation. It does not modify production code, database schema, migrations, authentication, provider settings, or UI, and Task 154 has not been started.
 
 ## Workiz Exit / HomeFix Pilot Priority
 
@@ -76,8 +89,9 @@ Immediate task sequence:
    - Task 150.6 estimate approval immediate refresh: complete. Keep `/api/estimates/[token]/respond` returning the refreshed public estimate payload after the existing response RPC, and keep Job Workspace focus/visibility refresh so customer approvals appear without a manual page reload.
 3. Task 151 — Communications Hub Foundation: complete. WRA now has provider-neutral conversation, message, transcript, and business timeline foundations plus `/dashboard/communications`. Future real SMS/calls/email must plug into this hub instead of writing directly to CRM tables.
 4. Task 152 — First Live Phone Workflow: complete as a safe foundation. Provider-shaped call payloads now enter WRA-owned conversations/transcripts/timeline/intake after source-account resolution. Real development phone QA still requires applying `0051`/`0052`, adding a source account for the owned test number, and configuring provider webhook verification.
-5. Future Task — Invoice + Payment Completion: invoice creation from approved/completed work, Stripe payment, payment status, receipt, customer payment page.
-6. Task 153 — HomeFix Daily Pilot: run real HomeFix jobs inside WRA, identify operational blockers, fix only operational blockers, prepare Workiz shutoff checklist.
+5. Task 153 — Platform Vision Rebase: complete as documentation only. Future implementation must align with `docs/WRA_PLATFORM_OPERATING_MODEL.md`.
+6. Future Task — Invoice + Payment Completion: invoice creation from approved/completed work, Stripe payment, payment status, receipt, customer payment page.
+7. Future HomeFix Daily Pilot: run real HomeFix jobs inside WRA, identify operational blockers, fix only operational blockers, prepare Workiz shutoff checklist.
 
 ## How to run the project
 
@@ -834,7 +848,7 @@ Next route-protection task:
 
 ## Communications / Phone Intake Handoff
 
-- Task 152 is complete in production and Task 153 has not started.
+- Task 152 is complete in production. Task 153 is complete as a documentation-only platform vision rebase. Task 154 created the internal Customer CRM foundation for appliance-repair Workiz exit.
 - Read `docs/FIRST_LIVE_PHONE_WORKFLOW_TASK152.md`, `docs/TASK152_2_PHONE_WORKFLOW_AUDIT.md`, and `docs/TASK152_4_PHONE_INTAKE_PRODUCTION_BUGFIXES.md` before changing phone ingestion, Communications Hub, Intake conversion, or Retell/Telnyx adapter code.
 - Task 152.2 used existing production calls only; do not spend another Retell call for this verification.
 - Phone ingestion now parses Retell appointment windows such as `9 AM to 11 AM`, `9 to 11 AM`, `between 9 and 11`, and `9-11 AM`, flexible appointment dates, Central-time `today`/`tomorrow`, and address components into structured intake fields.
@@ -842,6 +856,14 @@ Next route-protection task:
 - Apply `supabase/migrations/0056_phone_intake_mapping_hardening_apply_ready.sql` before expecting converted phone intakes to backfill/link `customer_appliances` or format service request addresses automatically.
 - The existing workflow remains: provider webhook -> conversation/transcript/message/timeline -> intake -> authenticated dispatcher conversion -> CRM job. Do not build a second workflow or bypass the existing conversion RPC.
 - Current remaining limitation: `communication_conversations.service_request_id` is not automatically backfilled after an intake is converted; trace converted phone calls through `intake_requests.linked_service_request_id` until a future explicit task adds conversation back-linking.
+
+## Customer CRM handoff
+
+- `/dashboard/customers` and `/dashboard/customers/[id]` are the internal Customer CRM surfaces for the Workiz exit milestone. They must remain dashboard-only and must not be mixed with customer portal navigation.
+- The index reads real `customers`, `service_requests`, `customer_appliances`, and `communication_conversations` rows and supports search by name, phone, and email.
+- The customer workspace reads existing linked records only: profile/contact, appliances, jobs, estimates, invoices, communication history, internal job notes, and communication/job/estimate/invoice/payment timeline events. It does not create duplicate customer storage.
+- The AI Customer Summary is deterministic and generated from existing WRA records only. Do not add advanced AI, embeddings, or provider calls to this customer summary without an explicit future task.
+- Customer notes are currently surfaced from job-level `service_request_notes`; do not invent standalone customer note persistence without a reviewed schema/task.
 
 ## Customer marketplace foundation
 
@@ -872,3 +894,20 @@ Next route-protection task:
 ## Current caution
 
 Some existing files may be uncommitted from prior tasks. Check `git status` before starting, preserve unrelated work, and only modify files required for the current task.
+
+## Task 155 Customer CRM write actions
+
+- Read `docs/TASK155_CUSTOMER_CRM_WRITE_ACTIONS.md` before changing dashboard Customer CRM, Intake matching, or Communications customer links.
+- Apply `supabase/migrations/0057_customer_crm_write_actions_apply_ready.sql` before expecting dashboard create/edit customer, address, appliance, internal note, or intake match/create actions to work against Supabase.
+- Customer CRM writes must stay behind trusted RPCs: `upsert_dashboard_customer_rpc`, `upsert_customer_address_rpc`, `upsert_customer_appliance_rpc`, `add_customer_internal_note_rpc`, and `match_or_create_customer_for_intake_rpc`. Do not add broad direct browser write policies for customer CRM tables.
+- Intake and Communications should prefer linked customer actions: show `Open Customer` when `linked_customer_id`/`customer_id` exists, otherwise use the match/create flow.
+- Do not mix dashboard Customer CRM with customer portal navigation or Property OS implementation unless a future task explicitly starts that architecture.
+
+## Task 156 Customer CRM UX refinement
+
+- Preserve the Customer CRM object-navigation rule: customer cards, jobs, estimates, invoices, calls, timeline events, and appliances should be clickable objects. Use buttons for actions such as create, save, match, send, or update.
+- Keep `/dashboard/customers` compact. Do not restore Customer Since, Last Contact, Total Jobs, Total Appliances, or stat-card-heavy customer list UI unless a future task explicitly asks for analytics.
+- Keep `/dashboard/customers/[id]` operational-first: open jobs and compact summary stay visible; timeline, communication history, assets, notes, estimates, invoices, and repair history remain collapsible by default.
+- Financial customer metrics are for `company_owner` and `admin` roles only. Do not show lifetime revenue or outstanding balance to normal technician roles by default.
+- Keep address semantics strict. Customer primary address and job service address are separate. The Job Workspace `Save Address` action updates only the job. `Save as Customer Primary Address` is the explicit path for promoting the current service address to the customer record.
+- Do not mix this dashboard Customer CRM with customer portal navigation, Retell/phone ingestion, auth, Estimate/Invoice redesign, or Property OS implementation without an explicit future task.

@@ -55,6 +55,7 @@ type ConversationRow = {
   status: CommunicationConversation["status"];
   provider_name: string | null;
   customer_display_name: string | null;
+  customer_id: string | null;
   customer_phone: string | null;
   customer_email: string | null;
   service_address: string | null;
@@ -88,6 +89,7 @@ function mapConversation(row: ConversationRow): CommunicationConversation {
     status: row.status,
     providerName: row.provider_name,
     customerDisplayName: row.customer_display_name,
+    customerId: row.customer_id,
     customerPhone: row.customer_phone,
     customerEmail: row.customer_email,
     serviceAddress: row.service_address,
@@ -239,7 +241,7 @@ export function CommunicationsHub() {
       const { data, error } = await supabase
         .from("communication_conversations")
         .select(
-          "id,primary_source_type,status,provider_name,customer_display_name,customer_phone,customer_email,service_address,summary,next_action,last_event_at,call_started_at,call_ended_at,intake_request_id,service_request_id,created_at,updated_at",
+          "id,primary_source_type,status,provider_name,customer_display_name,customer_id,customer_phone,customer_email,service_address,summary,next_action,last_event_at,call_started_at,call_ended_at,intake_request_id,service_request_id,created_at,updated_at",
         )
         .order("updated_at", { ascending: false })
         .limit(50);
@@ -599,6 +601,21 @@ export function CommunicationsHub() {
                   </p>
                 </div>
                 <div className="flex flex-col gap-2 sm:flex-row">
+                  {selectedConversation.customerId ? (
+                    <Link
+                      className="rounded-[10px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-center text-sm font-black text-emerald-800 transition hover:bg-emerald-100"
+                      href={`/dashboard/customers/${selectedConversation.customerId}`}
+                    >
+                      Open Customer
+                    </Link>
+                  ) : selectedConversation.linkedIntakeRequestId ? (
+                    <Link
+                      className="rounded-[10px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-center text-sm font-black text-emerald-800 transition hover:bg-emerald-100"
+                      href="/dashboard/intake"
+                    >
+                      Create / Match Customer
+                    </Link>
+                  ) : null}
                   {selectedConversation.linkedServiceRequestId ? (
                     <Link
                       className="rounded-[10px] bg-[#0F6BFF] px-4 py-3 text-center text-sm font-black text-white transition hover:bg-[#0057D9]"

@@ -55,6 +55,7 @@ export type CommunicationConversation = {
   sourceType: CommunicationSourceType;
   status: CommunicationConversationStatus;
   providerName: string | null;
+  customerId: string | null;
   customerDisplayName: string | null;
   customerPhone: string | null;
   customerEmail: string | null;

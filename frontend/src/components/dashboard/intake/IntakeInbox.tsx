@@ -443,6 +443,10 @@ export function IntakeInbox() {
     status: "idle",
     message: null,
   });
+  const [customerMatchState, setCustomerMatchState] = useState<ActionState>({
+    status: "idle",
+    message: null,
+  });
   const [addressSuggestions, setAddressSuggestions] = useState<AddressSuggestion[]>([]);
   const [addressFocused, setAddressFocused] = useState(false);
   const [acceptedAddressLabel, setAcceptedAddressLabel] = useState("");
@@ -611,6 +615,7 @@ export function IntakeInbox() {
     setAddressSuggestions([]);
     setSaveState({ status: "idle", message: null });
     setConvertState({ status: "idle", message: null });
+    setCustomerMatchState({ status: "idle", message: null });
   }
 
   async function createManualIntake() {
@@ -845,6 +850,91 @@ export function IntakeInbox() {
     }
   }
 
+  async function matchSelectedCustomer() {
+    if (!selectedRequest) {
+      return;
+    }
+
+    if (selectedRequest.linkedCustomerId) {
+      setCustomerMatchState({
+        status: "success",
+        message: "This intake is already linked to a customer.",
+      });
+      return;
+    }
+
+    const hasCustomerSignal = Boolean(
+      form.customerFirstName.trim() ||
+        form.customerLastName.trim() ||
+        form.customerName.trim() ||
+        form.customerPhone.trim() ||
+        form.customerEmail.trim() ||
+        form.serviceAddress.trim() ||
+        form.zipCode.trim(),
+    );
+
+    if (!hasCustomerSignal) {
+      setCustomerMatchState({
+        status: "error",
+        message: "Add a customer name, phone, email, address, or ZIP before matching.",
+      });
+      return;
+    }
+
+    setCustomerMatchState({ status: "saving", message: "Matching customer..." });
+
+    try {
+      const supabase = getSupabaseBrowserClient();
+      if (!supabase) {
+        throw new Error("Customer matching is not configured.");
+      }
+
+      const { data, error } = await supabase.rpc(
+        "match_or_create_customer_for_intake_rpc",
+        {
+          p_intake_request_id: selectedRequest.id,
+          p_payload: {
+            first_name: form.customerFirstName,
+            last_name: form.customerLastName,
+            full_name:
+              [form.customerFirstName, form.customerLastName]
+                .map((part) => part.trim())
+                .filter(Boolean)
+                .join(" ") || form.customerName,
+            phone: form.customerPhone,
+            email: form.customerEmail,
+            service_address: form.serviceAddress,
+            unit: form.unit,
+            city: form.city,
+            state: form.state,
+            zip_code: form.zipCode,
+            country: form.country,
+          },
+        },
+      );
+
+      if (error) {
+        throw error;
+      }
+
+      const result = data as { customer_id?: string; action?: string } | null;
+      setCustomerMatchState({
+        status: "success",
+        message:
+          result?.action === "created"
+            ? "Customer created and linked to this intake."
+            : "Customer matched and linked to this intake.",
+      });
+      await loadIntakeRequests();
+    } catch (error) {
+      setCustomerMatchState({
+        status: "error",
+        message:
+          error instanceof Error ? error.message : "Could not match customer.",
+      });
+    }
+  }
+
   async function convertSelectedIntake() {
     if (!selectedRequest) {
       return;
@@ -932,6 +1022,7 @@ export function IntakeInbox() {
     }
     setSaveState({ status: "idle", message: null });
     setCreateState({ status: "idle", message: null });
+    setCustomerMatchState({ status: "idle", message: null });
   }
 
   async function selectAddressSuggestion(suggestion: AddressSuggestion) {
@@ -991,6 +1082,7 @@ export function IntakeInbox() {
               setAddressFocused(false);
               setSaveState({ status: "idle", message: null });
               setConvertState({ status: "idle", message: null });
+              setCustomerMatchState({ status: "idle", message: null });
               setCreateState({ status: "idle", message: null });
             }}
             type="button"
@@ -1141,14 +1233,35 @@ export function IntakeInbox() {
                 {selectedRequest ? "Review request" : "Create manual intake"}
               </h2>
             </div>
-            {selectedRequest?.linkedServiceRequestId ? (
-              <Link
-                className="rounded-[10px] border border-blue-200 bg-blue-50 px-4 py-3 text-center text-sm font-black text-[#0F6BFF] transition hover:bg-blue-100"
-                href={`/dashboard/leads/${selectedRequest.linkedServiceRequestId}`}
-              >
-                Open Job
-              </Link>
-            ) : null}
+            <div className="flex flex-col gap-2 sm:flex-row">
+              {selectedRequest?.linkedCustomerId ? (
+                <Link
+                  className="rounded-[10px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-center text-sm font-black text-emerald-800 transition hover:bg-emerald-100"
+                  href={`/dashboard/customers/${selectedRequest.linkedCustomerId}`}
+                >
+                  Open Customer
+                </Link>
+              ) : selectedRequest ? (
+                <button
+                  className="rounded-[10px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-black text-emerald-800 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={customerMatchState.status === "saving"}
+                  onClick={() => void matchSelectedCustomer()}
+                  type="button"
+                >
+                  {customerMatchState.status === "saving"
+                    ? "Matching..."
+                    : "Create / Match Customer"}
+                </button>
+              ) : null}
+              {selectedRequest?.linkedServiceRequestId ? (
+                <Link
+                  className="rounded-[10px] border border-blue-200 bg-blue-50 px-4 py-3 text-center text-sm font-black text-[#0F6BFF] transition hover:bg-blue-100"
+                  href={`/dashboard/leads/${selectedRequest.linkedServiceRequestId}`}
+                >
+                  Open Job
+                </Link>
+              ) : null}
+            </div>
           </div>
 
           {selectedReadOnly ? (
@@ -1467,7 +1580,7 @@ export function IntakeInbox() {
               </button>
             ) : null}
           </div>
-          {[createState, saveState, convertState].map((item, index) =>
+          {[createState, saveState, convertState, customerMatchState].map((item, index) =>
             item.message ? (
               <p
                 className={`mt-3 text-sm font-semibold ${

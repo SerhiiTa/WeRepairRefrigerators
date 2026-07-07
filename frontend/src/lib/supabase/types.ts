@@ -522,6 +522,7 @@ export type Database = {
       customers: {
         Row: {
           id: string;
+          company_id: string | null;
           created_at: string;
           updated_at: string;
           auth_user_id: string | null;
@@ -554,6 +555,46 @@ export type Database = {
         };
         Insert: Partial<Database["public"]["Tables"]["customer_appliances"]["Row"]>;
         Update: Partial<Database["public"]["Tables"]["customer_appliances"]["Row"]>;
+        Relationships: [];
+      };
+      customer_addresses: {
+        Row: {
+          id: string;
+          customer_id: string;
+          company_id: string | null;
+          label: string;
+          street_address: string | null;
+          unit: string | null;
+          city: string | null;
+          state: string;
+          zip_code: string | null;
+          country: string;
+          latitude: number | null;
+          longitude: number | null;
+          place_id: string | null;
+          is_primary: boolean;
+          created_by: string | null;
+          updated_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Partial<Database["public"]["Tables"]["customer_addresses"]["Row"]>;
+        Update: Partial<Database["public"]["Tables"]["customer_addresses"]["Row"]>;
+        Relationships: [];
+      };
+      customer_internal_notes: {
+        Row: {
+          id: string;
+          customer_id: string;
+          company_id: string | null;
+          body: string;
+          note_type: string;
+          created_by: string | null;
+          created_at: string;
+          archived_at: string | null;
+        };
+        Insert: Partial<Database["public"]["Tables"]["customer_internal_notes"]["Row"]>;
+        Update: Partial<Database["public"]["Tables"]["customer_internal_notes"]["Row"]>;
         Relationships: [];
       };
       pricing_catalog_items: {
@@ -1050,6 +1091,44 @@ export type Database = {
         };
         Returns: Json;
       };
+      upsert_dashboard_customer_rpc: {
+        Args: {
+          p_customer_id?: string | null;
+          p_payload?: Json;
+        };
+        Returns: Json;
+      };
+      upsert_customer_address_rpc: {
+        Args: {
+          p_customer_id: string;
+          p_address_id?: string | null;
+          p_payload?: Json;
+        };
+        Returns: Json;
+      };
+      upsert_customer_appliance_rpc: {
+        Args: {
+          p_customer_id: string;
+          p_appliance_id?: string | null;
+          p_payload?: Json;
+        };
+        Returns: Json;
+      };
+      add_customer_internal_note_rpc: {
+        Args: {
+          p_customer_id: string;
+          p_body: string;
+          p_note_type?: string | null;
+        };
+        Returns: Json;
+      };
+      match_or_create_customer_for_intake_rpc: {
+        Args: {
+          p_intake_request_id?: string | null;
+          p_payload?: Json;
+        };
+        Returns: Json;
+      };
       can_view_customer: {
         Args: {
           target_customer_id: string;
@@ -1219,6 +1298,10 @@ export type CompanyMemberRow =
 export type CustomerRow = PublicSchema["Tables"]["customers"]["Row"];
 export type CustomerApplianceRow =
   PublicSchema["Tables"]["customer_appliances"]["Row"];
+export type CustomerAddressRow =
+  PublicSchema["Tables"]["customer_addresses"]["Row"];
+export type CustomerInternalNoteRow =
+  PublicSchema["Tables"]["customer_internal_notes"]["Row"];
 export type IntakeRequestRow =
   PublicSchema["Tables"]["intake_requests"]["Row"];
 export type PricingCatalogItemRow =

@@ -125,3 +125,31 @@ If the answer is no, move it to backlog unless it is required for security, stab
 WRA should grow through safe, verified operational improvements.
 
 Each task should preserve authentication, existing workflows, customer trust, database recoverability, and build stability.
+
+## 21. Objects Navigate, Buttons Act
+
+Use clickable objects for navigation: customer cards, job cards, appliance cards, estimates, invoices, calls, and timeline entries should open themselves.
+
+Reserve buttons for actions that change state, create something, save something, send something, or start a workflow.
+
+Do not make users choose between a row and a separate navigation button when the object itself can be the path.
+
+## 22. Operational First, Metrics Second
+
+Customer and job workspaces should show the facts needed for the next operational decision before analytics, counts, or historical trivia.
+
+For customers, prioritize open jobs, assets, balances, last job, and current contact context. Financial metrics are owner/admin information, not default technician clutter.
+
+## 23. Collapse History By Default
+
+Timeline, communication history, repair history, assets, notes, estimates, and invoices are important, but they should not force every user to scroll through history on every visit.
+
+Show the current work first. Reveal history through compact expandable sections that remember state while the page is open.
+
+## 24. Address Truth Must Be Explicit
+
+A customer has a primary address. A job has a service address. They are related, but they are not the same record.
+
+Creating a customer from intake may use the first service address as the customer primary address. Future jobs may default to the customer primary address. Changing a job service address must not rewrite customer history, and changing a customer primary address must not rewrite historical job addresses.
+
+If a dispatcher enters a new service address that should become the customer primary address, the UI must make that an explicit action.

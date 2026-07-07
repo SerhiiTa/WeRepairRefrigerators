@@ -59,6 +59,7 @@ import {
 import type { EstimateDraftAgentResult } from "@/lib/estimate-draft-agent";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import type {
+  CustomerAddressRow,
   Database,
   DatabaseServiceRequestNoteType,
   DatabaseServiceRequestPhotoType,
@@ -93,6 +94,12 @@ type AddressSaveState =
   | { status: "saving"; message: null }
   | { status: "success"; message: string }
   | { status: "error"; message: string };
+
+type CustomerPrimaryAddressState =
+  | { status: "idle"; address: null; error: null }
+  | { status: "loading"; address: null; error: null }
+  | { status: "ready"; address: CustomerAddressRow | null; error: null }
+  | { status: "error"; address: null; error: string };
 
 type AddressFormState = {
   streetAddress: string;
@@ -528,6 +535,66 @@ function getRequestFullAddress(request: DashboardServiceRequest) {
   );
 }
 
+function hasSavedServiceAddress(request: DashboardServiceRequest): boolean {
+  return Boolean(
+    request.streetAddress?.trim() ||
+      request.fullAddress?.trim() ||
+      request.city?.trim() ||
+      request.zipCode?.trim(),
+  );
+}
+
+function normalizeAddressComparisonPart(value: string | null | undefined): string {
+  return (value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .trim();
+}
+
+function getComparableServiceAddress(request: DashboardServiceRequest): string {
+  return [
+    request.streetAddress,
+    request.unit,
+    request.city,
+    request.state,
+    request.zipCode,
+    request.country,
+  ]
+    .map(normalizeAddressComparisonPart)
+    .join("|");
+}
+
+function getComparableCustomerAddress(address: CustomerAddressRow | null): string {
+  if (!address) {
+    return "";
+  }
+
+  return [
+    address.street_address,
+    address.unit,
+    address.city,
+    address.state,
+    address.zip_code,
+    address.country,
+  ]
+    .map(normalizeAddressComparisonPart)
+    .join("|");
+}
+
+function shouldOfferSaveServiceAddressAsCustomerPrimary(
+  request: DashboardServiceRequest,
+  customerPrimaryAddress: CustomerAddressRow | null,
+): boolean {
+  if (!request.customerId || !hasSavedServiceAddress(request)) {
+    return false;
+  }
+
+  return (
+    !customerPrimaryAddress ||
+    getComparableServiceAddress(request) !== getComparableCustomerAddress(customerPrimaryAddress)
+  );
+}
+
 function mapDispatcherPreviewSnapshot(
   raw: unknown,
 ): DispatcherPreviewSnapshot | null {
@@ -675,6 +742,12 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     status: "idle",
     message: null,
   });
+  const [customerPrimaryAddressState, setCustomerPrimaryAddressState] =
+    useState<CustomerPrimaryAddressState>({
+      status: "idle",
+      address: null,
+      error: null,
+    });
   const [addressSearchQuery, setAddressSearchQuery] = useState("");
   const [addressSuggestions, setAddressSuggestions] = useState<
     AddressSuggestion[]
@@ -818,6 +891,50 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
   const [calendarSyncSummary, setCalendarSyncSummary] =
     useState<CalendarSyncSummary>(null);
 
+  const loadCustomerPrimaryAddress = useCallback(async (customerId: string | null) => {
+    if (!customerId) {
+      setCustomerPrimaryAddressState({ status: "ready", address: null, error: null });
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setCustomerPrimaryAddressState({
+        status: "error",
+        address: null,
+        error: "Customer primary address is not available in this workspace.",
+      });
+      return;
+    }
+
+    setCustomerPrimaryAddressState({ status: "loading", address: null, error: null });
+
+    const { data, error } = await supabase
+      .from("customer_addresses")
+      .select("*")
+      .eq("customer_id", customerId)
+      .eq("is_primary", true)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      setCustomerPrimaryAddressState({
+        status: "error",
+        address: null,
+        error: error.message,
+      });
+      return;
+    }
+
+    setCustomerPrimaryAddressState({
+      status: "ready",
+      address: (data as CustomerAddressRow | null) ?? null,
+      error: null,
+    });
+  }, []);
+
   const refreshServiceRequest = useCallback(
     async (options?: { syncEditableFields?: boolean }) => {
       const supabase = getSupabaseBrowserClient();
@@ -871,8 +988,10 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
         setAddressSaveState({ status: "idle", message: null });
         setIsEditingAddress(false);
       }
+
+      void loadCustomerPrimaryAddress(request.customerId);
     },
-    [requestId],
+    [loadCustomerPrimaryAddress, requestId],
   );
 
   useEffect(() => {
@@ -1493,6 +1612,70 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     setAddressSuggestionState({ status: "idle", message: null });
     setAddressSaveState({ status: "idle", message: null });
     setIsEditingAddress(false);
+  }
+
+  async function saveAddressAsCustomerPrimary() {
+    if (state.status !== "ready") {
+      return;
+    }
+
+    if (!state.request.customerId) {
+      setAddressSaveState({
+        status: "error",
+        message: "This job is not linked to a customer record yet.",
+      });
+      return;
+    }
+
+    if (!hasSavedServiceAddress(state.request)) {
+      setAddressSaveState({
+        status: "error",
+        message: "Save a service address on this job before copying it to the customer profile.",
+      });
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setAddressSaveState({
+        status: "error",
+        message: "Customer address updates are not available for this workspace.",
+      });
+      return;
+    }
+
+    setAddressSaveState({ status: "saving", message: null });
+
+    const { error } = await supabase.rpc("upsert_customer_address_rpc", {
+      p_customer_id: state.request.customerId,
+      p_address_id: null,
+      p_payload: {
+        label: "Customer Primary Address",
+        street_address: state.request.streetAddress?.trim() || null,
+        unit: state.request.unit?.trim() || null,
+        city: state.request.city?.trim() || null,
+        state: state.request.state.trim().toUpperCase().slice(0, 2) || "TX",
+        zip_code: state.request.zipCode.replace(/[^0-9]/g, "").slice(0, 5) || null,
+        country: state.request.country.trim().toUpperCase().slice(0, 2) || "US",
+        latitude: state.request.latitude,
+        longitude: state.request.longitude,
+        place_id: state.request.placeId,
+        is_primary: true,
+      },
+    });
+
+    if (error) {
+      setAddressSaveState({ status: "error", message: error.message });
+      return;
+    }
+
+    await loadCustomerPrimaryAddress(state.request.customerId);
+
+    setAddressSaveState({
+      status: "success",
+      message: "Customer primary address saved. Historical job addresses were not changed.",
+    });
   }
 
   async function saveAddress() {
@@ -3120,6 +3303,13 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
   const addressSummary = request.streetAddress
     ? fullAddress
     : `${request.city ? `${request.city}, ` : ""}${request.state} ${request.zipCode}`;
+  const customerPrimaryAddress =
+    customerPrimaryAddressState.status === "ready"
+      ? customerPrimaryAddressState.address
+      : null;
+  const showSaveServiceAddressAsCustomerPrimary =
+    customerPrimaryAddressState.status === "ready" &&
+    shouldOfferSaveServiceAddressAsCustomerPrimary(request, customerPrimaryAddress);
   const quickActions = [
     {
       label: request.status === "diagnosed" ? "STARTED" : "START",
@@ -4085,7 +4275,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
       <dl className="mt-4 grid gap-2 rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] p-3 sm:grid-cols-2 xl:grid-cols-4">
         {[
           ["Customer", request.customerName],
-          ["Address", addressSummary],
+          ["Service Address", addressSummary],
           ["Appliance", request.applianceType],
           ["Appointment", scheduledWindowLabel ?? "Not scheduled"],
           ["Technician", assignedTechnicianLabel],
@@ -4250,7 +4440,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
           <div className="mt-4 grid gap-3 md:grid-cols-3">
             <div className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] p-3">
               <p className="text-[11px] font-black uppercase tracking-[0.16em] text-[#64748B]">
-                Address
+                Service Address
               </p>
               <p className="mt-1 line-clamp-3 text-sm font-semibold leading-5 text-[#334155]">
                 {fullAddress || addressSummary}
@@ -4495,7 +4685,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#0F6BFF]">
-              Service address
+              Service Address
             </p>
             <h2 className="mt-2 text-xl font-bold text-[#0F172A]">
               {request.streetAddress
@@ -4539,7 +4729,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
         <div className="mt-4 grid gap-3 text-sm md:grid-cols-2">
           <div className="rounded-md border border-[#E5E7EB] bg-[#F8FAFC] p-3">
             <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#64748B]">
-              Formatted address
+              Service Address
             </p>
             <p className="mt-2 font-semibold text-[#334155]">
               {fullAddress || "Not provided"}
@@ -4556,6 +4746,29 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
             </p>
           </div>
         </div>
+
+        {showSaveServiceAddressAsCustomerPrimary ? (
+          <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <p className="text-sm font-black text-emerald-900">
+                  Use this service address as the customer&apos;s primary address?
+                </p>
+                <p className="mt-1 text-sm font-semibold leading-6 text-emerald-800">
+                  This copies the current job service address to the customer profile. It does not change this job or any historical jobs.
+                </p>
+              </div>
+              <button
+                className="rounded-md bg-emerald-700 px-4 py-3 text-sm font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={addressSaveState.status === "saving"}
+                onClick={() => void saveAddressAsCustomerPrimary()}
+                type="button"
+              >
+                Save as Customer Primary Address
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         {isEditingAddress ? (
           <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 p-4">
@@ -4721,7 +4934,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
               >
                 {addressSaveState.status === "saving"
                   ? "Saving..."
-                  : "Save Address"}
+                  : "Save Service Address"}
               </button>
               <button
                 className="rounded-md border border-[#E5E7EB] px-4 py-3 text-sm font-bold text-[#334155] transition hover:border-[#0F6BFF] hover:text-[#0F6BFF]"
@@ -4746,7 +4959,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
             }}
             type="button"
           >
-            Edit Address
+            Edit Service Address
           </button>
         )}
 
