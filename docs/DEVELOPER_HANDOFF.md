@@ -77,7 +77,12 @@ The Attention Engine is not a notification system. It decides who needs attentio
 - Task 157 is complete as documentation-only architecture. It creates `docs/ATTENTION_ENGINE_AND_COMPANY_MODES.md`, defines Solo/Team/Enterprise company modes, and defines the Attention Engine before any notification delivery, Communications implementation, Settings UI, schema, provider, migration, push, SMS, browser notification, or UI work.
 - Task 161.2 is complete locally as the Jobs Center UX fix. The mobile Jobs header now uses one company label, Dashboard and Jobs share `DashboardMobileDrawer`, job cards are compact, and New Job is a single customer-first work order form that hides the internal intake conversion path. It reuses existing address autocomplete and verified technician profiles. Do not reintroduce a stepped wizard or expose Intake as the main user-facing creation language.
 - Task 161.3 is complete locally as Jobs Center QA fixes. New Job customer suggestions stay hidden until typing starts; phone numbers display as readable US numbers while create-job payloads normalize to `+1` when possible; appliance and brand suggestions come from shared `frontend/src/lib/appliance-options.ts`; `DashboardMobileDrawer` now renders known route links immediately instead of showing a loading state; stats are six compact tiles including Gross MTD; and job cards/filter controls are tighter. Gross MTD is only a safe current-month paid invoice read and is not technician share/accounting logic.
-- Task 161.4 is complete locally as the Jobs Center layout reset. `/dashboard/leads` is now month-based with previous/next month navigation, one main search field, compact top actions, hidden filters, three simple stats (`Today`, `Active`, `Gross`), and compact date-led job rows. New Job remains the customer-first single-screen form. Gross is only a safe selected-month paid invoice read and is not technician share/accounting logic.
+- Task 161.4 is complete locally as the Jobs Center layout reset. `/dashboard/leads` is now month-based with previous/next month navigation, one main search field, compact top actions, hidden filters, three simple selected-month stats (`Jobs`, `Active`, `Gross`), and compact date-led job rows. New Job remains the customer-first single-screen form. Gross is only a safe selected-month paid invoice read and is not technician share/accounting logic.
+- Task 162 is complete as documentation-only Job Workspace audit. Read `docs/TASK162_JOB_WORKSPACE_AUDIT.md` before any future Job Workspace redesign. The audit recommends keeping the operational capabilities but restructuring the screen around a compact header, one primary Next Action, merged current job facts, collapsed appointment/address/history details, and clearer estimate/invoice/finance separation.
+- Task 163 is complete as Property Intelligence infrastructure. `/api/property-intelligence` is a dashboard-authenticated server route that calls HasData Zillow server-side only, returns the minimal `PropertyIntelligence` contract, and caches normalized-address lookups. No Job Workspace UI was changed.
+- Task 164 is complete as a UI-only Job Workspace Property Preview. `ServiceRequestDetail.tsx` consumes `/api/property-intelligence` for the job service address and shows only map/photo/Zestimate/sqft/year-built with a graceful placeholder. No backend, Supabase, HasData, status, estimate, invoice, finance, timeline, Retell, or phone workflow logic was changed.
+- Task 164.1 is complete as full-address Property Preview QA. The real HasData Zillow endpoint requires a Zillow `url`, not raw `{ address }`; the server adapter now derives a Zillow homes URL from the address, maps real response fields, and uses cache key `property-intelligence-hasdata-zillow-v2`. QA verified map/photo/Zestimate/year-built for `301 E 79th St, APT 23S, New York, NY 10075, US`.
+- Task 164.2 is complete as reliability/mobile hardening. Address-derived Zillow URLs are best-effort only, so arbitrary addresses may return `property: null`. The route fails closed without user-facing provider errors, validates ZIP when possible, and mobile now shows one large property photo/map instead of two tiny thumbnails.
 
 ## Workiz Exit / HomeFix Pilot Priority
 
@@ -978,7 +983,38 @@ Some existing files may be uncommitted from prior tasks. Check `git status` befo
 
 - Read `docs/TASK161_4_JOBS_CENTER_LAYOUT_RESET.md` before changing the Jobs Center layout again.
 - Jobs Center is month-based. Do not restore a permanent filter panel or six-tile KPI grid without a new owner-approved task.
-- Main stats are Today, Active, and Gross only. Gross is a safe selected-month paid invoice read, not compensation/accounting logic.
+- Main stats are Jobs, Active, and Gross only. Jobs is the selected-month job count. Gross is a safe selected-month paid invoice read, not compensation/accounting logic.
 - Filters belong behind the compact filter control: Status, Tags, Team, and Schedule status.
 - Tags are disabled until real job-tag data exists.
 - New Job remains the customer-first single-screen form and should not be converted back into a stepped wizard unless explicitly requested.
+
+## Task 162 Job Workspace Audit
+
+- Read `docs/TASK162_JOB_WORKSPACE_AUDIT.md` before changing `frontend/src/components/dashboard/ServiceRequestDetail.tsx`.
+- Task 162 was documentation only. It did not modify app code, backend logic, Supabase, Retell, Communications Hub, Jobs Center, authentication, or database schema.
+- Keep: compact header, job name, current status, customer/contact, service address/map, appliance/problem, technician findings, photos, estimate workflow, invoice workflow, and timeline/history access.
+- Merge: repeated customer, service address, appointment, appliance, issue description, status, finance, and current-job fact blocks.
+- Collapse: address editor, appointment matching diagnostics, parts workflow, estimate history, invoice history, timeline/history, and technical scheduling details.
+- Remove from the default overview in the future implementation pass: old repeated detail grid, duplicate issue-description card, customer repair history counters without real previous repairs, large disabled unavailable action blocks, and coordinate/navigation metadata.
+## Task 163 Property Intelligence Foundation
+
+- Server API: `frontend/src/app/api/property-intelligence/route.ts`.
+- Shared type: `frontend/src/lib/property-intelligence.ts`.
+- Server provider boundary: `frontend/src/server/property-intelligence/hasdata-zillow.ts`.
+- The route accepts `GET ?address=` or `POST { address }`, requires the existing dashboard bearer token, and returns `{ property: PropertyIntelligence | null }`.
+- `PropertyIntelligence` intentionally exposes only `photo`, `zestimate`, `livingArea`, `yearBuilt`, `propertyType`, `latitude`, `longitude`, and `mapImage`.
+- The HasData key is read from server env `HASDATA_API_KEY` only. Do not add `NEXT_PUBLIC_HASDATA_API_KEY` or call HasData from browser code.
+- Results are cached with Next server data cache for 14 days by normalized address. If the provider misses, fails, or returns an unsupported shape, the route returns `property: null` so the future Job Workspace can degrade cleanly.
+- This task did not modify the Job Workspace UI. Future UI work should consume this route rather than calling HasData directly.
+
+## Task 164 Job Workspace Property Preview
+
+- UI file: `frontend/src/components/dashboard/ServiceRequestDetail.tsx`.
+- Documentation: `docs/TASK164_JOB_WORKSPACE_PROPERTY_PREVIEW.md`.
+- The Overview tab now shows a compact Property Preview card after the `Next action` card.
+- The card calls `/api/property-intelligence` with the current job service address and the existing dashboard bearer session. It skips the request when the job has no street/full service address.
+- The card renders only `mapImage`, `photo`, `zestimate`, `livingArea`, and `yearBuilt`; all other Zillow/listing fields remain hidden.
+- Provider/API failures and `property: null` results show a compact placeholder instead of a technician-facing error.
+- Do not bypass this route in future UI. HasData must remain server-side only.
+- Task 164.1 fixed the HasData request shape in `frontend/src/server/property-intelligence/hasdata-zillow.ts`. The adapter now builds `https://www.zillow.com/homes/{address-slug}_rb/` and posts `{ url }` to HasData, then normalizes `image`, `zestimate.zestimate`, `area.livingArea`, `geo.latitude`, `geo.longitude`, and `staticMapUrls`.
+- Task 164.2 adds a ZIP sanity check for provider results. If HasData resolves the derived Zillow URL to a different ZIP, return `property: null` rather than showing a possibly wrong property. Future higher-reliability work should add a real property search/address resolution step before calling the property endpoint.

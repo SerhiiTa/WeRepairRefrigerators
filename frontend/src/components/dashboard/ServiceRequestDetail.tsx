@@ -57,6 +57,7 @@ import {
   type TechnicianAvailabilityRule,
 } from "@/lib/integrations/scheduling";
 import type { EstimateDraftAgentResult } from "@/lib/estimate-draft-agent";
+import type { PropertyIntelligence } from "@/lib/property-intelligence";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import type {
   CustomerAddressRow,
@@ -100,6 +101,11 @@ type CustomerPrimaryAddressState =
   | { status: "loading"; address: null; error: null }
   | { status: "ready"; address: CustomerAddressRow | null; error: null }
   | { status: "error"; address: null; error: string };
+
+type PropertyPreviewState =
+  | { status: "idle"; property: null }
+  | { status: "loading"; property: null }
+  | { status: "ready"; property: PropertyIntelligence | null };
 
 type AddressFormState = {
   streetAddress: string;
@@ -535,6 +541,27 @@ function getRequestFullAddress(request: DashboardServiceRequest) {
   );
 }
 
+function getPropertyLookupAddress(request: DashboardServiceRequest): string | null {
+  if (request.fullAddress?.trim()) {
+    return request.fullAddress.trim();
+  }
+
+  if (!request.streetAddress?.trim()) {
+    return null;
+  }
+
+  const address = buildFormattedAddress({
+    streetAddress: request.streetAddress,
+    unit: request.unit,
+    city: request.city,
+    state: request.state,
+    zipCode: request.zipCode,
+    country: request.country,
+  });
+
+  return address.trim().length > 0 ? address : null;
+}
+
 function hasSavedServiceAddress(request: DashboardServiceRequest): boolean {
   return Boolean(
     request.streetAddress?.trim() ||
@@ -712,6 +739,40 @@ function formatScheduledWindow(
   return `${date} · ${startTime.slice(0, 5)}-${endTime.slice(0, 5)}`;
 }
 
+function formatCompactCurrency(value: number | null): string {
+  if (value === null) {
+    return "Not available";
+  }
+
+  return new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 0,
+    style: "currency",
+    currency: "USD",
+  }).format(value);
+}
+
+function formatCompactNumber(value: number | null): string {
+  if (value === null) {
+    return "Not available";
+  }
+
+  return new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function formatLivingArea(value: number | null): string {
+  if (value === null || value <= 0) {
+    return "Sqft unavailable";
+  }
+
+  return `${formatCompactNumber(value)} sqft`;
+}
+
+function getBackgroundImageStyle(url: string) {
+  return { backgroundImage: `url(${JSON.stringify(url)})` };
+}
+
 export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
   const [state, setState] = useState<DetailState>({
     status: "loading",
@@ -747,6 +808,11 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
       status: "idle",
       address: null,
       error: null,
+    });
+  const [propertyPreviewState, setPropertyPreviewState] =
+    useState<PropertyPreviewState>({
+      status: "idle",
+      property: null,
     });
   const [addressSearchQuery, setAddressSearchQuery] = useState("");
   const [addressSuggestions, setAddressSuggestions] = useState<
@@ -890,6 +956,8 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     });
   const [calendarSyncSummary, setCalendarSyncSummary] =
     useState<CalendarSyncSummary>(null);
+  const propertyLookupAddress =
+    state.status === "ready" ? getPropertyLookupAddress(state.request) : null;
 
   const loadCustomerPrimaryAddress = useCallback(async (customerId: string | null) => {
     if (!customerId) {
@@ -1098,6 +1166,76 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
       clearTimeout(timeoutId);
     };
   }, [addressSearchQuery, isEditingAddress]);
+
+  useEffect(() => {
+    let isActive = true;
+
+    async function loadPropertyPreview() {
+      if (!propertyLookupAddress) {
+        setPropertyPreviewState({ status: "ready", property: null });
+        return;
+      }
+
+      const supabase = getSupabaseBrowserClient();
+
+      if (!supabase) {
+        setPropertyPreviewState({ status: "ready", property: null });
+        return;
+      }
+
+      setPropertyPreviewState({ status: "loading", property: null });
+
+      try {
+        const sessionResult = await getDashboardActionSession(supabase);
+
+        if (!sessionResult.ok) {
+          throw new Error(sessionResult.message);
+        }
+
+        const accessToken = sessionResult.response.data.session?.access_token;
+
+        if (!accessToken) {
+          throw new Error("A dashboard session is required.");
+        }
+
+        const response = await fetch(
+          `/api/property-intelligence?address=${encodeURIComponent(
+            propertyLookupAddress,
+          )}`,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+            },
+          },
+        );
+
+        const payload = (await response.json().catch(() => null)) as {
+          property?: PropertyIntelligence | null;
+        } | null;
+
+        if (!isActive) {
+          return;
+        }
+
+        setPropertyPreviewState({
+          status: "ready",
+          property: response.ok ? payload?.property ?? null : null,
+        });
+      } catch {
+        if (!isActive) {
+          return;
+        }
+
+        setPropertyPreviewState({ status: "ready", property: null });
+      }
+    }
+
+    void loadPropertyPreview();
+
+    return () => {
+      isActive = false;
+    };
+  }, [propertyLookupAddress]);
 
   async function loadNotes() {
     const supabase = getSupabaseBrowserClient();
@@ -3303,6 +3441,22 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
   const addressSummary = request.streetAddress
     ? fullAddress
     : `${request.city ? `${request.city}, ` : ""}${request.state} ${request.zipCode}`;
+  const propertyPreview = propertyPreviewState.property;
+  const propertyPreviewMediaUrl =
+    propertyPreview?.photo ?? propertyPreview?.mapImage ?? null;
+  const propertyPreviewMediaLabel = propertyPreview?.photo
+    ? "Property"
+    : propertyPreview?.mapImage
+      ? "Property map"
+      : "Property preview";
+  const hasPropertyPreviewData = Boolean(
+    propertyPreview &&
+      (propertyPreview.photo ||
+        propertyPreview.mapImage ||
+        propertyPreview.zestimate !== null ||
+        propertyPreview.livingArea !== null ||
+        propertyPreview.yearBuilt !== null),
+  );
   const customerPrimaryAddress =
     customerPrimaryAddressState.status === "ready"
       ? customerPrimaryAddressState.address
@@ -4380,6 +4534,97 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
           >
             {operationalNextStep.actionLabel}
           </button>
+        </div>
+      </section>
+
+      <section className="mt-4 rounded-2xl border border-[#E5E7EB] bg-white p-3 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+        <div className="grid gap-3 sm:grid-cols-[96px_96px_1fr] sm:items-center">
+          <div className="aspect-[16/9] overflow-hidden rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] sm:hidden">
+            {propertyPreviewMediaUrl ? (
+              <div
+                aria-label={propertyPreviewMediaLabel}
+                className="h-full w-full bg-cover bg-center"
+                role="img"
+                style={getBackgroundImageStyle(propertyPreviewMediaUrl)}
+              />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center px-3 text-center text-xs font-black uppercase tracking-[0.12em] text-[#94A3B8]">
+                Property image unavailable
+              </div>
+            )}
+          </div>
+
+          <div className="hidden aspect-square overflow-hidden rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] sm:block">
+            {propertyPreview?.mapImage ? (
+              <div
+                aria-label="Property map"
+                className="h-full w-full bg-cover bg-center"
+                role="img"
+                style={getBackgroundImageStyle(propertyPreview.mapImage)}
+              />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center px-2 text-center text-[10px] font-black uppercase tracking-[0.12em] text-[#94A3B8]">
+                Map
+              </div>
+            )}
+          </div>
+          <div className="hidden aspect-square overflow-hidden rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] sm:block">
+            {propertyPreview?.photo ? (
+              <div
+                aria-label="Property"
+                className="h-full w-full bg-cover bg-center"
+                role="img"
+                style={getBackgroundImageStyle(propertyPreview.photo)}
+              />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center px-2 text-center text-[10px] font-black uppercase tracking-[0.12em] text-[#94A3B8]">
+                Photo
+              </div>
+            )}
+          </div>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-[11px] font-black uppercase tracking-[0.16em] text-[#0F6BFF]">
+                Property Preview
+              </p>
+              {hasPropertyPreviewData ? (
+                <span className="rounded-full bg-[#F1F5F9] px-2 py-0.5 text-[10px] font-bold text-[#64748B]">
+                  Source: Zillow
+                </span>
+              ) : null}
+            </div>
+            {propertyPreviewState.status === "loading" ? (
+              <p className="mt-2 text-sm font-semibold text-[#64748B]">
+                Loading property context...
+              </p>
+            ) : hasPropertyPreviewData ? (
+              <>
+                <p className="mt-1 truncate text-lg font-black text-[#0F172A] sm:text-xl">
+                  {formatCompactCurrency(propertyPreview?.zestimate ?? null)}
+                </p>
+                <div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-1 text-xs font-bold text-[#64748B] sm:flex sm:flex-wrap sm:gap-x-3 sm:gap-y-1 sm:text-sm">
+                  <span>Zestimate</span>
+                  <span>{formatLivingArea(propertyPreview?.livingArea ?? null)}</span>
+                  <span>
+                    Built{" "}
+                    {propertyPreview?.yearBuilt
+                      ? Math.trunc(propertyPreview.yearBuilt)
+                      : "not available"}
+                  </span>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="mt-1 text-sm font-black text-[#0F172A]">
+                  Property details unavailable
+                </p>
+                <p className="mt-1 text-xs font-semibold leading-5 text-[#64748B]">
+                  Add or confirm the service address to show map, photo, Zestimate,
+                  square footage, and year built.
+                </p>
+              </>
+            )}
+          </div>
         </div>
       </section>
 

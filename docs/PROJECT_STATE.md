@@ -77,7 +77,12 @@ The first production vertical is Houston/HomeFix appliance repair. This is the v
 - Task 157 is complete as documentation-only architecture. It creates `docs/ATTENTION_ENGINE_AND_COMPANY_MODES.md` and defines Solo/Team/Enterprise operating modes plus the Attention Engine model before any notification, push, SMS, browser notification, Communications Hub implementation, Settings UI, schema, or provider work.
 - Task 161.2 is complete locally as a Jobs Center UX fix. It removes duplicated mobile header language, introduces a reusable dashboard mobile drawer, replaces the stepped New Job wizard with a single customer-first work order form, reuses the existing address autocomplete adapter, keeps Intake as an internal implementation detail, and tightens job cards/stat tiles for mobile daily use. No Retell, phone workflow, SMS, estimates, invoices, payments, schema, Supabase, Communications Hub, Customer CRM, or Job Workspace redesign work was added.
 - Task 161.3 is complete locally as Jobs Center QA fixes. It hides New Job customer suggestions until typing begins, adds readable US phone formatting with `+1` normalization for create-job payloads, introduces shared appliance/brand option lists, makes the dashboard mobile drawer instant by rendering the known route list without identity loading, adds six equal stats including Gross MTD from safely readable paid invoice data, clarifies the Filter jobs panel, and compacts job cards further. No schema, migrations, Retell, phone workflow, SMS, estimates, invoices, payments, Communications Hub redesign, Customer CRM redesign, or Job Workspace redesign work was added.
-- Task 161.4 is complete locally as a Jobs Center layout reset. Jobs Center is now organized around selected month navigation, one search field, compact top actions, hidden filters, three simple stats (`Today`, `Active`, `Gross`), and compact date-led job rows. New Job remains the customer-first single-screen form. No schema, migrations, Retell, phone workflow, SMS, estimates, invoices, payments, Communications Hub redesign, Customer CRM redesign, Job Workspace redesign, or drawer redesign work was added.
+- Task 161.4 is complete locally as a Jobs Center layout reset. Jobs Center is now organized around selected month navigation, one search field, compact top actions, hidden filters, three simple selected-month stats (`Jobs`, `Active`, `Gross`), and compact date-led job rows. New Job remains the customer-first single-screen form. No schema, migrations, Retell, phone workflow, SMS, estimates, invoices, payments, Communications Hub redesign, Customer CRM redesign, Job Workspace redesign, or drawer redesign work was added.
+- Task 162 is complete as a documentation-only Job Workspace UX audit. It creates `docs/TASK162_JOB_WORKSPACE_AUDIT.md` and recommends a future full restructuring around a compact job header, one primary next action, merged customer/address/appliance/finding facts, collapsed appointment diagnostics, collapsed history, and a cleaner estimate/invoice/finance structure. No application code, components, backend, schema, Supabase, Retell, Communications Hub, Jobs Center, or authentication was changed.
+- Task 163 is complete as the Property Intelligence infrastructure foundation. It adds a dashboard-authenticated server API route at `/api/property-intelligence`, a server-only HasData Zillow adapter, a shared `PropertyIntelligence` type, and cached provider lookups. It does not create UI, modify the existing Job Workspace, create database tables, modify Supabase, or expose `HASDATA_API_KEY` to the browser.
+- Task 164 is complete as a UI-only Job Workspace Property Preview. The Overview/Details tab now consumes `/api/property-intelligence` for the current job service address and shows a compact map/photo/Zestimate/sqft/year-built card with a graceful placeholder. It does not change backend routes, Supabase, HasData integration, status logic, estimates, invoices, finance, timeline, Retell, or phone workflow.
+- Task 164.1 is complete as full-address Property Preview QA. QA used `301 E 79th St, APT 23S, New York, NY 10075, US` and verified HasData-backed map/photo/Zestimate/year-built display. The provider contract bug was fixed: the server adapter now sends a derived Zillow homes URL to HasData and maps real response fields such as `image`, `zestimate.zestimate`, `area.livingArea`, `geo`, and `staticMapUrls`. The UI handles `0` living area as `Sqft unavailable`.
+- Task 164.2 is complete as Property Preview reliability and mobile layout hardening. The docs now explicitly state that address-derived Zillow URLs are best-effort and not guaranteed for every arbitrary address. The server adapter returns `property: null` for provider failures or ZIP-mismatched results, and mobile now uses one larger photo/map area instead of two tiny thumbnails.
 
 ## Workiz Exit / HomeFix Pilot
 
@@ -1223,6 +1228,33 @@ Use the webpack build command for verification because it has been the stable bu
 - Jobs Center is now organized by selected month.
 - Main page controls are limited to previous/next month, one search field, compact `+` New Job, and a compact filter button.
 - Permanent technician, schedule, status, and clear-filter controls were removed from the main surface. They now live in a mobile-friendly filter sheet.
-- Stats are reduced to Today, Active, and Gross. Gross is a safe selected-month paid invoice read only; real financial calculations remain future invoice/payment engine work.
+- Stats are reduced to Jobs, Active, and Gross. Jobs is the total job count for the selected month. Gross is a safe selected-month paid invoice read only; real financial calculations remain future invoice/payment engine work.
 - New Job remains the existing customer-first single-screen form.
 - See `docs/TASK161_4_JOBS_CENTER_LAYOUT_RESET.md`.
+
+## Task 162 Job Workspace audit
+
+- Task 162 is documentation-only and does not change production code.
+- `docs/TASK162_JOB_WORKSPACE_AUDIT.md` audits the current Job Workspace block by block: header, job name, description, status, customer, phone, service address, schedule, tags, team, attachments, notes, timeline, finance, estimate, invoice, payments, photos, property preview, Repair Intelligence, technician findings, parts workflow, customer repair history, and dispatcher preview.
+- The audit identifies repeated customer/address/appointment/appliance/status/problem information, a low-value old overview detail grid, large address and appointment diagnostics, duplicated note/finding entry paths, and history/counter blocks that add scroll without immediate action.
+- Recommended future structure: compact header, one primary Next Action, top customer/address/appliance/problem/finding facts, contextual diagnosis/parts/finance modules, and collapsed history/details.
+
+## Task 163 Property Intelligence foundation
+
+- Task 163 adds infrastructure only for future Job Workspace property context.
+- New route: `/api/property-intelligence`. It accepts `GET ?address=` or `POST { address }`, requires the existing dashboard bearer session, calls HasData Zillow server-side only, and returns `{ property: PropertyIntelligence | null }`.
+- Shared type: `PropertyIntelligence` contains only `photo`, `zestimate`, `livingArea`, `yearBuilt`, `propertyType`, `latitude`, `longitude`, and `mapImage`.
+- Provider output is normalized down to those eight fields. Zillow/HasData misses, invalid addresses, provider failures, or missing provider data return `property: null` without surfacing UI errors.
+- Provider lookups use Next server data cache with a 14-day revalidation window keyed by normalized address, so repeated visits can reuse cached results instead of calling Zillow again.
+- No UI, Job Workspace component, Supabase schema, database migration, Retell, phone workflow, customer workflow, or browser-side HasData call was added.
+
+## Task 164 Job Workspace Property Preview
+
+- Task 164 adds the first UI use of Property Intelligence inside `frontend/src/components/dashboard/ServiceRequestDetail.tsx`.
+- The card appears near the top of the Overview/Details tab after `Next action`.
+- Data flow stays internal: the component passes the job service address to `/api/property-intelligence`; the browser does not call HasData directly.
+- The card shows only map image, property photo, Zestimate, living area, and year built. Other Zillow fields remain hidden.
+- If the address is missing, Zillow/HasData returns no match, or the API call fails, the Job Workspace shows a compact placeholder and no user-facing provider error.
+- No backend, Supabase, migration, HasData integration, Retell, phone workflow, Finance, Timeline, status, estimate, invoice, or appointment logic was changed.
+- Task 164.1 verified the full-address provider path and fixed the server adapter contract for HasData Zillow. HasData requires a Zillow URL payload, so the backend now derives a Zillow homes URL from the service address before calling the provider. The cache key was bumped to avoid reusing earlier failed/null lookups.
+- Task 164.2 clarified reliability: deriving a Zillow homes URL from a service address is a best-effort lookup, not a universal address resolver. The route continues to fail closed with `property: null`, and the mobile card now prioritizes one large property photo or map.

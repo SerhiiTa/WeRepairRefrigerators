@@ -125,7 +125,42 @@ Status:
 - Task 161.1 is complete locally as the first Jobs Center UX polish pass.
 - Task 161.2 is complete locally as the owner-QA fix: mobile header clutter was removed, Dashboard and Jobs now share one reusable mobile drawer pattern, collapsed job cards are compact, and New Job is a single customer-first work order form.
 - Task 161.3 is complete locally as Jobs Center QA fixes: customer suggestions wait until typing, phone numbers are displayed cleanly and normalized for create-job payloads, appliance/brand suggestions use shared option lists, the mobile drawer opens without a loading state, stats are six compact tiles including Gross MTD, and job cards/filter controls are tighter.
-- Task 161.4 is complete locally as the owner-QA layout reset: Jobs Center is now month-based, filters are hidden behind a compact filter control, stats are reduced to Today/Active/Gross, and job cards are compact date-led rows. New Job remains the existing customer-first single-screen form.
+- Task 161.4 is complete locally as the owner-QA layout reset: Jobs Center is now month-based, filters are hidden behind a compact filter control, stats are reduced to Jobs/Active/Gross for the selected month, and job cards are compact date-led rows. New Job remains the existing customer-first single-screen form.
+
+### Task 162 — Job Workspace Audit
+
+Status:
+
+- Task 162 is complete as documentation-only UX audit.
+- Created `docs/TASK162_JOB_WORKSPACE_AUDIT.md`.
+- The audit confirms the Job Workspace has the right operational capabilities but needs layout restructuring before the next implementation pass.
+- Recommended future direction: compact job header, one primary Next Action, merged customer/service-address/appliance/problem/finding facts, collapsed address editor, collapsed appointment diagnostics, collapsed history, and clearer estimate/invoice/finance separation.
+- Duplicate information to remove in the next implementation pass: repeated customer, service address, appointment, appliance, status, issue description, finance state, and notes/photos/timeline counters.
+- Task 163 is complete as an infrastructure-only Property Intelligence foundation. It adds a backend-only HasData Zillow route and shared type for future Job Workspace property context without changing the current Job Workspace UI.
+
+### Task 163 — Property Intelligence Foundation
+
+Status:
+
+- Task 163 is complete.
+- Added a server API route at `/api/property-intelligence` for dashboard-authenticated property lookups by address.
+- Added a shared `PropertyIntelligence` contract with only the fields needed by future Job Workspace property context: `photo`, `zestimate`, `livingArea`, `yearBuilt`, `propertyType`, `latitude`, `longitude`, and `mapImage`.
+- HasData Zillow calls remain server-side only through `HASDATA_API_KEY`; no browser/client API usage was added.
+- Provider responses are normalized to the minimal property contract, and not-found or unavailable Zillow results return `null`.
+- Results are cached by normalized address with a 14-day server revalidation window so reopening a job can avoid repeated provider calls.
+- No UI, Job Workspace component, database schema, migration, Supabase, Retell, phone workflow, estimate, invoice, payment, or provider configuration changes were made.
+
+### Task 164 — Job Workspace Property Preview
+
+Status:
+
+- Task 164 is complete as a UI-only Details/Overview enhancement.
+- `ServiceRequestDetail.tsx` now shows a compact Property Preview card near the top of the Job Workspace using the existing `/api/property-intelligence` route.
+- The preview displays only map image, home/property photo, Zestimate, square footage, and year built. It does not expose extra Zillow/listing fields.
+- Missing address, not-found property data, or provider failures degrade to a compact placeholder instead of a visible error.
+- No backend, Supabase, HasData integration, database schema, Retell, phone workflow, Finance, Timeline, status, estimate, invoice, payment, or appointment logic changed.
+- Task 164.1 full-address QA is complete. The HasData provider path was verified with `301 E 79th St, APT 23S, New York, NY 10075, US`; the card displayed map, photo, Zestimate, and year built, and showed `Sqft unavailable` for provider living area `0`. The server adapter now sends a derived Zillow homes URL and maps the real HasData response shape.
+- Task 164.2 reliability/mobile hardening is complete. Address-to-Zillow lookup is documented as best-effort because the provider requires a Zillow URL. Provider failures and ZIP-mismatched results return `property: null`, and the mobile preview now shows one large photo or map instead of two tiny thumbnails.
 
 Rules for future Jobs Center work:
 
