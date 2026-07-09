@@ -106,6 +106,8 @@ It is the working center for:
 
 Communications Hub owns customer contact processing. It should not become a full Dashboard and should not replace Job Workspace.
 
+Task 159.1 defines the post-call decision workflow in `docs/POST_CALL_WORKFLOW_SPEC.md`. Communications Hub should use a left conversation list, center decision card, and right transcript/audio/timeline. It should not duplicate Customer CRM or Job Workspace.
+
 ## 4. Job Workspace Purpose
 
 Job Workspace is where the technician or dispatcher works on one job.
@@ -282,3 +284,50 @@ Next implementation should:
 - Keep Job Workspace as the job execution center.
 
 Do not build a fourth competing daily workspace.
+
+## 13. Task 160 Minimalist Dashboard Decision
+
+Owner QA refined the dashboard direction again: the dashboard should not be a page full of widgets.
+
+The dashboard should answer:
+
+```text
+What should I do right now?
+```
+
+For the current Workiz Exit phase, `/dashboard` should show only:
+
+- Greeting.
+- Search.
+- Phone/messages/attention icons.
+- Profile shortcut.
+- Today's Jobs.
+
+The dashboard should not duplicate Communications Hub, Customer CRM, Job Workspace, vendor search, manuals, community, revenue analytics, recent calls, recent messages, or parts/vendor workflows.
+
+Routing rules:
+
+- Phone icon opens Communications Hub.
+- Messages icon opens Communications Hub.
+- Bell icon is an Attention Center placeholder until a future attention task.
+- Today's job cards open Job Workspace.
+- Search routes into Jobs.
+
+## 14. Task 160.1 Action Module Language
+
+Task 160.1 keeps the minimalist dashboard and makes the entry actions explicit.
+
+Daily action module labels:
+
+- Calls.
+- Messages.
+- Jobs.
+- Schedule.
+- Attention.
+- Profile.
+
+These are product labels for humans, not database or backend renames.
+
+The dashboard header should act like an operating-system launcher: one compact row of actions that routes the user into the correct work center. The body remains Today's Jobs only.
+
+Do not add separate dashboard widgets for calls, messages, parts, vendors, manuals, community, or revenue while the Workiz Exit workflow is still being stabilized.

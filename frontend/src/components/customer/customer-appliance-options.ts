@@ -1,25 +1,26 @@
+import { COMMON_APPLIANCE_TYPES } from "@/lib/appliance-options";
+
 export const customerApplianceGroups = [
   {
     label: "Cold storage",
-    options: ["Refrigerator", "Freezer", "Ice Maker", "Wine Cooler"],
+    options: COMMON_APPLIANCE_TYPES.filter((option) =>
+      ["Refrigerator", "Freezer", "Ice Maker", "Wine Cooler"].includes(option),
+    ),
   },
   {
     label: "Laundry",
-    options: ["Washer", "Dryer"],
+    options: COMMON_APPLIANCE_TYPES.filter((option) =>
+      ["Washer", "Dryer"].includes(option),
+    ),
   },
   {
     label: "Cooking",
-    options: [
-      "Range",
-      "Oven",
-      "Cooktop",
-      "Microwave",
-      "Vent Hood",
-      "Garbage Compactor",
-    ],
+    options: COMMON_APPLIANCE_TYPES.filter((option) =>
+      ["Range", "Oven", "Cooktop", "Microwave", "Vent Hood", "Garbage Compactor"].includes(option),
+    ),
   },
   {
     label: "Kitchen cleanup",
-    options: ["Dishwasher"],
+    options: COMMON_APPLIANCE_TYPES.filter((option) => option === "Dishwasher"),
   },
 ];

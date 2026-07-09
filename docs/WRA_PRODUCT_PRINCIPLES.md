@@ -187,3 +187,32 @@ A job is one event in the customer relationship. The relationship also includes 
 Workflows should make the current job fast to execute while preserving customer context and history.
 
 See `docs/WRA_DAILY_OPERATING_WORKFLOW.md` before changing the daily Dashboard, Communications Hub, Job Workspace, or navigation model.
+
+## 28. Dashboard Is An Action Launcher
+
+The daily Dashboard should not become a CRM widget wall.
+
+Its job is to route the user into the correct work center quickly:
+
+- Calls.
+- Messages.
+- Jobs.
+- Schedule.
+- Attention.
+- Profile.
+
+Show only the information needed to decide where to go next. For the Workiz Exit phase, the dashboard body should stay focused on Today's Jobs. Calls and messages belong in Communications Hub. Job execution belongs in Job Workspace. Customer history belongs in Customer CRM. Revenue, vendor, manuals, community, and deeper operational analytics should not compete for attention on the daily start screen unless a future task proves they directly answer `What should I do right now?`
+
+## 29. Jobs Center Manages Work
+
+Customer is the relationship. Job is the work.
+
+The Jobs Center should help technicians, dispatchers, and owners find and move work quickly throughout the day. It should not become a customer profile, a communications transcript viewer, or a duplicate Job Workspace.
+
+Jobs Center should show compact work facts: customer, appliance, problem, appointment time, status, assigned technician, service location, and last activity. The object itself should open the Job Workspace. Buttons should remain compact actions such as Call, Message, or Open.
+
+When a user chooses New Job, the interface should speak in job language. Intake can remain an internal review/conversion implementation, but it should not be exposed as the mental model for someone trying to create work.
+
+Task 161.2 adds the concrete Jobs Center rule: New Job should be a single customer-first form whenever possible. Search/select the customer first, then service address, appliance/problem, schedule, and technician. Avoid step ceremonies unless the workflow truly needs them.
+
+Mobile dashboard navigation should use one reusable drawer pattern across Dashboard, Jobs Center, and future dashboard pages. Do not create route-specific mobile menus that drift in animation, styling, route list, or profile behavior.

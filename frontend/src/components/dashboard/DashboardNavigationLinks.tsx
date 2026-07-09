@@ -15,7 +15,7 @@ import type {
 import type { AppRole, AuthProfileStatus } from "@/lib/auth/types";
 
 type DashboardNavigationLinksProps = {
-  variant: "sidebar" | "mobile";
+  variant: "drawer" | "sidebar" | "mobile";
 };
 
 type NavigationIdentityState =
@@ -150,7 +150,15 @@ export function DashboardNavigationLinks({
 
   if (identityState.status === "loading") {
     return (
-      <p className={variant === "mobile" ? "text-sm text-slate-400" : "px-3 text-sm text-slate-400"}>
+      <p
+        className={
+          variant === "mobile"
+            ? "text-sm text-slate-400"
+            : variant === "drawer"
+              ? "px-4 py-3 text-sm font-semibold text-[#64748B]"
+              : "px-3 text-sm text-slate-400"
+        }
+      >
         Loading navigation...
       </p>
     );
@@ -158,9 +166,32 @@ export function DashboardNavigationLinks({
 
   if (visibleItems.length === 0) {
     return (
-      <p className={variant === "mobile" ? "text-sm text-slate-400" : "px-3 text-sm leading-6 text-slate-500"}>
+      <p
+        className={
+          variant === "mobile"
+            ? "text-sm text-slate-400"
+            : variant === "drawer"
+              ? "px-4 py-3 text-sm font-semibold leading-6 text-[#64748B]"
+              : "px-3 text-sm leading-6 text-slate-500"
+        }
+      >
         No dashboard navigation is available for this account state.
       </p>
+    );
+  }
+
+  if (variant === "drawer") {
+    return (
+      <div className="grid gap-1">
+        {visibleItems.map((item) => (
+          <DashboardNavigationLink
+            key={`${item.label}-${item.href}`}
+            item={item}
+            pathname={pathname}
+            variant="drawer"
+          />
+        ))}
+      </div>
     );
   }
 
@@ -214,7 +245,7 @@ function DashboardNavigationLink({
 }: {
   item: DashboardNavigationItem;
   pathname: string;
-  variant: "sidebar" | "mobile";
+  variant: "drawer" | "sidebar" | "mobile";
 }) {
   const isActive = isActivePath(pathname, item);
   const visibilityLabel = getVisibilityLabel(item.visibility);
@@ -228,6 +259,27 @@ function DashboardNavigationLink({
           isActive
             ? "bg-[#0F6BFF] text-white"
             : "border border-[#E5E7EB] bg-white text-[#334155]"
+        }`}
+      >
+        {item.label}
+        {visibilityLabel ? (
+          <span className="ml-2 text-[10px] uppercase opacity-70">
+            {visibilityLabel}
+          </span>
+        ) : null}
+      </Link>
+    );
+  }
+
+  if (variant === "drawer") {
+    return (
+      <Link
+        href={item.href}
+        title={item.description}
+        className={`block rounded-2xl px-4 py-3 text-sm font-black transition ${
+          isActive
+            ? "bg-[#0F6BFF] text-white shadow-[0_10px_24px_rgba(15,107,255,0.22)]"
+            : "text-[#334155] hover:bg-[#F8FAFC] hover:text-[#0F6BFF]"
         }`}
       >
         {item.label}

@@ -75,6 +75,9 @@ The Attention Engine is not a notification system. It decides who needs attentio
 - Task 152.4 fixes production phone intake parsing discovered after `0056`: comma address text with apartment/city now maps into street/unit/city, `today`/`tomorrow` resolve from the Retell call start timestamp in `America/Chicago`, and 9-11 natural-language appointment windows become structured start/end times. `/dashboard/communications` also has an internal Retell recording panel backed by a server-only Retell lookup route. Audio is fetched live, not stored in Supabase Storage, and is not customer-facing. No paid Retell call, auth change, `.env.local` edit, schema migration, or Task 153 work was added.
 - Task 153 is complete as a documentation-only Platform Vision Rebase. It creates `docs/WRA_PLATFORM_OPERATING_MODEL.md` and establishes Property as the long-term central platform object before additional implementation. It does not modify production code, database schema, migrations, authentication, provider settings, or UI, and Task 154 has not been started.
 - Task 157 is complete as documentation-only architecture. It creates `docs/ATTENTION_ENGINE_AND_COMPANY_MODES.md`, defines Solo/Team/Enterprise company modes, and defines the Attention Engine before any notification delivery, Communications implementation, Settings UI, schema, provider, migration, push, SMS, browser notification, or UI work.
+- Task 161.2 is complete locally as the Jobs Center UX fix. The mobile Jobs header now uses one company label, Dashboard and Jobs share `DashboardMobileDrawer`, job cards are compact, and New Job is a single customer-first work order form that hides the internal intake conversion path. It reuses existing address autocomplete and verified technician profiles. Do not reintroduce a stepped wizard or expose Intake as the main user-facing creation language.
+- Task 161.3 is complete locally as Jobs Center QA fixes. New Job customer suggestions stay hidden until typing starts; phone numbers display as readable US numbers while create-job payloads normalize to `+1` when possible; appliance and brand suggestions come from shared `frontend/src/lib/appliance-options.ts`; `DashboardMobileDrawer` now renders known route links immediately instead of showing a loading state; stats are six compact tiles including Gross MTD; and job cards/filter controls are tighter. Gross MTD is only a safe current-month paid invoice read and is not technician share/accounting logic.
+- Task 161.4 is complete locally as the Jobs Center layout reset. `/dashboard/leads` is now month-based with previous/next month navigation, one main search field, compact top actions, hidden filters, three simple stats (`Today`, `Active`, `Gross`), and compact date-led job rows. New Job remains the customer-first single-screen form. Gross is only a safe selected-month paid invoice read and is not technician share/accounting logic.
 
 ## Workiz Exit / HomeFix Pilot Priority
 
@@ -933,3 +936,49 @@ Some existing files may be uncommitted from prior tasks. Check `git status` befo
 - Customer is the daily operations anchor. Jobs are events inside the customer relationship.
 - Task 158.6 removes Workspace from the main navigation and removes the temporary `/dashboard/workspace` route/component. Do not restore it as a competing work center.
 - Fold useful prototype ideas only into Dashboard, Communications Hub, or Job Workspace through future explicit tasks. Do not add Retell changes, phone webhook changes, SMS/email sending, provider calls, AI Repair Assistant behavior, Vendor Intelligence, Community, Property OS implementation, notification delivery, Estimate/Invoice/Payment work, or dashboard redesign from this handoff note.
+
+## Task 159 / 159.1 Communications Hub Post-Call Workflow
+
+- Read `docs/POST_CALL_WORKFLOW_SPEC.md` before changing `/dashboard/communications`.
+- The first Task 159 expanded UI was rejected for clutter. Keep the Hub focused on the post-call decision: who contacted us, what they said, existing customer, intake, appliance match, job state, and required next action.
+- Desired layout is left conversation list, center decision card, right transcript/audio/timeline. Do not duplicate Customer CRM or Job Workspace inside the Hub.
+- Keep actions routed through existing real surfaces: `/dashboard/intake`, `/dashboard/customers/[id]`, and `/dashboard/leads/[id]`. Do not create a duplicate conversation-to-job workflow.
+- Do not modify Retell, phone webhook ingestion, SMS/email providers, Yelp/Thumbtack, notification delivery, Dashboard, Customer CRM, Job Workspace, Estimate, Invoice, Payment, or Supabase schema from Communications Hub changes unless a future task explicitly asks for it.
+
+## Task 160 Minimalist Dashboard
+
+- `/dashboard` should remain minimalist. It is the daily start screen, not a CRM analytics page or second Communications Hub.
+- Keep the dashboard home focused on greeting, search, phone/messages/attention icons, profile shortcut, and Today's Jobs.
+- Do not restore Recent Calls, Recent Messages, Parts & Vendors, Manuals Library, Community Feed, Sales/Revenue Snapshot, large KPI cards, or duplicated operational widgets to the dashboard home unless a future task explicitly reverses this direction.
+- Phone and messages icons route to `/dashboard/communications`; Today's Job cards route to `/dashboard/leads/[id]`; search submits to Jobs. The bell is only an Attention Center placeholder until a future Attention task.
+- The shared `DashboardTopbar` intentionally hides on `/dashboard` so the minimalist home is not preceded by secondary CRM buttons.
+
+## Task 160.1 Action Dashboard Modules
+
+- Read `docs/TASK160_1_ACTION_DASHBOARD_MODULES.md` before changing `/dashboard` action language.
+- Dashboard action labels are Calls, Messages, Jobs, Schedule, Attention, and Profile.
+- Calls and Messages should route into Communications Hub; Jobs should route to the existing Jobs/service request center; Schedule should route to `/dashboard/technician-schedule`; Attention should remain a placeholder until a future explicit Attention task; Profile should use the existing technician/profile route.
+- Do not restore removed dashboard widgets or add SMS/email/provider behavior from this label refinement.
+
+## Task 161 Jobs Center Foundation
+
+- Read `docs/TASK161_JOBS_CENTER_FOUNDATION.md` before changing `/dashboard/leads`, Jobs navigation, or service request list behavior.
+- Jobs Center manages work. Customer CRM manages relationships. Job Workspace executes one specific job.
+- Keep `/dashboard/leads` compact: selected-month navigation, one search field, hidden filters, three simple stats, and dense job cards that open `/dashboard/leads/[id]`.
+- Reuse `service_requests`, appointment fields, existing statuses, and existing routes. Do not add new tables, provider integrations, SMS/email, estimate/invoice behavior, or a duplicate Job Workspace from Jobs Center work.
+
+## Task 161.1 Jobs Center UX Polish
+
+- Read `docs/TASK161_1_JOBS_CENTER_UX_POLISH.md` before changing Jobs Center mobile header, New Job, or job-card actions.
+- `New Job` must feel like creating a job. It may reuse `intake_requests` and conversion internally, but normal UI should not send users to an Intake screen when they choose New Job.
+- On mobile Jobs Center, keep the header compact: WRA branding, company name, hamburger menu. Do not restore Public Site, Open Jobs, Marketplace Profile, Sign out, or Houston MVP in the mobile daily-work header.
+- Job cards are clickable objects. Keep only compact Call and Message actions unless a future task adds real state-changing actions.
+
+## Task 161.4 Jobs Center Layout Reset
+
+- Read `docs/TASK161_4_JOBS_CENTER_LAYOUT_RESET.md` before changing the Jobs Center layout again.
+- Jobs Center is month-based. Do not restore a permanent filter panel or six-tile KPI grid without a new owner-approved task.
+- Main stats are Today, Active, and Gross only. Gross is a safe selected-month paid invoice read, not compensation/accounting logic.
+- Filters belong behind the compact filter control: Status, Tags, Team, and Schedule status.
+- Tags are disabled until real job-tag data exists.
+- New Job remains the customer-first single-screen form and should not be converted back into a stepped wizard unless explicitly requested.

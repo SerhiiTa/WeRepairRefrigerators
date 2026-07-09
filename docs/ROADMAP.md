@@ -117,6 +117,24 @@ Focus:
 - Google Calendar outbound sync validation.
 - Mobile/tablet friendly dispatcher view.
 
+### Task 161 — Jobs Center
+
+Status:
+
+- Task 161 is complete locally as the Jobs Center foundation for Workiz Exit.
+- Task 161.1 is complete locally as the first Jobs Center UX polish pass.
+- Task 161.2 is complete locally as the owner-QA fix: mobile header clutter was removed, Dashboard and Jobs now share one reusable mobile drawer pattern, collapsed job cards are compact, and New Job is a single customer-first work order form.
+- Task 161.3 is complete locally as Jobs Center QA fixes: customer suggestions wait until typing, phone numbers are displayed cleanly and normalized for create-job payloads, appliance/brand suggestions use shared option lists, the mobile drawer opens without a loading state, stats are six compact tiles including Gross MTD, and job cards/filter controls are tighter.
+- Task 161.4 is complete locally as the owner-QA layout reset: Jobs Center is now month-based, filters are hidden behind a compact filter control, stats are reduced to Today/Active/Gross, and job cards are compact date-led rows. New Job remains the existing customer-first single-screen form.
+
+Rules for future Jobs Center work:
+
+- Jobs Center manages work, not customer history and not full communication review.
+- New Job should speak in customer/job/work-order language.
+- Intake may remain the internal implementation path, but it should not be the visible mental model for creating a job.
+- Reuse existing customer, address autocomplete, technician profile, service request, appointment, status, and communication data before adding schema.
+- Gross is a temporary safe read of paid invoice totals for the selected month. Future invoice/payment work must define real gross, collected revenue, and technician share/rate settings before using it for compensation or accounting decisions.
+
 ### Task 151 — Communications Hub Foundation
 
 Status:
@@ -635,3 +653,50 @@ Onboarding backend progress:
 - Customer is the daily anchor object. A job is one event in the customer relationship.
 - Task 158.6 removes Workspace from main navigation and removes the temporary `/dashboard/workspace` route/component so it cannot become a fourth competing work center.
 - Useful Task 158 prototype ideas should be redistributed only into Dashboard, Communications Hub, or Job Workspace through future low-risk tasks. Do not build AI Repair Assistant, Vendor Intelligence, Community Intelligence, or platform expansion before the Workiz replacement workflow is stable.
+
+## Task 159 / 159.1 - Communications Hub Post-Call Workflow
+
+- Task 159's first expanded UI was evaluated and rejected because it made Communications Hub more complex without making the operational decision clearer.
+- Task 159.1 creates `docs/POST_CALL_WORKFLOW_SPEC.md` and recovers the Hub around a narrower post-call workflow.
+- The intended Communications Hub UX is now: left conversation list, center selected conversation decision card, right transcript/audio/timeline.
+- The decision card answers: who contacted us, what they said, existing customer status, intake status, appliance match status, job state, and required next action.
+- Remaining roadmap work includes real SMS/email providers, unread state, safe customer notes from the Hub, and deeper attention routing. Do not implement those without explicit future tasks.
+
+## Task 160 - Minimalist Dashboard
+
+- Task 160 narrows `/dashboard` from a CRM-style widget page into the Workiz Exit daily start screen.
+- The dashboard home should now contain only the greeting/search/action-icon header and Today's Jobs. Each job card opens the Job Workspace.
+- Removed dashboard-home widgets: recent calls, recent messages, parts/vendors, manuals, community feed, revenue/sales panels, large stats, and duplicated work-center content.
+- Communications Hub remains the place for calls/messages/intake. Job Workspace remains the place for one job. The dashboard should not duplicate either surface.
+- Future dashboard work should add only what directly answers `What should I do right now?`
+
+## Task 160.1 - Action Dashboard Modules
+
+- Task 160.1 keeps the minimalist dashboard and renames daily dashboard shortcuts into action language: Calls, Messages, Jobs, Schedule, Attention, and Profile.
+- These labels are UI/product language only. Do not rename tables, API contracts, or backend concepts for this task.
+- Calls and Messages open Communications Hub; Jobs opens the existing Jobs route; Schedule opens the existing schedule route; Attention is a placeholder until a future Attention Engine task; Profile opens the existing profile route.
+- Before SMS work, finish real message filtering, unread/needs-review states, attention ownership rules, consent/audit, and outbound templates. Do not implement SMS from dashboard label work alone.
+
+## Task 161 - Jobs Center Foundation
+
+- `/dashboard/leads` becomes the operational Jobs Center. It manages work, while Customer CRM manages relationships and Job Workspace executes one job.
+- The Jobs Center should stay compact: selected-month navigation, one search field, hidden filters, three simple stats, and dense job cards that open the existing Job Workspace.
+- Use existing `service_requests`, appointment fields, status system, and routing. Do not create another work center or duplicate Job Workspace behavior.
+- Remaining Workiz Exit gaps include dispatcher-created jobs, true outbound SMS, deeper job queues/ownership, and scheduling-board actions. Those require future explicit tasks.
+
+## Task 161.1 - Jobs Center UX Polish
+
+- Jobs Center mobile UI should not show the old CRM header/action strip. Mobile Jobs uses compact WRA branding plus hamburger navigation.
+- `New Job` is now a user-facing job creation workflow. Intake remains an internal implementation detail used by the existing backend path.
+- Job cards should remain object navigation. Do not restore a redundant Open button.
+- Keep card actions compact: Call and Message only. Linked communication badges may appear when existing conversation data is attached to the job.
+- Future work can improve duplicate review, technician assignment, schedule validation, address autocomplete, and real SMS, but those should remain explicit future tasks.
+
+## Task 161.4 - Jobs Center Layout Reset
+
+- Jobs Center is now month-based by default.
+- Main-page stats are limited to Today, Active, and Gross.
+- Filters are hidden behind a compact filter control with Status, Tags, Team, and Schedule status.
+- Tags remain disabled until real job-tag data exists.
+- New Job remains the customer-first single-screen form.
+- Future work should keep Jobs Center light and avoid restoring permanent filter panels or KPI grids.

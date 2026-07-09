@@ -75,6 +75,9 @@ The first production vertical is Houston/HomeFix appliance repair. This is the v
 - Task 152.9B/152.9C finalizes dashboard visibility for the production operator `info@refrigeratorhoustonrepair.com`. The attempted `profiles.company_id` repair failed correctly because production trigger `prevent_unsafe_profile_updates()` blocks unsafe company assignment changes. The successful production repair used only `public.company_members` for profile `7d4195e4-572f-4640-a15f-d954123b34d7` and company `f0639d2c-6fcf-4ab5-93a2-cde8f3ba9633`. The current `0055_communications_dashboard_user_access_repair_apply_ready.sql` does not update `public.profiles`. No further paid Retell calls are needed for Task 152. Task 153 has not been started.
 - Task 153 is a documentation-only platform vision rebase. It creates `docs/WRA_PLATFORM_OPERATING_MODEL.md` and establishes Property as the long-term central entity before additional implementation. It does not modify production code, database schema, migrations, UI, authentication, provider settings, or Task 154 work.
 - Task 157 is complete as documentation-only architecture. It creates `docs/ATTENTION_ENGINE_AND_COMPANY_MODES.md` and defines Solo/Team/Enterprise operating modes plus the Attention Engine model before any notification, push, SMS, browser notification, Communications Hub implementation, Settings UI, schema, or provider work.
+- Task 161.2 is complete locally as a Jobs Center UX fix. It removes duplicated mobile header language, introduces a reusable dashboard mobile drawer, replaces the stepped New Job wizard with a single customer-first work order form, reuses the existing address autocomplete adapter, keeps Intake as an internal implementation detail, and tightens job cards/stat tiles for mobile daily use. No Retell, phone workflow, SMS, estimates, invoices, payments, schema, Supabase, Communications Hub, Customer CRM, or Job Workspace redesign work was added.
+- Task 161.3 is complete locally as Jobs Center QA fixes. It hides New Job customer suggestions until typing begins, adds readable US phone formatting with `+1` normalization for create-job payloads, introduces shared appliance/brand option lists, makes the dashboard mobile drawer instant by rendering the known route list without identity loading, adds six equal stats including Gross MTD from safely readable paid invoice data, clarifies the Filter jobs panel, and compacts job cards further. No schema, migrations, Retell, phone workflow, SMS, estimates, invoices, payments, Communications Hub redesign, Customer CRM redesign, or Job Workspace redesign work was added.
+- Task 161.4 is complete locally as a Jobs Center layout reset. Jobs Center is now organized around selected month navigation, one search field, compact top actions, hidden filters, three simple stats (`Today`, `Active`, `Gross`), and compact date-led job rows. New Job remains the customer-first single-screen form. No schema, migrations, Retell, phone workflow, SMS, estimates, invoices, payments, Communications Hub redesign, Customer CRM redesign, Job Workspace redesign, or drawer redesign work was added.
 
 ## Workiz Exit / HomeFix Pilot
 
@@ -1174,3 +1177,52 @@ Use the webpack build command for verification because it has been the stable bu
 - The central daily operations object is Customer, not Job. Jobs remain important, but they are events inside a customer relationship that also includes conversations, calls, appliances, estimates, invoices, payments, notes, service addresses, and repair history.
 - Task 158.6 removes the Workspace prototype from main navigation and removes the temporary `/dashboard/workspace` route/component. Useful ideas from the prototype should be folded into Dashboard, Communications Hub, or Job Workspace only through future explicit tasks.
 - No Dashboard redesign, Communications Hub redesign, Job Workspace redesign, database, Supabase, Retell, phone workflow, SMS/email, notification, estimate, invoice, payment, or provider work was added.
+
+## Task 159 / 159.1 communications hub daily workflow
+
+- The first Task 159 UI expansion was evaluated and rejected by owner QA because it added more information without creating a clear operational workflow. Customer CRM-style and Job Workspace-style panels were simplified back into a post-call decision flow.
+- New spec: `docs/POST_CALL_WORKFLOW_SPEC.md`. The Hub should answer only: who contacted us, what they said, whether this is an existing customer, whether there is an intake, whether there is a job, and what next action is required.
+- `/dashboard/communications` now uses the desired structure: left conversation list, center selected conversation decision card, right transcript/audio/timeline.
+- Actions stay routed through existing modules: Review Intake, Create / Match Customer, Create / Match Appliance, Convert to Job, Open Customer, and Open Job. Add Customer Note, SMS/email, unread state, and deeper attention routing remain future work.
+- Retell, phone ingestion, SMS, email, Yelp, Thumbtack, notifications, Dashboard, Customer CRM, Job Workspace, Estimate, Invoice, Payment, and Supabase schema were not changed.
+
+## Task 160 minimalist dashboard
+
+- Owner approved a sharper dashboard direction for the Workiz Exit phase: the Dashboard is not a traditional CRM widget wall. It should answer one question: `What should I do right now?`
+- `/dashboard` is now intentionally minimal: greeting, search, phone/messages/attention icons, profile shortcut, and Today's Jobs only.
+- Recent calls, recent messages, parts/vendors, manuals, community, revenue panels, large statistic cards, and duplicated operational widgets were removed from the dashboard home.
+- Phone and message icons route to Communications Hub. Today's job cards route to the Job Workspace. Search routes into Jobs. The bell remains an attention-center placeholder until a future explicit Attention task.
+- Communications Hub, Job Workspace, phone ingestion, Retell, Supabase, migrations, AI, vendor, community, and provider code were not changed.
+
+## Task 160.1 action dashboard modules
+
+- Task 160.1 refines the minimalist dashboard into an action launcher with labeled controls: Calls, Messages, Jobs, Schedule, Attention, and Profile.
+- Calls and Messages route to Communications Hub with channel query hints. Jobs routes to the existing job/service request center. Schedule routes to the technician schedule. Attention remains a safe placeholder until a dedicated Attention Engine task. Profile routes to the existing technician profile.
+- The dashboard body remains Today's Jobs only. No old widgets, demo cards, KPI blocks, revenue panels, parts/vendors, manuals, community, SMS, email, Retell, phone webhook, Supabase schema, or provider work was added.
+- See `docs/TASK160_1_ACTION_DASHBOARD_MODULES.md`.
+
+## Task 161 Jobs Center foundation
+
+- `/dashboard/leads` is now the Jobs Center for daily work management during the Workiz Exit phase.
+- Jobs Center reuses existing `service_requests`, appointment fields, statuses, filters, and Job Workspace routing. No new tables, migrations, Retell, SMS, estimate, invoice, or provider work was added.
+- The screen now emphasizes selected-month navigation, three simple stats, one search field, hidden filters, and dense job cards.
+- Job cards show only the work facts needed during the day: date/window, status, customer, appliance, short problem, city/ZIP, and communication badges when linked conversations exist. Cards open the existing Job Workspace.
+- See `docs/TASK161_JOBS_CENTER_FOUNDATION.md`.
+
+## Task 161.1 Jobs Center UX polish
+
+- Mobile `/dashboard/leads` now uses a compact application header with WRA branding and a hamburger menu instead of the old CRM header buttons.
+- `New Job` now opens a customer-first single-screen job creation form inside Jobs Center. It reuses the existing authenticated intake/create-convert backend internally, but the normal user-facing workflow is job creation.
+- Job cards no longer show a redundant Open button because the card itself opens the Job Workspace.
+- Compact actions are limited to Call and Message, and cards can show linked phone/message activity badges when existing communication conversations are attached to the job.
+- No Job Workspace redesign, Customer CRM redesign, Communications Hub redesign, schema, Retell, SMS, estimate, invoice, or provider work was added.
+- See `docs/TASK161_1_JOBS_CENTER_UX_POLISH.md`.
+
+## Task 161.4 Jobs Center layout reset
+
+- Jobs Center is now organized by selected month.
+- Main page controls are limited to previous/next month, one search field, compact `+` New Job, and a compact filter button.
+- Permanent technician, schedule, status, and clear-filter controls were removed from the main surface. They now live in a mobile-friendly filter sheet.
+- Stats are reduced to Today, Active, and Gross. Gross is a safe selected-month paid invoice read only; real financial calculations remain future invoice/payment engine work.
+- New Job remains the existing customer-first single-screen form.
+- See `docs/TASK161_4_JOBS_CENTER_LAYOUT_RESET.md`.
