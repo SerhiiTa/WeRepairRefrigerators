@@ -583,7 +583,9 @@ export async function createIntakeRequest(
       checked_at: duplicateSummary.checkedAt,
       source: "server_precreate_check",
     };
-    normalized.status = "needs_info";
+    if (normalized.duplicate_confirmed !== true) {
+      normalized.status = "needs_info";
+    }
   }
 
   const { data, error } = await supabase.rpc("create_intake_request_rpc", {

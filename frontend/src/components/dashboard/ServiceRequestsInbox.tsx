@@ -921,32 +921,6 @@ export function ServiceRequestsInbox() {
         throw new Error(intakePayload?.message ?? "Could not prepare this job.");
       }
 
-      const supabase = getSupabaseBrowserClient();
-      if (supabase) {
-        const { error: customerError } = await supabase.rpc(
-          "match_or_create_customer_for_intake_rpc",
-          {
-            p_intake_request_id: intakePayload.intakeRequest.id,
-            p_payload: {
-              email: newJobForm.customerEmail,
-              first_name: newJobForm.customerFirstName,
-              full_name: fullName,
-              last_name: newJobForm.customerLastName,
-              phone: newJobForm.customerPhone,
-              phone_normalized: normalizeUSPhone(newJobForm.customerPhone),
-              service_address: newJobForm.serviceAddress,
-              state: newJobForm.state || "TX",
-              unit: newJobForm.unit,
-              zip_code: cleanZip(newJobForm.zipCode),
-            },
-          },
-        );
-
-        if (customerError) {
-          throw customerError;
-        }
-      }
-
       const conversionResponse = await fetch(
         `/api/intake/${intakePayload.intakeRequest.id}/convert`,
         {
@@ -1110,7 +1084,7 @@ export function ServiceRequestsInbox() {
               key={request.id}
             >
               <Link
-                className="flex w-full items-stretch gap-2 p-2"
+                className="flex w-full items-start gap-2 p-2"
                 href={`/dashboard/leads/${request.id}`}
               >
                 <div className="w-[4.25rem] max-w-24 shrink-0 rounded-lg border border-[#E5E7EB] bg-[#F8FAFC] px-1.5 py-1 text-center">
@@ -1123,17 +1097,31 @@ export function ServiceRequestsInbox() {
                   <p className="mt-0.5 truncate text-[10px] font-bold leading-tight text-[#475569]">
                     {getAppointmentLabel(request)}
                   </p>
-                  <div className="mt-0.5 flex justify-center [&>span]:max-w-full [&>span]:truncate [&>span]:px-1.5 [&>span]:py-0.5 [&>span]:text-[9px]">
-                    <StatusBadge tone={SERVICE_REQUEST_STATUS_TONES[request.status] ?? "slate"}>
-                      {formatServiceRequestSource(request.status)}
-                    </StatusBadge>
-                  </div>
                 </div>
                 <div className="flex min-w-0 flex-1 flex-col justify-center py-0.5">
-                  <div className="flex min-w-0 items-center gap-2">
+                  <div className="flex min-w-0 items-start gap-2">
                     <h2 className="min-w-0 flex-1 truncate text-[15px] font-black leading-tight tracking-tight text-[#0F172A]">
                       {request.customerName}
                     </h2>
+                    <div className="flex max-w-[52%] shrink-0 justify-end">
+                      <span className="[&>span]:max-w-[9.75rem] [&>span]:whitespace-normal [&>span]:px-2 [&>span]:py-0.5 [&>span]:text-center [&>span]:text-[10px] [&>span]:leading-tight">
+                        <StatusBadge tone={SERVICE_REQUEST_STATUS_TONES[request.status] ?? "slate"}>
+                          {formatServiceRequestSource(request.status)}
+                        </StatusBadge>
+                      </span>
+                    </div>
+                  </div>
+                  <p className="mt-0.5 min-w-0 truncate text-[13px] leading-tight text-[#334155]">
+                    <span className="font-bold">
+                      {getApplianceLabel(request) || "Appliance needed"}
+                    </span>
+                    <span className="px-1 text-[#94A3B8]">•</span>
+                    <span>{request.issueDescription || "Problem details needed"}</span>
+                  </p>
+                  <div className="mt-0.5 flex min-w-0 items-center justify-between gap-2">
+                    <p className="min-w-0 truncate text-[11px] font-bold leading-tight text-[#64748B]">
+                      {getCityZip(request)}
+                    </p>
                     <div className="flex shrink-0 items-center gap-1">
                       {communicationCounts[request.id]?.phone ? (
                         <span className="rounded-full border border-blue-100 bg-blue-50 px-1.5 py-0 text-[10px] font-black leading-5 text-[#2563EB]">
@@ -1147,16 +1135,6 @@ export function ServiceRequestsInbox() {
                       ) : null}
                     </div>
                   </div>
-                  <p className="mt-0.5 min-w-0 truncate text-[13px] leading-tight text-[#334155]">
-                    <span className="font-bold">
-                      {getApplianceLabel(request) || "Appliance needed"}
-                    </span>
-                    <span className="px-1 text-[#94A3B8]">•</span>
-                    <span>{request.issueDescription || "Problem details needed"}</span>
-                  </p>
-                  <p className="mt-0.5 truncate text-[11px] font-bold leading-tight text-[#64748B]">
-                    {getCityZip(request)}
-                  </p>
                 </div>
               </Link>
             </article>

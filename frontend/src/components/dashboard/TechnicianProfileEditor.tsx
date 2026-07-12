@@ -1,7 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
+import {
+  buildFormattedAddress,
+  getAddressAutocompleteAdapter,
+  type AddressSuggestion,
+} from "@/lib/address-autocomplete";
 import { formatDashboardIdentityLabel, loadDashboardIdentity } from "@/lib/dashboard/identity";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { TechnicianProfileRow } from "@/lib/supabase/types";
@@ -53,6 +58,12 @@ const schemaSupportedFields = [
   "bio_private",
   "primary_city",
   "primary_state",
+  "base_address_line1",
+  "base_address_line2",
+  "base_city",
+  "base_state",
+  "base_zip",
+  "base_formatted_address",
   "service_zip_codes",
   "service_cities",
   "appliance_categories",
@@ -146,12 +157,36 @@ export function TechnicianProfileEditor() {
   const [languages, setLanguages] = useState("en");
   const [avatarColor, setAvatarColor] = useState("#0F6BFF");
   const [marketplaceEnabled, setMarketplaceEnabled] = useState(false);
+  const [baseAddressLine1, setBaseAddressLine1] = useState("");
+  const [baseAddressLine2, setBaseAddressLine2] = useState("");
+  const [baseCity, setBaseCity] = useState("");
+  const [baseState, setBaseState] = useState("TX");
+  const [baseZip, setBaseZip] = useState("");
+  const [baseCountry, setBaseCountry] = useState("US");
+  const [baseFormattedAddress, setBaseFormattedAddress] = useState("");
+  const [baseLatitude, setBaseLatitude] = useState<number | null>(null);
+  const [baseLongitude, setBaseLongitude] = useState<number | null>(null);
+  const [basePlaceId, setBasePlaceId] = useState<string | null>(null);
+  const [baseAddressSearch, setBaseAddressSearch] = useState("");
+  const [baseAddressSuggestions, setBaseAddressSuggestions] = useState<AddressSuggestion[]>([]);
+  const [isBaseAddressSearching, setIsBaseAddressSearching] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitState, setSubmitState] = useState<SubmitState>({
     tone: "idle",
     message:
       "This editor saves the editable technician profile fields available for this workspace.",
   });
+  const addressAutocomplete = useMemo(() => getAddressAutocompleteAdapter(), []);
+  const technicianBaseAddressPreview =
+    baseFormattedAddress ||
+    buildFormattedAddress({
+      streetAddress: baseAddressLine1,
+      unit: baseAddressLine2,
+      city: baseCity,
+      state: baseState,
+      zipCode: baseZip,
+      country: baseCountry,
+    });
 
   useEffect(() => {
     let isMounted = true;
@@ -202,6 +237,17 @@ export function TechnicianProfileEditor() {
         setLanguages(joinList(technicianProfile.languages));
         setAvatarColor(technicianProfile.avatar_color ?? "#0F6BFF");
         setMarketplaceEnabled(Boolean(technicianProfile.marketplace_enabled));
+        setBaseAddressLine1(technicianProfile.base_address_line1 ?? "");
+        setBaseAddressLine2(technicianProfile.base_address_line2 ?? "");
+        setBaseCity(technicianProfile.base_city ?? "");
+        setBaseState(technicianProfile.base_state ?? "TX");
+        setBaseZip(technicianProfile.base_zip ?? "");
+        setBaseCountry(technicianProfile.base_country ?? "US");
+        setBaseFormattedAddress(technicianProfile.base_formatted_address ?? "");
+        setBaseLatitude(technicianProfile.base_latitude ?? null);
+        setBaseLongitude(technicianProfile.base_longitude ?? null);
+        setBasePlaceId(technicianProfile.base_place_id ?? null);
+        setBaseAddressSearch(technicianProfile.base_formatted_address ?? "");
       }
     }
 
@@ -211,6 +257,70 @@ export function TechnicianProfileEditor() {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!addressAutocomplete.isConfigured || baseAddressSearch.trim().length < 3) {
+      return;
+    }
+
+    let isActive = true;
+
+    addressAutocomplete
+      .search(baseAddressSearch)
+      .then((suggestions) => {
+        if (isActive) {
+          setBaseAddressSuggestions(suggestions);
+        }
+      })
+      .catch(() => {
+        if (isActive) {
+          setBaseAddressSuggestions([]);
+        }
+      })
+      .finally(() => {
+        if (isActive) {
+          setIsBaseAddressSearching(false);
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [addressAutocomplete, baseAddressSearch]);
+
+  async function applyBaseAddressSuggestion(suggestion: AddressSuggestion) {
+    const resolved = addressAutocomplete.resolve
+      ? await addressAutocomplete.resolve(suggestion).catch(() => suggestion)
+      : suggestion;
+
+    setBaseAddressLine1(resolved.streetAddress);
+    setBaseAddressLine2(resolved.unit ?? "");
+    setBaseCity(resolved.city);
+    setBaseState(resolved.state || "TX");
+    setBaseZip(resolved.zipCode);
+    setBaseCountry(resolved.country || "US");
+    setBaseFormattedAddress(resolved.label);
+    setBaseLatitude(resolved.latitude ?? null);
+    setBaseLongitude(resolved.longitude ?? null);
+    setBasePlaceId(resolved.placeId ?? null);
+    setBaseAddressSearch(resolved.label);
+    setBaseAddressSuggestions([]);
+  }
+
+  function clearBaseAddress() {
+    setBaseAddressLine1("");
+    setBaseAddressLine2("");
+    setBaseCity("");
+    setBaseState("TX");
+    setBaseZip("");
+    setBaseCountry("US");
+    setBaseFormattedAddress("");
+    setBaseLatitude(null);
+    setBaseLongitude(null);
+    setBasePlaceId(null);
+    setBaseAddressSearch("");
+    setBaseAddressSuggestions([]);
+  }
 
   async function getAccessToken(): Promise<string | null> {
     const supabase = getSupabaseBrowserClient();
@@ -268,6 +378,16 @@ export function TechnicianProfileEditor() {
       languages: splitList(languages),
       avatarColor,
       marketplaceEnabled,
+      baseAddressLine1,
+      baseAddressLine2,
+      baseCity,
+      baseState,
+      baseZip,
+      baseCountry,
+      baseFormattedAddress: technicianBaseAddressPreview,
+      baseLatitude,
+      baseLongitude,
+      basePlaceId,
     });
 
     if (!result.ok) {
@@ -514,6 +634,136 @@ export function TechnicianProfileEditor() {
                 />
               ))}
             </div>
+          </div>
+          <div className="md:col-span-2 rounded-[14px] border border-[#E5E7EB] bg-[#F8FAFC] p-4">
+            <div className="grid gap-2 md:grid-cols-[1fr_auto] md:items-start">
+              <div>
+                <p className="text-sm font-black uppercase tracking-[0.14em] text-[#2563EB]">
+                  Distance origin
+                </p>
+                <h3 className="mt-1 text-lg font-black text-[#0F172A]">
+                  Technician Base Address
+                </h3>
+                <p className="mt-1 text-sm leading-6 text-[#64748B]">
+                  Optional personal override for driving distance. If blank,
+                  WRA uses the Company Base Address.
+                </p>
+              </div>
+              <button
+                className="rounded-[10px] border border-[#CBD5E1] bg-white px-3 py-2 text-xs font-black text-[#334155]"
+                onClick={clearBaseAddress}
+                type="button"
+              >
+                Clear override
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-4 md:grid-cols-2">
+              <label className="md:col-span-2">
+                <span className="text-sm font-bold text-[#334155]">
+                  Search address
+                </span>
+                <input
+                  className="mt-2 w-full rounded-[8px] border border-[#E5E7EB] bg-white px-4 py-3 text-base text-[#0F172A] outline-none transition placeholder:text-[#64748B] focus:border-[#0F6BFF] focus:ring-4 focus:ring-[#0F6BFF]/10"
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setBaseAddressSearch(value);
+                    if (value.trim().length < 3) {
+                      setBaseAddressSuggestions([]);
+                      setIsBaseAddressSearching(false);
+                    } else {
+                      setIsBaseAddressSearching(true);
+                    }
+                  }}
+                  placeholder="Home base, shop, warehouse, or dispatch location"
+                  value={baseAddressSearch}
+                />
+                {baseAddressSuggestions.length > 0 ? (
+                  <div className="mt-2 overflow-hidden rounded-xl border border-[#E5E7EB] bg-white shadow-lg">
+                    {baseAddressSuggestions.map((suggestion) => (
+                      <button
+                        className="block w-full border-b border-[#F1F5F9] px-4 py-3 text-left text-sm font-bold text-[#0F172A] last:border-b-0"
+                        key={`${suggestion.placeId ?? suggestion.label}-${suggestion.label}`}
+                        onClick={() => void applyBaseAddressSuggestion(suggestion)}
+                        type="button"
+                      >
+                        {suggestion.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                {isBaseAddressSearching ? (
+                  <span className="mt-2 block text-xs font-bold text-[#64748B]">
+                    Searching addresses...
+                  </span>
+                ) : null}
+              </label>
+
+              <DashboardTextInput
+                label="Address line 1"
+                value={baseAddressLine1}
+                onChange={(value) => {
+                  setBaseAddressLine1(value);
+                  setBaseFormattedAddress("");
+                }}
+                placeholder="Street address"
+              />
+              <DashboardTextInput
+                label="Address line 2 / Suite"
+                value={baseAddressLine2}
+                onChange={(value) => {
+                  setBaseAddressLine2(value);
+                  setBaseFormattedAddress("");
+                }}
+                placeholder="Optional"
+              />
+              <DashboardTextInput
+                label="City"
+                value={baseCity}
+                onChange={(value) => {
+                  setBaseCity(value);
+                  setBaseFormattedAddress("");
+                }}
+                placeholder="Houston"
+              />
+              <div className="grid gap-3 sm:grid-cols-[1fr_1fr_90px]">
+                <DashboardTextInput
+                  label="State"
+                  value={baseState}
+                  onChange={(value) => {
+                    setBaseState(value.toUpperCase());
+                    setBaseFormattedAddress("");
+                  }}
+                  placeholder="TX"
+                  maxLength={2}
+                />
+                <DashboardTextInput
+                  label="ZIP"
+                  value={baseZip}
+                  onChange={(value) => {
+                    setBaseZip(value);
+                    setBaseFormattedAddress("");
+                  }}
+                  placeholder="77056"
+                />
+                <DashboardTextInput
+                  label="Country"
+                  value={baseCountry}
+                  onChange={(value) => {
+                    setBaseCountry(value.toUpperCase());
+                    setBaseFormattedAddress("");
+                  }}
+                  placeholder="US"
+                  maxLength={2}
+                />
+              </div>
+            </div>
+            <p className="mt-4 text-sm font-bold text-[#475569]">
+              Saved override:{" "}
+              <span className="text-[#0F172A]">
+                {technicianBaseAddressPreview || "No technician override set"}
+              </span>
+            </p>
           </div>
           <DashboardTextArea
             label="Short public bio"

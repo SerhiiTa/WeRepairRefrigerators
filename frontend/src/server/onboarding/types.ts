@@ -68,6 +68,16 @@ export type UpdateTechnicianProfileInput = AuthenticatedOnboardingInput & {
   languages?: string[];
   avatarColor?: string;
   marketplaceEnabled?: boolean;
+  baseAddressLine1?: string;
+  baseAddressLine2?: string;
+  baseCity?: string;
+  baseState?: string;
+  baseZip?: string;
+  baseCountry?: string;
+  baseFormattedAddress?: string;
+  baseLatitude?: number | null;
+  baseLongitude?: number | null;
+  basePlaceId?: string | null;
 };
 
 export type CompleteOnboardingInput = AuthenticatedOnboardingInput;

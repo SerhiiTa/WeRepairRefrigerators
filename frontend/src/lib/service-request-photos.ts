@@ -25,6 +25,11 @@ export type TechnicianPhotoUploadResult =
   | { ok: true }
   | { ok: false; message: string };
 
+type SafeIdCryptoSource = {
+  randomUUID?: () => string;
+  getRandomValues?: <ArrayType extends Uint8Array>(array: ArrayType) => ArrayType;
+};
+
 export function validateServiceRequestPhotoFiles(
   files: File[],
 ): ServiceRequestPhotoValidationResult {
@@ -206,19 +211,78 @@ function buildServiceRequestPhotoPath({
   scope: "customer" | "technician";
   fileName: string;
 }) {
-  const extension = fileName.includes(".")
-    ? fileName.split(".").pop()?.toLowerCase()
+  const baseFileName =
+    fileName.split(/[/\\]/).pop()?.split(/[?#]/)[0] || "service-photo.jpg";
+  const extension = baseFileName.includes(".")
+    ? baseFileName.split(".").pop()?.toLowerCase()
     : "jpg";
   const safeExtension = extension?.replace(/[^a-z0-9]/g, "").slice(0, 8) || "jpg";
   const safeName =
-    fileName
+    baseFileName
       .replace(/\.[^.]+$/, "")
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "")
       .slice(0, 48) || "service-photo";
 
-  return `${requestId}/${scope}/${crypto.randomUUID()}-${safeName}.${safeExtension}`;
+  return `${requestId}/${scope}/${createSafePhotoStorageId()}-${safeName}.${safeExtension}`;
+}
+
+export function createSafePhotoStorageId(
+  cryptoSource: SafeIdCryptoSource | null | undefined = globalThis.crypto,
+): string {
+  const randomUUID = cryptoSource?.randomUUID;
+
+  if (typeof randomUUID === "function") {
+    try {
+      const id = randomUUID.call(cryptoSource);
+
+      if (typeof id === "string" && id.length > 0) {
+        return sanitizeStorageId(id);
+      }
+    } catch {
+      // Fall through to byte-based or timestamp fallback.
+    }
+  }
+
+  const getRandomValues = cryptoSource?.getRandomValues;
+
+  if (typeof getRandomValues === "function") {
+    try {
+      const bytes = getRandomValues.call(
+        cryptoSource,
+        new Uint8Array(16),
+      );
+
+      bytes[6] = (bytes[6] & 0x0f) | 0x40;
+      bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+      const hex = Array.from(bytes, (byte) =>
+        byte.toString(16).padStart(2, "0"),
+      ).join("");
+
+      return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(
+        12,
+        16,
+      )}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    } catch {
+      // Fall through to timestamp fallback.
+    }
+  }
+
+  return sanitizeStorageId(
+    `${Date.now().toString(36)}-${Math.random()
+      .toString(36)
+      .slice(2, 14)}-${Math.random().toString(36).slice(2, 10)}`,
+  );
+}
+
+function sanitizeStorageId(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || `photo-${Date.now().toString(36)}`;
 }
 
 function formatPhotoUploadError(message: string): string {

@@ -178,5 +178,21 @@ export function normalizeTechnicianProfileInput(
       typeof input.marketplaceEnabled === "boolean"
         ? input.marketplaceEnabled
         : null,
+    base_address_line1: normalizeOptionalText(input.baseAddressLine1, 180),
+    base_address_line2: normalizeOptionalText(input.baseAddressLine2, 80),
+    base_city: normalizeOptionalText(input.baseCity, 120),
+    base_state: normalizeOptionalText(input.baseState, 2)?.toUpperCase() ?? null,
+    base_zip: normalizeOptionalText(input.baseZip, 20),
+    base_country: normalizeOptionalText(input.baseCountry, 2)?.toUpperCase() ?? "US",
+    base_formatted_address: normalizeOptionalText(input.baseFormattedAddress, 320),
+    base_latitude:
+      typeof input.baseLatitude === "number" && Number.isFinite(input.baseLatitude)
+        ? input.baseLatitude
+        : null,
+    base_longitude:
+      typeof input.baseLongitude === "number" && Number.isFinite(input.baseLongitude)
+        ? input.baseLongitude
+        : null,
+    base_place_id: normalizeOptionalText(input.basePlaceId ?? undefined, 160),
   };
 }

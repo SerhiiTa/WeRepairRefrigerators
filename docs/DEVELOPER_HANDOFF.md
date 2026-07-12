@@ -83,6 +83,14 @@ The Attention Engine is not a notification system. It decides who needs attentio
 - Task 164 is complete as a UI-only Job Workspace Property Preview. `ServiceRequestDetail.tsx` consumes `/api/property-intelligence` for the job service address and shows only map/photo/Zestimate/sqft/year-built with a graceful placeholder. No backend, Supabase, HasData, status, estimate, invoice, finance, timeline, Retell, or phone workflow logic was changed.
 - Task 164.1 is complete as full-address Property Preview QA. The real HasData Zillow endpoint requires a Zillow `url`, not raw `{ address }`; the server adapter now derives a Zillow homes URL from the address, maps real response fields, and uses cache key `property-intelligence-hasdata-zillow-v2`. QA verified map/photo/Zestimate/year-built for `301 E 79th St, APT 23S, New York, NY 10075, US`.
 - Task 164.2 is complete as reliability/mobile hardening. Address-derived Zillow URLs are best-effort only, so arbitrary addresses may return `property: null`. The route fails closed without user-facing provider errors, validates ZIP when possible, and mobile now shows one large property photo/map instead of two tiny thumbnails.
+- Task 165 is complete locally as the first Job Workspace Details redesign pass. The Details tab now puts Property Preview, one primary Next Action, customer contact/navigation, schedule, appliance/problem, technician findings, and quick photo entry ahead of secondary workflow controls. Full status workflow, parts controls, job counters, and service address editing remain available behind disclosure. No backend, Supabase schema, Retell, SMS, phone workflow, estimate/invoice/payment logic, or customer portal behavior changed.
+- Task 165.10 refines the mobile Details top section. Job Summary is now a full-row edit trigger, and the primary mobile manual status change path is a compact Status row that opens a bottom sheet using `SERVICE_REQUEST_CRM_STATUSES` and the existing `updateStatus()` flow. The collapsed secondary workflow controls remain available for advanced actions.
+- Task 165.12 refines the mobile Details Client block. Mobile now shows a compact `Client` section using service-request snapshot fields, `View Client Details` opens `/dashboard/customers/[customerId]` when linked, and the pencil opens a compact `Edit Client` modal that updates the current workspace state only. Do not treat this as persisted CRM editing; a future safe RPC/API is needed for durable job-specific contact snapshot updates.
+- Task 165.13 adds mobile Client-card distance, avatar persistence, map confirmation, and phone icon fixes. Apply `0058_client_avatar_persistence_apply_ready.sql` before avatar upload persistence. New routes `/api/service-requests/[id]/client-card` and `/api/service-requests/[id]/client-avatar` are dashboard-authenticated. Distance uses company/technician primary city/state as origin, never phone geolocation. Avatar upload is server-side into private `client-avatars` storage and records either `customers.avatar_storage_path` or `service_requests.job_client_avatar_storage_path`.
+- Task 165.14 fixes the Task 165.13 production gaps. The avatar route no longer selects migration-only job avatar columns before verifying the job, uploads explicit file bytes to the private `client-avatars` bucket, returns signed URLs, and keeps upload/error state visible. Apply `0059_base_address_distance_foundation_apply_ready.sql` after `0058` to add saved Company Base Address and Technician Base Address override fields plus trusted save RPCs. Origin priority is technician override, then company base address, then missing-origin fallback. Distance uses the server helper in `frontend/src/server/maps/distance.ts` and server route `/api/maps/distance`; no browser geolocation is requested.
+- Task 165.15 is the runtime fix for Client avatar persistence and base-address distance resolution. Do not treat the failure as a missing bucket: read-only QA confirmed `client-avatars` exists, is private, has a 5 MB limit, and allows JPEG/PNG/WebP/HEIC/HEIF. The actual verified blocker was PostgreSQL `42501 permission denied for table service_requests` for the configured service-role DB client. Apply `supabase/migrations/0060_client_avatar_distance_service_role_grants_apply_ready.sql` after `0058` and `0059`; it grants only the service-role privileges needed for `/api/service-requests/[id]/client-avatar` and `/api/service-requests/[id]/client-card`. The avatar route now returns flat `ok/error/avatarUrl/storagePath/ownerType`, logs safe Supabase/storage metadata, uploads explicit bytes, and verifies DB row updates. The client-card route now resolves origin through technician base address, then active `company_members` -> company base address, and accepts formatted address without latitude/longitude.
+- Task 165.23 adds Job Details catalogs, attribution, and tags. Apply `supabase/migrations/0063_job_details_catalogs_attribution_tags_apply_ready.sql` before expecting persistence. Canonical Job Name is `service_requests.job_name`; Description remains `service_requests.issue_description`; `service_requests.request_source` remains the technical intake channel; marketing attribution is separate through `marketing_source_id`; tags use `service_request_tags`. The new `/api/service-requests/[id]/details` route is the shared read/save path for the top Edit Job modal and lower mobile Job Details rows.
+- Task 165.24 corrects the mobile Job Details UX after owner QA. The visible Details rows are now exactly `Job Name`, `Description`, and `Tags`; do not re-add `Ad Source` as a fourth row. Ad Source remains part of the data model and is edited inside the compound `Job Details` bottom sheet. Description catalog options must stay contextual to the resolved Job Type; if no Job Type is available, show `Choose Job Name first` instead of all problems. Apply `0064_job_type_problem_catalog_seed_apply_ready.sql` after `0063` to add the missing default contextual problem options.
 
 ## Workiz Exit / HomeFix Pilot Priority
 
@@ -1018,3 +1026,102 @@ Some existing files may be uncommitted from prior tasks. Check `git status` befo
 - Do not bypass this route in future UI. HasData must remain server-side only.
 - Task 164.1 fixed the HasData request shape in `frontend/src/server/property-intelligence/hasdata-zillow.ts`. The adapter now builds `https://www.zillow.com/homes/{address-slug}_rb/` and posts `{ url }` to HasData, then normalizes `image`, `zestimate.zestimate`, `area.livingArea`, `geo.latitude`, `geo.longitude`, and `staticMapUrls`.
 - Task 164.2 adds a ZIP sanity check for provider results. If HasData resolves the derived Zillow URL to a different ZIP, return `property: null` rather than showing a possibly wrong property. Future higher-reliability work should add a real property search/address resolution step before calling the property endpoint.
+
+## Task 165.16 Job Workspace Mobile Schedule Row
+
+- Read `docs/TASK165_JOB_WORKSPACE_DETAILS_REDESIGN.md` before changing mobile Job Workspace Details.
+- Mobile Client avatar: the camera badge should appear only when no avatar photo exists. Do not re-add the large overlay on loaded photos.
+- Mobile Details order remains: mobile header, tabs, warning, Property Preview, Job Summary, Status, Client, Schedule, then the rest of Details.
+- Mobile Schedule is a compact borderless row, not a card. The row is fully clickable and opens the `Reschedule` bottom sheet.
+- The bottom sheet uses native date/time fields and one active appointment window. The current appointment model does not support unschedule/schedule-later.
+- First-time scheduling still uses `POST /api/service-requests/[id]/appointments`; rescheduling existing appointments uses `PATCH /api/service-requests/[id]/appointments`.
+- The PATCH route verifies job access, appointment linkage, active appointment status, technician availability, and overlapping appointments before updating the existing appointment and mirroring scheduled fields back to `service_requests`.
+- Do not create duplicate appointments or add inbound Google Calendar behavior from this path.
+- Apply-ready migration `0061_job_workspace_mobile_reschedule_service_role_grants_apply_ready.sql` is required for the server-side PATCH path. It grants service_role only the needed table privileges for appointment select/update, availability-rule select, and mirrored schedule-field updates on service_requests.
+
+## Task 165.17 Reschedule Validation Fix
+
+- The mobile Reschedule sheet must not call the initial booking RPC for a date/time-only move of an existing appointment.
+- Initial booking remains POST and runs full technician eligibility / ZIP coverage validation through `book_service_request_appointment_rpc`.
+- Same-technician reschedule is PATCH and intentionally skips ZIP coverage revalidation, because the technician assignment is already an operational record.
+- PATCH still enforces job access, active appointment lookup, valid time window, availability rules, and overlapping appointment prevention.
+- PATCH can resolve legacy active appointments by `service_request_id` when `service_requests.appointment_id` is stale or missing.
+- The current mobile sheet does not support changing technicians. If a caller sends a different `technicianProfileId` to PATCH, the route rejects it; technician reassignment should be implemented in a future dedicated flow with full ZIP coverage validation.
+
+## Task 165.18 End-to-end Job Creation and Appointment Save Debug
+
+- Mobile Schedule Save now uses `PUT /api/service-requests/[id]/appointments`.
+- The server is the source of truth for create versus update:
+  - query active `appointments` by `service_request_id`;
+  - if found, update that appointment and mirror fields back to `service_requests`;
+  - if not found, create through `book_service_request_appointment_rpc`.
+- Do not reintroduce frontend POST/PATCH heuristics based on `service_requests.scheduled_*` fields. Those are display mirrors and may be stale.
+- Legacy selected-technician jobs can now resolve `selected_technician_slug` to `technician_profiles.id` before first-time booking.
+- The specified QA job `33a16f94-0176-4378-8c56-1344ddee9dc3` has ZIP `10075`, no assigned technician id, and no appointment mirror. Slug reconciliation resolves QA Booking Refrigeration, then first-time booking correctly fails because that technician does not cover ZIP `10075`.
+- Jobs Center New Job no longer calls `match_or_create_customer_for_intake_rpc` directly from the browser. It creates intake, then converts through the existing server route. Conversion remains the owner of customer/job creation.
+- Duplicate-confirmed New Job intakes keep their requested status instead of being forced to `needs_info`.
+- Browser QA created unscheduled service request `7ae0b981-d477-425e-868e-37bd790c6786` with linked customer `b6d6ae9b-d00e-4a83-b5a6-273578315e71` and converted intake `6e47470c-f21c-4b1b-93fe-d60082aa3727`. It has no appointment, as expected.
+- Current DB still lacks `0061` service-role grants: safe diagnostics return `42501 permission denied for table appointments`. Apply `0061_job_workspace_mobile_reschedule_service_role_grants_apply_ready.sql` before claiming existing-appointment update persistence is fully verified.
+
+## Task 165.19 Technician Availability And Conflict Validation Fix
+
+- Root cause of the next appointment-save blocker: first-time booking and reschedule validation treated missing explicit `technician_availability_rules` rows as unavailable 24/7. That conflicted with the existing scheduling foundation, which already defines default Houston business hours (`America/Chicago`, Monday-Friday, `08:00-17:00`) for provider-free scheduling when technician-specific work blocks are absent.
+- Do not remove appointment protections. The intended rule is:
+  - explicit unavailable recurring rules block;
+  - if explicit available rules exist, the selected window must fit one;
+  - if no explicit available rules exist, use default company/platform business hours;
+  - active appointment conflicts still block with `existing_start < requested_end AND existing_end > requested_start`;
+  - exclude the current appointment id during update so an appointment cannot conflict with itself.
+- `frontend/src/app/api/service-requests/[id]/appointments/route.ts` now uses a shared server-side availability/conflict helper for PATCH/PUT update branches and returns clearer user-facing errors such as `Technician is not scheduled to work at this time.`, `Appointment is outside company business hours.`, and `Technician already has an appointment from 10:00 AM to 11:00 AM.`
+- New apply-ready migration: `supabase/migrations/0062_appointment_availability_default_hours_fix_apply_ready.sql`. Apply it after `0061`; it replaces `book_service_request_appointment_rpc(...)` without changing the signature and gives first-time booking the same fallback behavior.
+- Diagnostics for QA service request `7ae0b981-d477-425e-868e-37bd790c6786`: assigned technician `77a48eaa-28ea-4088-93e1-8b42630bb369`, ZIP `77494`, one Monday availability rule `09:00:00-12:00:00`, zero overlaps for Monday `09:00:00-10:00:00`.
+- Browser QA in the existing `localhost:3002` session created real appointment `1500de2b-4889-4635-9d29-ffdfc2609ec0`; DB verification shows one appointment row and mirrored fields on `service_requests`. The desktop visible Edit action opens the Appointment assistant, so final mobile PUT reschedule QA should be repeated through the mobile Schedule sheet after `0062` is applied.
+
+## Task 165.26 Mobile Technician Assignment Block
+
+- UI file: `frontend/src/components/dashboard/ServiceRequestDetail.tsx`.
+- API file: `frontend/src/app/api/service-requests/[id]/appointments/route.ts`.
+- Migration: `supabase/migrations/0065_job_workspace_technician_assignment_grants_apply_ready.sql`.
+- Mobile Details now includes a `Technician` row after Job Details. It opens an `Assign Technician` bottom sheet with search, initials/avatar color, current assignment, ZIP coverage hints, availability hints, selected state, and Save/Cancel.
+- Canonical assignment field: `service_requests.assigned_technician_profile_id`.
+- Existing appointment sync field: `appointments.technician_profile_id`.
+- `PATCH /api/service-requests/[id]/appointments` supports `operation: "assign_technician"` for assignment only. It does not create an appointment for unscheduled jobs.
+- Existing appointments preserve id/date/window and update only the technician after server validation.
+- Server validation covers dashboard job access, technician management access, active verified marketplace profile state, service ZIP coverage, technician availability/default business hours, and active appointment overlap.
+- The browser currently shows active verified marketplace technician profiles from the existing scheduler loader. Disabled/deactivated profiles remain blocked by the server and should only be surfaced in UI through a future explicit dispatcher-access task if needed.
+
+## Task 165.27 Mobile Details Cleanup And Attachments Row
+
+- UI file: `frontend/src/components/dashboard/ServiceRequestDetail.tsx`.
+- Mobile-only cleanup hides these large blocks from the default Details screen: Appliance / Problem, Technician findings, More job controls, and Service address details.
+- These blocks/data were not deleted. Desktop keeps the existing broader sections; notes/findings, workflow actions, address data, and photo data remain intact.
+- New mobile `Attachments` row appears immediately below `Technician`.
+- Row/label click opens Gallery. Camera icon click calls `event.stopPropagation()` before opening the camera input so Gallery does not fire at the same time.
+- Camera input attributes: `type="file"`, `accept="image/*"`, `capture="environment"`.
+- Gallery input attributes: `type="file"`, `accept="image/*"`.
+- Upload path reuses `uploadTechnicianServiceRequestPhoto(...)`, the `service-request-photos` storage bucket, `add_service_request_photo_rpc(...)`, and `loadPhotos()` refresh.
+- No new storage bucket, attachment table, photo API, backend route, Supabase schema, appointment logic, technician assignment logic, or desktop redesign was added.
+
+## Task 165.28 Mobile Attachment Upload Compatibility Fix
+
+- File: `frontend/src/lib/service-request-photos.ts`.
+- Root cause: `buildServiceRequestPhotoPath(...)` called `crypto.randomUUID()` directly, which can be unavailable in iPhone Safari and local LAN `http://10.0.0.67` testing contexts.
+- Use `createSafePhotoStorageId(...)` for browser-safe unique IDs:
+  - native branch: `globalThis.crypto?.randomUUID` when it is a function;
+  - secure fallback: `globalThis.crypto?.getRandomValues` with UUID-v4 bit shaping;
+  - final fallback: sanitized timestamp plus random strings.
+- File names are sanitized before path generation; path separators, backslashes, query/hash-like suffixes, and unsafe path characters are removed.
+- Upload state in `ServiceRequestDetail.tsx` now catches thrown upload errors for Attachments and the existing Photos-tab add flow, clears selected-file/loading state, and shows a retryable error message.
+- Server-side direct `crypto.randomUUID()` calls remain in API routes and were not changed because the reported failure is client-side mobile attachment upload.
+- Real device QA still needs to be performed on iPhone Safari to confirm camera/gallery capture and persistence over LAN.
+
+## Task 165.29 Attachments Preview And Mobile Gallery
+
+- UI file: `frontend/src/components/dashboard/ServiceRequestDetail.tsx`.
+- Attachment source remains `public.service_request_photos` loaded by `loadPhotos()` and mapped through `mapServiceRequestPhotoRow(...)`.
+- Signed URLs remain browser-created through Supabase Storage `createSignedUrl(...)` in `loadPhotos()` with the existing private `service-request-photos` bucket.
+- Mobile Attachments row now shows `No files`, `1 photo`, or `{n} photos`, plus a compact preview strip of the newest three job photos and a `+N` overflow tile.
+- Row click opens the internal full-screen mobile gallery. Camera and Gallery icons keep their existing upload actions and stop propagation so upload and viewer do not fire together.
+- Gallery shows all job photos in a 3-column grid with loading, error/retry, and empty states. Viewer shows one large photo, previous/next, current index, filename/type, and uploaded date.
+- Upload while the gallery is open reuses `uploadTechnicianServiceRequestPhoto(...)` and `loadPhotos()`, so the count, strip, gallery grid, and viewer all update from the same state.
+- Do not add fake local delete. There is no existing `service_request_photos` delete/remove API; only client-avatar removal exists today.

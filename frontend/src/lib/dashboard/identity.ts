@@ -97,6 +97,37 @@ function createBaseResult(
   };
 }
 
+async function loadDashboardCompanyId({
+  supabase,
+  profile,
+}: {
+  supabase: SupabaseClient<Database>;
+  profile: ProfileRow;
+}) {
+  const { data: currentCompanyId } = await supabase.rpc(
+    "current_dashboard_company_id",
+  );
+
+  if (typeof currentCompanyId === "string" && currentCompanyId) {
+    return currentCompanyId;
+  }
+
+  const { data: membership } = await supabase
+    .from("company_members")
+    .select("company_id")
+    .eq("profile_id", profile.id)
+    .eq("member_status", "active")
+    .is("archived_at", null)
+    .order("joined_at", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  return typeof membership?.company_id === "string"
+    ? membership.company_id
+    : null;
+}
+
 async function loadCompany({
   supabase,
   profile,
@@ -104,7 +135,9 @@ async function loadCompany({
   supabase: SupabaseClient<Database>;
   profile: ProfileRow;
 }): Promise<RelatedRecordState<CompanyRow>> {
-  if (!profile.company_id) {
+  const companyId = await loadDashboardCompanyId({ supabase, profile });
+
+  if (!companyId) {
     return emptyRelatedState();
   }
 
@@ -112,9 +145,9 @@ async function loadCompany({
     const { data, error } = await supabase
       .from("companies")
       .select(
-        "id,owner_profile_id,name,slug,primary_city,primary_state,business_phone,business_email,website_url,status,onboarding_status,created_by_profile_id,reviewed_by_profile_id,archived_by_profile_id,reviewed_at,archived_at,created_at,updated_at",
+        "id,owner_profile_id,name,slug,primary_city,primary_state,base_address_line1,base_address_line2,base_city,base_state,base_zip,base_country,base_formatted_address,base_latitude,base_longitude,base_place_id,base_address_updated_at,business_phone,business_email,website_url,status,onboarding_status,created_by_profile_id,reviewed_by_profile_id,archived_by_profile_id,reviewed_at,archived_at,created_at,updated_at",
       )
-      .eq("id", profile.company_id)
+      .eq("id", companyId)
       .maybeSingle();
 
     if (error) {
@@ -144,7 +177,9 @@ async function loadCompanyMembership({
   supabase: SupabaseClient<Database>;
   profile: ProfileRow;
 }): Promise<RelatedRecordState<DashboardCompanyMembership>> {
-  if (!profile.company_id) {
+  const companyId = await loadDashboardCompanyId({ supabase, profile });
+
+  if (!companyId) {
     return emptyRelatedState();
   }
 
@@ -155,7 +190,7 @@ async function loadCompanyMembership({
         "id,company_id,profile_id,member_role,member_status,invited_by_profile_id,removed_by_profile_id,archived_by_profile_id,invited_at,joined_at,removed_at,suspended_at,archived_at,created_at,updated_at",
       )
       .eq("profile_id", profile.id)
-      .eq("company_id", profile.company_id)
+      .eq("company_id", companyId)
       .is("archived_at", null)
       .order("created_at", { ascending: false })
       .limit(1)
@@ -197,7 +232,7 @@ async function loadTechnicianProfile({
     const { data, error } = await supabase
       .from("technician_profiles")
       .select(
-        "id,profile_id,company_id,affiliation_type,display_name,business_name,years_experience,service_summary_public,bio_private,primary_city,primary_state,service_zip_codes,service_cities,appliance_categories,brands_serviced,specialties,languages,avatar_color,technician_status,marketplace_enabled,public_profile_ready,verification_submitted_at,verified_at,verified_by_profile_id,rejected_at,suspended_at,archived_by_profile_id,archived_at,created_at,updated_at",
+        "id,profile_id,company_id,affiliation_type,display_name,business_name,years_experience,service_summary_public,bio_private,primary_city,primary_state,base_address_line1,base_address_line2,base_city,base_state,base_zip,base_country,base_formatted_address,base_latitude,base_longitude,base_place_id,base_address_updated_at,service_zip_codes,service_cities,appliance_categories,brands_serviced,specialties,languages,avatar_color,technician_status,marketplace_enabled,public_profile_ready,verification_submitted_at,verified_at,verified_by_profile_id,rejected_at,suspended_at,archived_by_profile_id,archived_at,created_at,updated_at",
       )
       .eq("profile_id", profile.id)
       .is("archived_at", null)

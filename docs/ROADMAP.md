@@ -161,6 +161,12 @@ Status:
 - No backend, Supabase, HasData integration, database schema, Retell, phone workflow, Finance, Timeline, status, estimate, invoice, payment, or appointment logic changed.
 - Task 164.1 full-address QA is complete. The HasData provider path was verified with `301 E 79th St, APT 23S, New York, NY 10075, US`; the card displayed map, photo, Zestimate, and year built, and showed `Sqft unavailable` for provider living area `0`. The server adapter now sends a derived Zillow homes URL and maps the real HasData response shape.
 - Task 164.2 reliability/mobile hardening is complete. Address-to-Zillow lookup is documented as best-effort because the provider requires a Zillow URL. Provider failures and ZIP-mismatched results return `property: null`, and the mobile preview now shows one large photo or map instead of two tiny thumbnails.
+- Task 165 Details redesign is complete locally. The first Job Workspace tab now follows the Task 162 recommended order: compact header, Property Preview, one primary Next Action, customer/contact/navigation, schedule, appliance/problem, technician findings, and quick media. Secondary workflow/status/address controls are collapsed instead of permanently consuming the mobile field screen.
+- Task 165.14 completes the Client-card photo/base-address foundation. Apply `0058` for private client-avatar storage and `0059` for Company Base Address plus Technician Base Address override fields/RPCs. Driving distance must use saved base addresses and server-side Google Distance Matrix only; never browser geolocation or Zillow coordinates.
+- Task 165.15 adds the missing runtime grant fix for the same Client-card foundation. Apply `0060_client_avatar_distance_service_role_grants_apply_ready.sql` after `0058` and `0059`; runtime verification proved the bucket exists but service-role DB grants were missing for the avatar/client-card routes. The distance resolver now uses active `company_members` for company lookup and formatted base address is sufficient even without coordinates.
+- Task 165.18 fixes the immediate Jobs Center and mobile Schedule save blockers. New Job is now intake-create plus convert only; the extra browser-side customer-match RPC was removed from the Jobs Center flow, and duplicate-confirmed New Job intakes are not forced into `needs_info`. Mobile Schedule Save now uses a single PUT endpoint where the server decides create/update from actual active `appointments` records. First-time booking still uses the existing RPC and keeps ZIP coverage validation; same-appointment updates skip ZIP revalidation but still require `0061` service-role grants for appointment update/mirror writes. The New York QA job `33a16f94-0176-4378-8c56-1344ddee9dc3` correctly fails booking with the Houston QA technician because ZIP `10075` is outside technician coverage. Browser QA created unscheduled job `7ae0b981-d477-425e-868e-37bd790c6786` successfully.
+- Task 165.23 adds the Job Details catalog foundation for mobile Job Workspace Details. Apply `0063_job_details_catalogs_attribution_tags_apply_ready.sql` to add reusable job type, contextual problem, marketing source, tag, and job-tag relation tables. Job Name is now `service_requests.job_name` with appliance-derived fallback/default trigger; Description remains `issue_description`; marketing attribution is stored separately from technical `request_source`. The mobile Details rows and top Edit Job modal now use `/api/service-requests/[id]/details` as the shared save path.
+- Task 165.24 corrects the owner-QA layout: the mobile Details main screen shows only `Job Name`, `Description`, and `Tags`; `Ad Source` is edited inside the `Job Details` sheet. Job Type and Ad Source lists stay collapsed until tapped, Description options are filtered by the selected Job Type, and `0064_job_type_problem_catalog_seed_apply_ready.sql` adds missing contextual problem seeds without creating another catalog system.
 
 Rules for future Jobs Center work:
 
@@ -735,3 +741,18 @@ Onboarding backend progress:
 - Tags remain disabled until real job-tag data exists.
 - New Job remains the customer-first single-screen form.
 - Future work should keep Jobs Center light and avoid restoring permanent filter panels or KPI grids.
+
+## Task 165.26 - Job Workspace Technician Assignment
+
+- Mobile Job Workspace Details now exposes technician assignment as an operational row, not a separate CRM screen.
+- Assignment source of truth remains `service_requests.assigned_technician_profile_id`; existing appointments mirror the selected technician through `appointments.technician_profile_id`.
+- Unscheduled jobs may be assigned without creating appointments.
+- Save uses the existing appointment API with `operation: "assign_technician"` and server-side validation for job access, technician access, ZIP coverage, availability, and appointment conflicts.
+- Future dispatcher-board work should reuse this canonical assignment path instead of creating parallel team-assignment records.
+
+## Task 165.27 - Mobile Details Cleanup And Attachments
+
+- Mobile Job Workspace Details should remain a short operational stack: header, tabs, warning, Property Preview, summary, Status, Client, Schedule, Job Details, Technician, Attachments.
+- Large duplicated mobile sections are hidden from the default surface: Appliance/Problem, Technician Findings, More job controls, and Service address details.
+- Desktop keeps the existing broader layout for now.
+- Attachments uses the existing service-request photo flow and should not grow into a new media system without an explicit future task.

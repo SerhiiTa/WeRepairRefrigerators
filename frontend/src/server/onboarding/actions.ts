@@ -382,6 +382,16 @@ export async function updateTechnicianProfile(
       p_service_zip_codes: updatePayload.service_zip_codes,
       p_specialties: updatePayload.specialties,
       p_years_experience: updatePayload.years_experience,
+      p_base_address_line1: updatePayload.base_address_line1,
+      p_base_address_line2: updatePayload.base_address_line2,
+      p_base_city: updatePayload.base_city,
+      p_base_state: updatePayload.base_state,
+      p_base_zip: updatePayload.base_zip,
+      p_base_country: updatePayload.base_country,
+      p_base_formatted_address: updatePayload.base_formatted_address,
+      p_base_latitude: updatePayload.base_latitude,
+      p_base_longitude: updatePayload.base_longitude,
+      p_base_place_id: updatePayload.base_place_id,
     },
   );
 

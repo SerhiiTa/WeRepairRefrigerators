@@ -271,6 +271,10 @@ export type DashboardServiceRequest = {
   applianceType: string;
   applianceBrand: string | null;
   applianceModel: string | null;
+  jobTypeId: string | null;
+  jobName: string | null;
+  problemTypeId: string | null;
+  marketingSourceId: string | null;
   issueDescription: string;
   fullAddress: string | null;
   streetAddress: string | null;
@@ -292,6 +296,7 @@ export type DashboardServiceRequest = {
   scheduledWindowEndTime: string | null;
   requestSource: string;
   status: DashboardServiceRequestStatus;
+  jobClientAvatarStoragePath: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -461,6 +466,11 @@ export function mapServiceRequestRow(
     applianceType: row.appliance_type,
     applianceBrand: row.appliance_brand,
     applianceModel: row.appliance_model,
+    jobTypeId: "job_type_id" in row ? (row.job_type_id ?? null) : null,
+    jobName: "job_name" in row ? (row.job_name ?? null) : null,
+    problemTypeId: "problem_type_id" in row ? (row.problem_type_id ?? null) : null,
+    marketingSourceId:
+      "marketing_source_id" in row ? (row.marketing_source_id ?? null) : null,
     issueDescription: row.issue_description,
     fullAddress: row.full_address ?? null,
     streetAddress: row.street_address ?? null,
@@ -482,6 +492,10 @@ export function mapServiceRequestRow(
     scheduledWindowEndTime: row.scheduled_window_end_time ?? null,
     requestSource: row.request_source,
     status: row.status,
+    jobClientAvatarStoragePath:
+      "job_client_avatar_storage_path" in row
+        ? (row.job_client_avatar_storage_path ?? null)
+        : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

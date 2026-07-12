@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { StatusBadge } from "@/components/StatusBadge";
@@ -42,6 +42,7 @@ import {
 } from "@/lib/service-request-records";
 import {
   SERVICE_REQUEST_PHOTO_BUCKET,
+  createSafePhotoStorageId,
   uploadTechnicianServiceRequestPhoto,
   validateServiceRequestPhotoFiles,
 } from "@/lib/service-request-photos";
@@ -119,6 +120,93 @@ type AddressFormState = {
   placeId: string | null;
 };
 
+type ClientDraftState = {
+  firstName: string;
+  lastName: string;
+  phone: string;
+  email: string;
+  streetAddress: string;
+  unit: string;
+  city: string;
+  state: string;
+  zipCode: string;
+};
+
+type ClientAvatarState = {
+  storagePath: string | null;
+  signedUrl: string | null;
+  owner: "customer" | "service_request" | null;
+};
+
+type ClientDistanceState = {
+  label: string;
+  status: "idle" | "ready" | "missing_origin" | "missing_destination" | "unavailable";
+  originSource: string | null;
+  originAddress: string | null;
+  setupHref: string | null;
+};
+
+type JobDetailsCatalogItem = {
+  id: string;
+  name: string;
+  applianceCategory?: string | null;
+  category?: string | null;
+  tone?: string | null;
+  jobTypeId?: string | null;
+};
+
+type JobDetailsTag = {
+  id: string;
+  name: string;
+  category: string;
+  tone: string;
+};
+
+type JobDetailsSnapshot = {
+  jobTypeId: string | null;
+  jobName: string;
+  problemTypeId: string | null;
+  description: string;
+  marketingSourceId: string | null;
+  marketingSource: {
+    id: string;
+    name: string;
+    category: string | null;
+    code: string | null;
+  } | null;
+  technicalRequestSource: string;
+  tags: JobDetailsTag[];
+};
+
+type JobDetailsState =
+  | { status: "idle"; details: null; error: null }
+  | { status: "loading"; details: JobDetailsPayload | null; error: null }
+  | { status: "ready"; details: JobDetailsPayload; error: null }
+  | { status: "error"; details: JobDetailsPayload | null; error: string };
+
+type JobDetailsPayload = {
+  job: JobDetailsSnapshot;
+  jobTypes: JobDetailsCatalogItem[];
+  problemTypes: JobDetailsCatalogItem[];
+  marketingSources: JobDetailsCatalogItem[];
+  tags: JobDetailsCatalogItem[];
+};
+
+type JobDetailsSheetKind = "jobType" | "problem" | "adSource" | "tags";
+type JobDetailsExpandedSelector = "jobType" | "adSource";
+
+type JobDetailsSaveState =
+  | { status: "idle"; message: null }
+  | { status: "saving"; message: null }
+  | { status: "success"; message: string }
+  | { status: "error"; message: string };
+
+type AvatarActionState =
+  | { status: "idle"; message: null }
+  | { status: "saving"; message: string | null }
+  | { status: "success"; message: string }
+  | { status: "error"; message: string };
+
 type NotesState =
   | { status: "loading"; notes: DashboardServiceRequestNote[]; error: null }
   | { status: "ready"; notes: DashboardServiceRequestNote[]; error: null }
@@ -153,6 +241,24 @@ type TechnicianAvailabilityRulesState =
   | { status: "loading"; rules: TechnicianAvailabilityRule[]; error: null }
   | { status: "ready"; rules: TechnicianAvailabilityRule[]; error: null }
   | { status: "error"; rules: TechnicianAvailabilityRule[]; error: string };
+
+type TechnicianAssignmentSaveState =
+  | { status: "idle"; message: null }
+  | { status: "saving"; message: null }
+  | { status: "success"; message: string }
+  | { status: "error"; message: string };
+
+type TechnicianAssignmentCandidate = {
+  profile: TechnicianProfileRow;
+  displayName: string;
+  businessName: string | null;
+  initials: string;
+  availabilityLabel: string;
+  eligibilityLabel: string;
+  isAssigned: boolean;
+  isSelectable: boolean;
+  sortRank: number;
+};
 
 type NoteSaveState =
   | { status: "idle"; message: null }
@@ -242,6 +348,19 @@ type AppointmentBookingState =
   | { status: "success"; message: string }
   | { status: "error"; message: string };
 
+type ScheduleSheetSaveState =
+  | { status: "idle"; message: null }
+  | { status: "saving"; message: null }
+  | { status: "success"; message: string }
+  | { status: "error"; message: string };
+
+type ScheduleDraftState = {
+  startDate: string;
+  startTime: string;
+  endDate: string;
+  endTime: string;
+};
+
 type CreatedEstimateSummary = {
   estimateNumber: string | null;
   lineCount: number;
@@ -329,7 +448,7 @@ type JobWorkspaceTab =
   | "appointment";
 
 const jobWorkspaceTabs = [
-  { id: "overview", label: "Overview" },
+  { id: "overview", label: "Details" },
   { id: "timeline", label: "Timeline" },
   { id: "notes", label: "Notes" },
   { id: "photos", label: "Photos" },
@@ -463,10 +582,6 @@ function getPhoneHref(value: string | null, scheme: "tel" | "sms") {
   const cleaned = value?.replace(/[^\d+]/g, "") ?? "";
 
   return cleaned.length >= 7 ? `${scheme}:${cleaned}` : null;
-}
-
-function getEmailHref(value: string | null) {
-  return value ? `mailto:${value}` : null;
 }
 
 function getReadErrorMessage(message: string): string {
@@ -739,6 +854,141 @@ function formatScheduledWindow(
   return `${date} · ${startTime.slice(0, 5)}-${endTime.slice(0, 5)}`;
 }
 
+function formatScheduleDateDisplay(value: string | null): string {
+  if (!value) {
+    return "Not scheduled";
+  }
+
+  const date = new Date(`${value}T12:00:00`);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  }).format(date);
+}
+
+function formatScheduleTimeDisplay(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const date = new Date(`2026-01-01T${value.slice(0, 8)}`);
+
+  if (Number.isNaN(date.getTime())) {
+    return value.slice(0, 5);
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function normalizeAssignmentZip(value: string | null | undefined): string {
+  return value?.replace(/[^0-9]/g, "").slice(0, 5) ?? "";
+}
+
+function getTechnicianProfileDisplayName(profile: TechnicianProfileRow): string {
+  return (
+    profile.display_name?.trim() ||
+    profile.business_name?.trim() ||
+    "Technician"
+  );
+}
+
+function getTechnicianProfileInitials(profile: TechnicianProfileRow): string {
+  const name = getTechnicianProfileDisplayName(profile);
+  const initials = name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("");
+
+  return initials || "T";
+}
+
+function getAssignmentDayOfWeek(dateKey: string): number | null {
+  const date = new Date(`${dateKey}T12:00:00`);
+
+  return Number.isNaN(date.getTime()) ? null : date.getDay();
+}
+
+function getAssignmentMinutes(value: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const [rawHours, rawMinutes] = value.slice(0, 5).split(":");
+  const hours = Number.parseInt(rawHours ?? "", 10);
+  const minutes = Number.parseInt(rawMinutes ?? "", 10);
+
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
+    return null;
+  }
+
+  return hours * 60 + minutes;
+}
+
+function doesRuleCoverWindow(
+  rule: TechnicianAvailabilityRule,
+  startTime: string,
+  endTime: string,
+): boolean {
+  const ruleStart = getAssignmentMinutes(rule.startTime);
+  const ruleEnd = getAssignmentMinutes(rule.endTime);
+  const windowStart = getAssignmentMinutes(startTime);
+  const windowEnd = getAssignmentMinutes(endTime);
+
+  if (
+    ruleStart === null ||
+    ruleEnd === null ||
+    windowStart === null ||
+    windowEnd === null
+  ) {
+    return false;
+  }
+
+  return ruleStart <= windowStart && ruleEnd >= windowEnd;
+}
+
+function toScheduleInputTime(value: string | null): string {
+  return value?.slice(0, 5) || "";
+}
+
+function normalizeScheduleInputTime(value: string): string {
+  return value.length === 5 ? `${value}:00` : value;
+}
+
+function getTodayInputDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function addMinutesToInputTime(value: string, minutesToAdd: number): string {
+  const [hoursText, minutesText] = value.split(":");
+  const hours = Number(hoursText);
+  const minutes = Number(minutesText);
+
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
+    return "10:00";
+  }
+
+  const totalMinutes = Math.min(23 * 60 + 59, hours * 60 + minutes + minutesToAdd);
+  const nextHours = Math.floor(totalMinutes / 60);
+  const nextMinutes = totalMinutes % 60;
+
+  return `${String(nextHours).padStart(2, "0")}:${String(nextMinutes).padStart(2, "0")}`;
+}
+
+function getScheduleDateTimeValue(date: string, time: string): number {
+  return new Date(`${date}T${time}`).getTime();
+}
+
 function formatCompactCurrency(value: number | null): string {
   if (value === null) {
     return "Not available";
@@ -771,6 +1021,305 @@ function formatLivingArea(value: number | null): string {
 
 function getBackgroundImageStyle(url: string) {
   return { backgroundImage: `url(${JSON.stringify(url)})` };
+}
+
+function formatClientPhoneDisplay(value: string | null | undefined): string {
+  const raw = value?.trim();
+
+  if (!raw) {
+    return "No phone";
+  }
+
+  const digits = raw.replace(/\D/g, "");
+  const localDigits =
+    digits.length === 11 && digits.startsWith("1")
+      ? digits.slice(1)
+      : digits.length > 10
+        ? digits.slice(-10)
+        : digits;
+
+  if (localDigits.length === 10) {
+    return `(${localDigits.slice(0, 3)}) ${localDigits.slice(3, 6)}-${localDigits.slice(6)}`;
+  }
+
+  return raw;
+}
+
+function splitClientName(value: string): { firstName: string; lastName: string } {
+  const parts = value.trim().split(/\s+/).filter(Boolean);
+
+  if (parts.length === 0) {
+    return { firstName: "", lastName: "" };
+  }
+
+  if (parts.length === 1) {
+    return { firstName: parts[0], lastName: "" };
+  }
+
+  return {
+    firstName: parts[0],
+    lastName: parts.slice(1).join(" "),
+  };
+}
+
+function getClientInitials(value: string): string {
+  const parts = value.trim().split(/\s+/).filter(Boolean);
+
+  if (parts.length === 0) {
+    return "W";
+  }
+
+  return parts
+    .slice(0, 2)
+    .map((part) => part.charAt(0).toUpperCase())
+    .join("");
+}
+
+function stripUsCountry(value: string): string {
+  return value
+    .replace(/,\s*(US|USA|United States)$/i, "")
+    .replace(/\s+(US|USA|United States)$/i, "")
+    .trim();
+}
+
+function buildClientAddressFromDraft(
+  draft: ClientDraftState,
+  country: string,
+): string | null {
+  const streetLine = [draft.streetAddress.trim(), draft.unit.trim()]
+    .filter(Boolean)
+    .join(", ");
+  const stateZip = [draft.state.trim(), draft.zipCode.trim()]
+    .filter(Boolean)
+    .join(" ");
+  const cityLine = [draft.city.trim(), stateZip].filter(Boolean).join(", ");
+  const address = [streetLine, cityLine, country && country !== "US" ? country : null]
+    .filter(Boolean)
+    .join(", ");
+
+  return address.trim() || null;
+}
+
+const fallbackJobTypes: JobDetailsCatalogItem[] = [
+  { id: "fallback-refrigerator", name: "Refrigerator Repair", applianceCategory: "Refrigerator" },
+  { id: "fallback-freezer", name: "Freezer Repair", applianceCategory: "Freezer" },
+  { id: "fallback-wine-cooler", name: "Wine Cooler Repair", applianceCategory: "Wine Cooler" },
+  { id: "fallback-ice-maker", name: "Ice Maker Repair", applianceCategory: "Ice Maker" },
+  { id: "fallback-dishwasher", name: "Dishwasher Repair", applianceCategory: "Dishwasher" },
+  { id: "fallback-washer", name: "Washer Repair", applianceCategory: "Washer" },
+  { id: "fallback-dryer", name: "Dryer Repair", applianceCategory: "Dryer" },
+  { id: "fallback-oven-range", name: "Oven / Range Repair", applianceCategory: "Oven / Range" },
+  { id: "fallback-cooktop", name: "Cooktop Repair", applianceCategory: "Cooktop" },
+  { id: "fallback-microwave", name: "Microwave Repair", applianceCategory: "Microwave" },
+  { id: "fallback-other", name: "Other", applianceCategory: null },
+];
+
+const fallbackProblemsByJobType: Record<string, string[]> = {
+  "Refrigerator Repair": [
+    "Not cooling",
+    "Cooling poorly",
+    "Ice buildup",
+    "Leaking",
+    "Making noise",
+    "Temperature fluctuates",
+    "Freezer not freezing",
+    "Refrigerator section warm",
+  ],
+  "Dishwasher Repair": [
+    "Not draining",
+    "Not cleaning",
+    "Leaking",
+    "Full of water",
+    "Not starting",
+    "Making noise",
+    "Not drying",
+    "Door not closing",
+  ],
+  "Dryer Repair": [
+    "Not heating",
+    "Not spinning",
+    "Taking too long to dry",
+    "Making noise",
+    "Burning smell",
+    "Not starting",
+  ],
+};
+
+const fallbackMarketingSources: JobDetailsCatalogItem[] = [
+  "Google Ads",
+  "Google Organic",
+  "Google Business Profile",
+  "Website",
+  "Reserve with Google",
+  "Thumbtack",
+  "Yelp",
+  "Nextdoor",
+  "Referral",
+  "Returning Customer",
+  "Direct Call",
+  "Property Management",
+  "Other",
+].map((name) => ({ id: `fallback-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, name }));
+
+function deriveJobNameFromAppliance(applianceType: string): string {
+  const cleaned = applianceType.trim();
+
+  if (!cleaned) {
+    return "Appliance Service";
+  }
+
+  if (/repair$/i.test(cleaned)) {
+    return cleaned;
+  }
+
+  if (/^(oven|range)$/i.test(cleaned)) {
+    return "Oven / Range Repair";
+  }
+
+  return `${cleaned} Repair`;
+}
+
+function normalizeCatalogText(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ");
+}
+
+function getFallbackProblemItems(jobName: string): JobDetailsCatalogItem[] {
+  const problems =
+    fallbackProblemsByJobType[jobName] ??
+    fallbackProblemsByJobType[
+      fallbackJobTypes.find(
+        (jobType) =>
+          normalizeCatalogText(jobType.name) === normalizeCatalogText(jobName),
+      )?.name ?? ""
+    ] ??
+    [
+      "Not cooling",
+      "Leaking",
+      "Making noise",
+      "Not heating",
+      "Not draining",
+      "Not turning on",
+      "Error code",
+    ];
+
+  return problems.map((name) => ({
+    id: `fallback-${normalizeCatalogText(jobName)}-${normalizeCatalogText(name)}`,
+    name,
+  }));
+}
+
+function toTagToneClass(tone: string | null | undefined): string {
+  switch (tone) {
+    case "blue":
+      return "border-blue-100 bg-blue-50 text-blue-700";
+    case "green":
+      return "border-emerald-100 bg-emerald-50 text-emerald-700";
+    case "yellow":
+      return "border-yellow-100 bg-yellow-50 text-yellow-800";
+    case "orange":
+      return "border-orange-100 bg-orange-50 text-orange-700";
+    case "red":
+      return "border-red-100 bg-red-50 text-red-700";
+    case "purple":
+      return "border-purple-100 bg-purple-50 text-purple-700";
+    default:
+      return "border-slate-200 bg-slate-50 text-slate-700";
+  }
+}
+
+function PhoneHandsetIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4 shrink-0 text-emerald-600"
+      fill="currentColor"
+      viewBox="0 0 24 24"
+    >
+      <path
+        clipRule="evenodd"
+        d="M1.5 4.5a3 3 0 0 1 3-3h1.372c.86 0 1.61.586 1.819 1.42l1.105 4.423a1.875 1.875 0 0 1-.694 1.955l-1.293.97c-.135.101-.164.249-.126.352a11.285 11.285 0 0 0 6.697 6.697c.103.038.251.009.352-.126l.97-1.293a1.875 1.875 0 0 1 1.955-.694l4.423 1.105c.834.209 1.42.959 1.42 1.82V19.5a3 3 0 0 1-3 3h-2.25C8.552 22.5 1.5 15.448 1.5 6.75V4.5Z"
+        fillRule="evenodd"
+      />
+    </svg>
+  );
+}
+
+function ScheduleCalendarIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-6 w-6 shrink-0 text-[#2563EB]"
+      fill="none"
+      viewBox="0 0 24 24"
+    >
+      <path
+        d="M7 3.5v3M17 3.5v3M4.75 9.25h14.5M6.5 5h11A2.5 2.5 0 0 1 20 7.5v10A2.5 2.5 0 0 1 17.5 20h-11A2.5 2.5 0 0 1 4 17.5v-10A2.5 2.5 0 0 1 6.5 5Z"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+    </svg>
+  );
+}
+
+function AttachmentCameraIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-7 w-7 text-[#2563EB]"
+      fill="none"
+      viewBox="0 0 24 24"
+    >
+      <path
+        d="M8.25 7.25 9.5 5.5h5l1.25 1.75h2.5A2.25 2.25 0 0 1 20.5 9.5v6.75a2.25 2.25 0 0 1-2.25 2.25H5.75a2.25 2.25 0 0 1-2.25-2.25V9.5a2.25 2.25 0 0 1 2.25-2.25h2.5Z"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M12 15.75a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5Z"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+    </svg>
+  );
+}
+
+function AttachmentGalleryIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-7 w-7 text-[#2563EB]"
+      fill="none"
+      viewBox="0 0 24 24"
+    >
+      <path
+        d="M5.75 4.5h12.5A2.25 2.25 0 0 1 20.5 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25H5.75A2.25 2.25 0 0 1 3.5 17.25V6.75A2.25 2.25 0 0 1 5.75 4.5Z"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="m4 16 4.1-4.1a1.5 1.5 0 0 1 2.12 0l2.03 2.03 1.53-1.53a1.5 1.5 0 0 1 2.12 0L20 16.5"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M15.5 9.25h.01"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="3"
+      />
+    </svg>
+  );
 }
 
 export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
@@ -874,6 +1423,98 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
       status: "idle",
       message: null,
     });
+  const technicianFindingsInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const [isEditingJobSummary, setIsEditingJobSummary] = useState(false);
+  const [isJobSummaryEditorVisible, setIsJobSummaryEditorVisible] =
+    useState(false);
+  const [isClosingJobSummaryEditor, setIsClosingJobSummaryEditor] =
+    useState(false);
+  const [jobSummaryDraft, setJobSummaryDraft] = useState({
+    title: "",
+    complaint: "",
+  });
+  const [isStatusSheetOpen, setIsStatusSheetOpen] = useState(false);
+  const [isStatusSheetVisible, setIsStatusSheetVisible] = useState(false);
+  const [isClosingStatusSheet, setIsClosingStatusSheet] = useState(false);
+  const [jobDetailsState, setJobDetailsState] = useState<JobDetailsState>({
+    status: "idle",
+    details: null,
+    error: null,
+  });
+  const [jobDetailsSheet, setJobDetailsSheet] =
+    useState<JobDetailsSheetKind | null>(null);
+  const [isJobDetailsSheetVisible, setIsJobDetailsSheetVisible] =
+    useState(false);
+  const [isClosingJobDetailsSheet, setIsClosingJobDetailsSheet] =
+    useState(false);
+  const [jobDetailsSearch, setJobDetailsSearch] = useState("");
+  const [newCatalogValue, setNewCatalogValue] = useState("");
+  const [selectedJobTypeId, setSelectedJobTypeId] = useState<string | null>(null);
+  const [selectedProblemTypeId, setSelectedProblemTypeId] = useState<string | null>(null);
+  const [selectedMarketingSourceId, setSelectedMarketingSourceId] =
+    useState<string | null>(null);
+  const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
+  const [expandedJobDetailsSelector, setExpandedJobDetailsSelector] =
+    useState<JobDetailsExpandedSelector | null>(null);
+  const [jobDetailsSaveState, setJobDetailsSaveState] =
+    useState<JobDetailsSaveState>({ status: "idle", message: null });
+  const [isScheduleSheetOpen, setIsScheduleSheetOpen] = useState(false);
+  const [isScheduleSheetVisible, setIsScheduleSheetVisible] = useState(false);
+  const [isClosingScheduleSheet, setIsClosingScheduleSheet] = useState(false);
+  const [scheduleDraft, setScheduleDraft] = useState<ScheduleDraftState>({
+    startDate: "",
+    startTime: "",
+    endDate: "",
+    endTime: "",
+  });
+  const [scheduleSheetSaveState, setScheduleSheetSaveState] =
+    useState<ScheduleSheetSaveState>({ status: "idle", message: null });
+  const [isTechnicianSheetOpen, setIsTechnicianSheetOpen] = useState(false);
+  const [isTechnicianSheetVisible, setIsTechnicianSheetVisible] =
+    useState(false);
+  const [isClosingTechnicianSheet, setIsClosingTechnicianSheet] =
+    useState(false);
+  const [technicianAssignmentSearch, setTechnicianAssignmentSearch] =
+    useState("");
+  const [selectedAssignmentTechnicianId, setSelectedAssignmentTechnicianId] =
+    useState<string | null>(null);
+  const [technicianAssignmentSaveState, setTechnicianAssignmentSaveState] =
+    useState<TechnicianAssignmentSaveState>({
+      status: "idle",
+      message: null,
+    });
+  const [isEditingClient, setIsEditingClient] = useState(false);
+  const [isClientEditorVisible, setIsClientEditorVisible] = useState(false);
+  const [isClosingClientEditor, setIsClosingClientEditor] = useState(false);
+  const [clientDraft, setClientDraft] = useState<ClientDraftState>({
+    firstName: "",
+    lastName: "",
+    phone: "",
+    email: "",
+    streetAddress: "",
+    unit: "",
+    city: "",
+    state: "TX",
+    zipCode: "",
+  });
+  const [clientAvatar, setClientAvatar] = useState<ClientAvatarState>({
+    storagePath: null,
+    signedUrl: null,
+    owner: null,
+  });
+  const [clientDistance, setClientDistance] = useState<ClientDistanceState>({
+    label: "Distance unavailable",
+    status: "idle",
+    originSource: null,
+    originAddress: null,
+    setupHref: null,
+  });
+  const [isAvatarSheetOpen, setIsAvatarSheetOpen] = useState(false);
+  const [avatarActionState, setAvatarActionState] =
+    useState<AvatarActionState>({ status: "idle", message: null });
+  const [avatarCaptureMode, setAvatarCaptureMode] = useState(false);
+  const [isMapConfirmOpen, setIsMapConfirmOpen] = useState(false);
+  const avatarFileInputRef = useRef<HTMLInputElement | null>(null);
   const [photoType, setPhotoType] =
     useState<Exclude<DatabaseServiceRequestPhotoType, "customer_upload">>(
       "technician_upload",
@@ -884,6 +1525,12 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     status: "idle",
     message: null,
   });
+  const attachmentCameraInputRef = useRef<HTMLInputElement | null>(null);
+  const attachmentGalleryInputRef = useRef<HTMLInputElement | null>(null);
+  const [isAttachmentGalleryOpen, setIsAttachmentGalleryOpen] = useState(false);
+  const [activeAttachmentIndex, setActiveAttachmentIndex] = useState<number | null>(
+    null,
+  );
   const [estimateDiagnosisText, setEstimateDiagnosisText] = useState("");
   const [estimateDraftAgentResult, setEstimateDraftAgentResult] =
     useState<EstimateDraftAgentResult | null>(null);
@@ -956,6 +1603,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     });
   const [calendarSyncSummary, setCalendarSyncSummary] =
     useState<CalendarSyncSummary>(null);
+  const readyRequestId = state.status === "ready" ? state.request.id : null;
   const propertyLookupAddress =
     state.status === "ready" ? getPropertyLookupAddress(state.request) : null;
 
@@ -1236,6 +1884,176 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
       isActive = false;
     };
   }, [propertyLookupAddress]);
+
+  useEffect(() => {
+    let isActive = true;
+
+    async function loadJobDetails() {
+      if (!readyRequestId) {
+        return;
+      }
+
+      const supabase = getSupabaseBrowserClient();
+
+      if (!supabase) {
+        return;
+      }
+
+      setJobDetailsState((current) => ({
+        status: "loading",
+        details: current.details,
+        error: null,
+      }));
+
+      try {
+        const sessionResult = await getDashboardActionSession(supabase);
+        const accessToken = sessionResult.ok
+          ? sessionResult.response.data.session?.access_token
+          : null;
+
+        if (!accessToken) {
+          throw new Error("A dashboard session is required.");
+        }
+
+        const response = await fetch(
+          `/api/service-requests/${readyRequestId}/details`,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+            },
+          },
+        );
+        const payload = (await response.json().catch(() => null)) as {
+          ok?: boolean;
+          details?: JobDetailsPayload;
+          message?: string;
+        } | null;
+
+        if (!isActive) {
+          return;
+        }
+
+        if (!response.ok || !payload?.ok || !payload.details) {
+          throw new Error(payload?.message ?? "Job details are unavailable.");
+        }
+
+        setJobDetailsState({
+          status: "ready",
+          details: payload.details,
+          error: null,
+        });
+      } catch (error) {
+        if (!isActive) {
+          return;
+        }
+
+        setJobDetailsState((current) => ({
+          status: "error",
+          details: current.details,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Job details are unavailable.",
+        }));
+      }
+    }
+
+    void loadJobDetails();
+
+    return () => {
+      isActive = false;
+    };
+  }, [readyRequestId]);
+
+  useEffect(() => {
+    let isActive = true;
+
+    async function loadClientCardContext() {
+      if (!readyRequestId) {
+        return;
+      }
+
+      const supabase = getSupabaseBrowserClient();
+
+      if (!supabase) {
+        return;
+      }
+
+      try {
+        const sessionResult = await getDashboardActionSession(supabase);
+
+        if (!sessionResult.ok) {
+          throw new Error(sessionResult.message);
+        }
+
+        const accessToken = sessionResult.response.data.session?.access_token;
+
+        if (!accessToken) {
+          throw new Error("A dashboard session is required.");
+        }
+
+        const response = await fetch(
+          `/api/service-requests/${readyRequestId}/client-card`,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+            },
+          },
+        );
+        const payload = (await response.json().catch(() => null)) as {
+          ok?: boolean;
+          clientAvatar?: ClientAvatarState;
+          diagnostics?: {
+            originSource?: string | null;
+            originAddressAvailable?: boolean;
+            destinationAddressAvailable?: boolean;
+          };
+          distance?: {
+            label?: string;
+            status?: ClientDistanceState["status"];
+            originSource?: string | null;
+            originAddress?: string | null;
+            setupHref?: string | null;
+            originAddressAvailable?: boolean;
+            destinationAddressAvailable?: boolean;
+          };
+        } | null;
+
+        if (!isActive || !response.ok || !payload?.ok) {
+          return;
+        }
+
+        setClientAvatar({
+          storagePath: payload.clientAvatar?.storagePath ?? null,
+          signedUrl: payload.clientAvatar?.signedUrl ?? null,
+          owner: payload.clientAvatar?.owner ?? null,
+        });
+        setClientDistance({
+          label: payload.distance?.label ?? "Distance unavailable",
+          status: payload.distance?.status ?? "unavailable",
+          originSource: payload.distance?.originSource ?? null,
+          originAddress: payload.distance?.originAddress ?? null,
+          setupHref: payload.distance?.setupHref ?? null,
+        });
+      } catch {
+        if (!isActive) {
+          return;
+        }
+
+        setClientDistance((current) => ({
+          ...current,
+          label: "Distance unavailable",
+          status: "unavailable",
+        }));
+      }
+    }
+
+    void loadClientCardContext();
+
+    return () => {
+      isActive = false;
+    };
+  }, [readyRequestId]);
 
   async function loadNotes() {
     const supabase = getSupabaseBrowserClient();
@@ -1946,16 +2764,31 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
 
     setPhotoSaveState({ status: "saving", message: null });
 
-    const result = await uploadTechnicianServiceRequestPhoto({
-      requestId: state.request.id,
-      file: photoFile,
-      photoType,
-    });
+    try {
+      const result = await uploadTechnicianServiceRequestPhoto({
+        requestId: state.request.id,
+        file: photoFile,
+        photoType,
+      });
 
-    if (!result.ok) {
+      if (!result.ok) {
+        setPhotoFile(null);
+        setPhotoFileError(null);
+        setPhotoSaveState({
+          status: "error",
+          message: result.message,
+        });
+        return;
+      }
+    } catch (error) {
+      setPhotoFile(null);
+      setPhotoFileError(null);
       setPhotoSaveState({
         status: "error",
-        message: result.message,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Photo upload failed. Please try again.",
       });
       return;
     }
@@ -1969,6 +2802,116 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     void loadPhotos();
   }
 
+  function openAttachmentGalleryPicker() {
+    if (photoSaveState.status === "saving") {
+      return;
+    }
+
+    attachmentGalleryInputRef.current?.click();
+  }
+
+  function openAttachmentCameraPicker() {
+    if (photoSaveState.status === "saving") {
+      return;
+    }
+
+    attachmentCameraInputRef.current?.click();
+  }
+
+  async function uploadAttachmentFile(file: File | null) {
+    if (!file || state.status !== "ready") {
+      return;
+    }
+
+    const validation = validateServiceRequestPhotoFiles([file]);
+
+    if (!validation.ok) {
+      setPhotoFile(null);
+      setPhotoFileError(validation.message);
+      setPhotoSaveState({
+        status: "error",
+        message: validation.message,
+      });
+      return;
+    }
+
+    setPhotoFile(file);
+    setPhotoFileError(null);
+    setPhotoSaveState({ status: "saving", message: null });
+
+    try {
+      const result = await uploadTechnicianServiceRequestPhoto({
+        requestId: state.request.id,
+        file,
+        photoType,
+      });
+
+      if (!result.ok) {
+        setPhotoFile(null);
+        setPhotoFileError(null);
+        setPhotoSaveState({
+          status: "error",
+          message: result.message,
+        });
+        return;
+      }
+    } catch (error) {
+      setPhotoFile(null);
+      setPhotoFileError(null);
+      setPhotoSaveState({
+        status: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Photo upload failed. Please try again.",
+      });
+      return;
+    }
+
+    setPhotoFile(null);
+    setPhotoFileError(null);
+    setPhotoSaveState({
+      status: "success",
+      message: "Photo attached to this service request.",
+    });
+    void loadPhotos();
+  }
+
+  function openAttachmentGallery(selectedIndex: number | null = null) {
+    setIsAttachmentGalleryOpen(true);
+    setActiveAttachmentIndex(
+      selectedIndex !== null && photosState.photos[selectedIndex]
+        ? selectedIndex
+        : null,
+    );
+  }
+
+  function closeAttachmentGallery() {
+    setIsAttachmentGalleryOpen(false);
+    setActiveAttachmentIndex(null);
+  }
+
+  function showPreviousAttachment() {
+    if (activeAttachmentIndex === null || photosState.photos.length === 0) {
+      return;
+    }
+
+    setActiveAttachmentIndex(
+      (activeAttachmentIndex - 1 + photosState.photos.length) %
+        photosState.photos.length,
+    );
+  }
+
+  function showNextAttachment() {
+    if (activeAttachmentIndex === null || photosState.photos.length === 0) {
+      return;
+    }
+
+    setActiveAttachmentIndex(
+      (activeAttachmentIndex + 1) % photosState.photos.length,
+    );
+  }
+
   function toggleCatalogItem(itemId: string) {
     setCreatedEstimateSummary(null);
     setEstimateSaveState({ status: "idle", message: null });
@@ -1980,9 +2923,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
   }
 
   function buildProfessionalLineId(index: number): string {
-    return typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `${Date.now()}-${index}`;
+    return `${createSafePhotoStorageId()}-${index}`;
   }
 
   function applyGeneratedEstimateDraft(draft: EstimateDraftAgentResult) {
@@ -3245,6 +4186,1013 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     void loadNotes();
   }
 
+  function openJobSummaryEditor() {
+    if (state.status !== "ready") {
+      return;
+    }
+
+    const snapshot = getCurrentJobDetailsSnapshot();
+
+    setJobSummaryDraft({
+      title:
+        snapshot?.jobName ??
+        state.request.jobName ??
+        deriveJobNameFromAppliance(state.request.applianceType),
+      complaint: snapshot?.description ?? state.request.issueDescription,
+    });
+    setJobDetailsSaveState({ status: "idle", message: null });
+    setIsClosingJobSummaryEditor(false);
+    setIsEditingJobSummary(true);
+    setIsJobSummaryEditorVisible(false);
+    window.requestAnimationFrame(() => {
+      setIsJobSummaryEditorVisible(true);
+    });
+  }
+
+  function closeJobSummaryEditor() {
+    setIsJobSummaryEditorVisible(false);
+    setIsClosingJobSummaryEditor(true);
+    window.setTimeout(() => {
+      setIsEditingJobSummary(false);
+      setIsClosingJobSummaryEditor(false);
+      setIsJobSummaryEditorVisible(false);
+    }, 220);
+  }
+
+  async function saveJobSummaryDraft() {
+    if (state.status !== "ready") {
+      return;
+    }
+
+    const nextTitle = jobSummaryDraft.title.trim();
+    const nextComplaint = jobSummaryDraft.complaint.trim();
+
+    if (!nextTitle || !nextComplaint) {
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setJobDetailsSaveState({
+        status: "error",
+        message: "Job details are not configured in this browser.",
+      });
+      return;
+    }
+
+    const sessionResult = await getDashboardActionSession(supabase);
+    const accessToken = sessionResult.ok
+      ? sessionResult.response.data.session?.access_token
+      : null;
+
+    if (!accessToken) {
+      setJobDetailsSaveState({
+        status: "error",
+        message: "Log in again before updating job details.",
+      });
+      return;
+    }
+
+    setJobDetailsSaveState({ status: "saving", message: null });
+
+    const snapshot = getCurrentJobDetailsSnapshot();
+    const response = await fetch(
+      `/api/service-requests/${state.request.id}/details`,
+      {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          jobTypeId: snapshot?.jobTypeId ?? state.request.jobTypeId,
+          jobName: nextTitle,
+          problemTypeId: snapshot?.problemTypeId ?? state.request.problemTypeId,
+          description: nextComplaint,
+          marketingSourceId:
+            snapshot?.marketingSourceId ?? state.request.marketingSourceId,
+          tagIds: snapshot?.tags.map((tag) => tag.id) ?? [],
+        }),
+      },
+    );
+    const payload = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      details?: JobDetailsPayload;
+      message?: string;
+    } | null;
+
+    if (!response.ok || !payload?.ok || !payload.details) {
+      setJobDetailsSaveState({
+        status: "error",
+        message: payload?.message ?? "Job details could not be saved.",
+      });
+      return;
+    }
+
+    applyJobDetailsPayload(payload.details);
+    setJobDetailsSaveState({
+      status: "success",
+      message: "Job details saved.",
+    });
+    closeJobSummaryEditor();
+  }
+
+  function openClientEditor() {
+    if (state.status !== "ready") {
+      return;
+    }
+
+    const { firstName, lastName } = splitClientName(state.request.customerName);
+
+    setClientDraft({
+      firstName,
+      lastName,
+      phone: state.request.customerPhone ?? "",
+      email: state.request.customerEmail ?? "",
+      streetAddress: state.request.streetAddress ?? "",
+      unit: state.request.unit ?? "",
+      city: state.request.city ?? "",
+      state: state.request.state ?? "TX",
+      zipCode: state.request.zipCode ?? "",
+    });
+    setIsClosingClientEditor(false);
+    setIsEditingClient(true);
+    setIsClientEditorVisible(false);
+    window.requestAnimationFrame(() => {
+      setIsClientEditorVisible(true);
+    });
+  }
+
+  function closeClientEditor() {
+    setIsClientEditorVisible(false);
+    setIsClosingClientEditor(true);
+    window.setTimeout(() => {
+      setIsEditingClient(false);
+      setIsClosingClientEditor(false);
+      setIsClientEditorVisible(false);
+    }, 220);
+  }
+
+  function saveClientDraft() {
+    if (state.status !== "ready") {
+      return;
+    }
+
+    const nextCustomerName =
+      [clientDraft.firstName.trim(), clientDraft.lastName.trim()]
+        .filter(Boolean)
+        .join(" ") || state.request.customerName;
+    const nextFullAddress = buildClientAddressFromDraft(
+      clientDraft,
+      state.request.country,
+    );
+
+    setState((current) => {
+      if (current.status !== "ready") {
+        return current;
+      }
+
+      return {
+        ...current,
+        request: {
+          ...current.request,
+          customerName: nextCustomerName,
+          customerPhone: clientDraft.phone.trim() || null,
+          customerEmail: clientDraft.email.trim() || null,
+          streetAddress: clientDraft.streetAddress.trim() || null,
+          unit: clientDraft.unit.trim() || null,
+          city: clientDraft.city.trim() || null,
+          state: clientDraft.state.trim() || current.request.state,
+          zipCode: clientDraft.zipCode.trim() || current.request.zipCode,
+          fullAddress: nextFullAddress,
+          latitude: null,
+          longitude: null,
+          placeId: null,
+        },
+      };
+    });
+    setAddressForm((current) => ({
+      ...current,
+      streetAddress: clientDraft.streetAddress.trim(),
+      unit: clientDraft.unit.trim(),
+      city: clientDraft.city.trim(),
+      state: clientDraft.state.trim() || current.state,
+      zipCode: clientDraft.zipCode.trim(),
+      latitude: null,
+      longitude: null,
+      placeId: null,
+    }));
+    closeClientEditor();
+  }
+
+  function openAvatarFilePicker(capture: boolean) {
+    setAvatarCaptureMode(capture);
+    setAvatarActionState({ status: "idle", message: null });
+    window.setTimeout(() => {
+      avatarFileInputRef.current?.click();
+    }, 0);
+  }
+
+  async function uploadClientAvatar(file: File | null) {
+    if (state.status !== "ready" || !file) {
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setAvatarActionState({
+        status: "error",
+        message: "Avatar uploads are not configured in this browser.",
+      });
+      return;
+    }
+
+    const sessionResult = await getDashboardActionSession(supabase);
+    const accessToken = sessionResult.ok
+      ? sessionResult.response.data.session?.access_token
+      : null;
+
+    if (!accessToken) {
+      setAvatarActionState({
+        status: "error",
+        message: "Log in again before updating the client avatar.",
+      });
+      return;
+    }
+
+    setAvatarActionState({ status: "saving", message: "Uploading avatar..." });
+    setIsAvatarSheetOpen(false);
+
+    const formData = new FormData();
+    formData.set("file", file);
+
+    const response = await fetch(
+      `/api/service-requests/${state.request.id}/client-avatar`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: formData,
+      },
+    );
+    const payload = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      error?: string;
+      message?: string;
+      avatar?: ClientAvatarState;
+      avatarUrl?: string | null;
+      storagePath?: string | null;
+      ownerType?: "customer" | "job" | null;
+    } | null;
+
+    const responseAvatar =
+      payload?.avatar ??
+      (payload?.ok
+        ? {
+            storagePath: payload.storagePath ?? null,
+            signedUrl: payload.avatarUrl ?? null,
+            owner:
+              payload.ownerType === "job"
+                ? ("service_request" as const)
+                : payload.ownerType ?? null,
+          }
+        : null);
+
+    if (!response.ok || !payload?.ok || !responseAvatar) {
+      setAvatarActionState({
+        status: "error",
+        message:
+          payload?.error ??
+          payload?.message ??
+          "Client avatar could not be saved yet.",
+      });
+      return;
+    }
+
+    setClientAvatar(responseAvatar);
+    setAvatarActionState({
+      status: "success",
+      message: "Client avatar saved.",
+    });
+  }
+
+  async function removeClientAvatar() {
+    if (state.status !== "ready") {
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      return;
+    }
+
+    const sessionResult = await getDashboardActionSession(supabase);
+    const accessToken = sessionResult.ok
+      ? sessionResult.response.data.session?.access_token
+      : null;
+
+    if (!accessToken) {
+      setAvatarActionState({
+        status: "error",
+        message: "Log in again before updating the client avatar.",
+      });
+      return;
+    }
+
+    setAvatarActionState({ status: "saving", message: "Removing avatar..." });
+
+    const response = await fetch(
+      `/api/service-requests/${state.request.id}/client-avatar`,
+      {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      },
+    );
+    const payload = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      error?: string;
+      message?: string;
+      avatar?: ClientAvatarState;
+      avatarUrl?: string | null;
+      storagePath?: string | null;
+      ownerType?: "customer" | "job" | null;
+    } | null;
+
+    const responseAvatar =
+      payload?.avatar ??
+      (payload?.ok
+        ? {
+            storagePath: payload.storagePath ?? null,
+            signedUrl: payload.avatarUrl ?? null,
+            owner:
+              payload.ownerType === "job"
+                ? ("service_request" as const)
+                : payload.ownerType ?? null,
+          }
+        : null);
+
+    if (!response.ok || !payload?.ok || !responseAvatar) {
+      setAvatarActionState({
+        status: "error",
+        message:
+          payload?.error ??
+          payload?.message ??
+          "Client avatar could not be removed yet.",
+      });
+      return;
+    }
+
+    setClientAvatar(responseAvatar);
+    setAvatarActionState({
+      status: "success",
+      message: "Client avatar removed.",
+    });
+    setIsAvatarSheetOpen(false);
+  }
+
+  function openServiceAddressInMaps() {
+    if (!propertyPreviewMapsUrl) {
+      return;
+    }
+
+    window.open(propertyPreviewMapsUrl, "_blank", "noopener,noreferrer");
+    setIsMapConfirmOpen(false);
+  }
+
+  function openStatusSheet() {
+    setIsClosingStatusSheet(false);
+    setIsStatusSheetOpen(true);
+    setIsStatusSheetVisible(false);
+    window.requestAnimationFrame(() => {
+      setIsStatusSheetVisible(true);
+    });
+  }
+
+  function closeStatusSheet() {
+    setIsStatusSheetVisible(false);
+    setIsClosingStatusSheet(true);
+    window.setTimeout(() => {
+      setIsStatusSheetOpen(false);
+      setIsClosingStatusSheet(false);
+      setIsStatusSheetVisible(false);
+    }, 240);
+  }
+
+  function selectStatusFromSheet(nextStatus: ServiceRequestCrmStatus) {
+    closeStatusSheet();
+
+    if (state.status === "ready" && nextStatus !== state.request.status) {
+      void updateStatus(nextStatus);
+    }
+  }
+
+  function applyJobDetailsPayload(details: JobDetailsPayload) {
+    setJobDetailsState({
+      status: "ready",
+      details,
+      error: null,
+    });
+    setState((current) => {
+      if (current.status !== "ready") {
+        return current;
+      }
+
+      return {
+        ...current,
+        request: {
+          ...current.request,
+          jobTypeId: details.job.jobTypeId,
+          jobName: details.job.jobName,
+          problemTypeId: details.job.problemTypeId,
+          marketingSourceId: details.job.marketingSourceId,
+          issueDescription: details.job.description,
+        },
+      };
+    });
+  }
+
+  function getCurrentJobDetailsSnapshot(): JobDetailsSnapshot | null {
+    if (state.status !== "ready") {
+      return null;
+    }
+
+    return (
+      jobDetailsState.details?.job ?? {
+        jobTypeId: state.request.jobTypeId,
+        jobName:
+          state.request.jobName ??
+          deriveJobNameFromAppliance(state.request.applianceType),
+        problemTypeId: state.request.problemTypeId,
+        description: state.request.issueDescription,
+        marketingSourceId: state.request.marketingSourceId,
+        marketingSource: null,
+        technicalRequestSource: state.request.requestSource,
+        tags: [],
+      }
+    );
+  }
+
+  function openJobDetailsSheet(kind: JobDetailsSheetKind) {
+    const snapshot = getCurrentJobDetailsSnapshot();
+
+    if (!snapshot) {
+      return;
+    }
+
+    const matchingJobType =
+      (jobDetailsState.details?.jobTypes ?? fallbackJobTypes).find(
+        (jobType) => jobType.id === snapshot.jobTypeId,
+      ) ??
+      (jobDetailsState.details?.jobTypes ?? fallbackJobTypes).find(
+        (jobType) =>
+          normalizeCatalogText(jobType.name) ===
+          normalizeCatalogText(snapshot.jobName),
+      ) ??
+      null;
+
+    setSelectedJobTypeId(matchingJobType?.id ?? snapshot.jobTypeId);
+    setSelectedProblemTypeId(snapshot.problemTypeId);
+    setSelectedMarketingSourceId(snapshot.marketingSourceId);
+    setSelectedTagIds(snapshot.tags.map((tag) => tag.id));
+    setExpandedJobDetailsSelector(null);
+    setJobDetailsSearch("");
+    setNewCatalogValue("");
+    setJobDetailsSaveState({ status: "idle", message: null });
+    setIsClosingJobDetailsSheet(false);
+    setJobDetailsSheet(kind);
+    setIsJobDetailsSheetVisible(false);
+    window.requestAnimationFrame(() => {
+      setIsJobDetailsSheetVisible(true);
+    });
+  }
+
+  function closeJobDetailsSheet() {
+    setIsJobDetailsSheetVisible(false);
+    setIsClosingJobDetailsSheet(true);
+    window.setTimeout(() => {
+      setJobDetailsSheet(null);
+      setIsClosingJobDetailsSheet(false);
+      setIsJobDetailsSheetVisible(false);
+      setJobDetailsSearch("");
+      setNewCatalogValue("");
+      setExpandedJobDetailsSelector(null);
+    }, 260);
+  }
+
+  async function saveJobDetailsFromSheet(options?: {
+    newJobTypeName?: string | null;
+    newProblemName?: string | null;
+    newMarketingSourceName?: string | null;
+    newTagName?: string | null;
+  }) {
+    if (state.status !== "ready") {
+      return;
+    }
+
+    const snapshot = getCurrentJobDetailsSnapshot();
+
+    if (!snapshot) {
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setJobDetailsSaveState({
+        status: "error",
+        message: "Job details are not configured in this browser.",
+      });
+      return;
+    }
+
+    const sessionResult = await getDashboardActionSession(supabase);
+    const accessToken = sessionResult.ok
+      ? sessionResult.response.data.session?.access_token
+      : null;
+
+    if (!accessToken) {
+      setJobDetailsSaveState({
+        status: "error",
+        message: "Log in again before updating job details.",
+      });
+      return;
+    }
+
+    setJobDetailsSaveState({ status: "saving", message: null });
+
+    const selectedJobType = (jobDetailsState.details?.jobTypes ?? fallbackJobTypes).find(
+      (item) => item.id === selectedJobTypeId,
+    );
+    const selectedProblem = [
+      ...(jobDetailsState.details?.problemTypes ?? []),
+      ...getFallbackProblemItems(snapshot.jobName),
+    ].find((item) => item.id === selectedProblemTypeId);
+
+    const response = await fetch(
+      `/api/service-requests/${state.request.id}/details`,
+      {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          jobTypeId: selectedJobTypeId?.startsWith("fallback-")
+            ? null
+            : selectedJobTypeId,
+          jobName:
+            options?.newJobTypeName ??
+            selectedJobType?.name ??
+            snapshot.jobName,
+          problemTypeId: selectedProblemTypeId?.startsWith("fallback-")
+            ? null
+            : selectedProblemTypeId,
+          description:
+            options?.newProblemName ??
+            selectedProblem?.name ??
+            snapshot.description,
+          marketingSourceId: selectedMarketingSourceId?.startsWith("fallback-")
+            ? null
+            : selectedMarketingSourceId,
+          tagIds: selectedTagIds.filter((id) => !id.startsWith("fallback-")),
+          newJobTypeName: options?.newJobTypeName ?? null,
+          newProblemName: options?.newProblemName ?? null,
+          newMarketingSourceName: options?.newMarketingSourceName ?? null,
+          newTagName: options?.newTagName ?? null,
+          newTagCategory: "custom",
+          newTagTone: "gray",
+        }),
+      },
+    );
+    const payload = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      details?: JobDetailsPayload;
+      message?: string;
+    } | null;
+
+    if (!response.ok || !payload?.ok || !payload.details) {
+      setJobDetailsSaveState({
+        status: "error",
+        message: payload?.message ?? "Job details could not be saved.",
+      });
+      return;
+    }
+
+    applyJobDetailsPayload(payload.details);
+    setJobDetailsSaveState({
+      status: "success",
+      message: "Job details saved.",
+    });
+    closeJobDetailsSheet();
+  }
+
+  function openScheduleSheet() {
+    if (state.status !== "ready") {
+      return;
+    }
+
+    const startDate = state.request.scheduledDate ?? getTodayInputDate();
+    const startTime =
+      toScheduleInputTime(state.request.scheduledWindowStartTime) || "09:00";
+    const endDate = state.request.scheduledDate ?? startDate;
+    const endTime =
+      toScheduleInputTime(state.request.scheduledWindowEndTime) ||
+      addMinutesToInputTime(startTime, 60);
+
+    setScheduleDraft({
+      startDate,
+      startTime,
+      endDate,
+      endTime,
+    });
+    setScheduleSheetSaveState({ status: "idle", message: null });
+    setIsClosingScheduleSheet(false);
+    setIsScheduleSheetOpen(true);
+    setIsScheduleSheetVisible(false);
+    window.requestAnimationFrame(() => {
+      setIsScheduleSheetVisible(true);
+    });
+  }
+
+  function closeScheduleSheet() {
+    setIsScheduleSheetVisible(false);
+    setIsClosingScheduleSheet(true);
+    window.setTimeout(() => {
+      setIsScheduleSheetOpen(false);
+      setIsClosingScheduleSheet(false);
+      setIsScheduleSheetVisible(false);
+    }, 300);
+  }
+
+  function openTechnicianSheet() {
+    if (state.status !== "ready") {
+      return;
+    }
+
+    setSelectedAssignmentTechnicianId(
+      state.request.assignedTechnicianProfileId ??
+        bestTechnicianMatch?.technicianProfileId ??
+        technicianProfilesState.profiles[0]?.id ??
+        null,
+    );
+    setTechnicianAssignmentSearch("");
+    setTechnicianAssignmentSaveState({ status: "idle", message: null });
+    setIsClosingTechnicianSheet(false);
+    setIsTechnicianSheetOpen(true);
+    setIsTechnicianSheetVisible(false);
+    window.requestAnimationFrame(() => {
+      setIsTechnicianSheetVisible(true);
+    });
+  }
+
+  function closeTechnicianSheet() {
+    setIsTechnicianSheetVisible(false);
+    setIsClosingTechnicianSheet(true);
+    window.setTimeout(() => {
+      setIsTechnicianSheetOpen(false);
+      setIsClosingTechnicianSheet(false);
+      setIsTechnicianSheetVisible(false);
+      setTechnicianAssignmentSearch("");
+    }, 300);
+  }
+
+  async function saveTechnicianAssignment() {
+    if (state.status !== "ready" || !selectedAssignmentTechnicianId) {
+      setTechnicianAssignmentSaveState({
+        status: "error",
+        message: "Choose a technician first.",
+      });
+      return;
+    }
+
+    const currentRequest = state.request;
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setTechnicianAssignmentSaveState({
+        status: "error",
+        message: "Technician assignment is not available for this workspace.",
+      });
+      return;
+    }
+
+    const sessionResult = await getDashboardActionSession(supabase);
+
+    if (!sessionResult.ok) {
+      setTechnicianAssignmentSaveState({
+        status: "error",
+        message: sessionResult.message,
+      });
+      return;
+    }
+
+    const { data: sessionData, error: sessionError } = sessionResult.response;
+    const accessToken = sessionData.session?.access_token;
+
+    if (sessionError || !accessToken) {
+      setTechnicianAssignmentSaveState({
+        status: "error",
+        message: "Log in again before assigning a technician.",
+      });
+      return;
+    }
+
+    setTechnicianAssignmentSaveState({ status: "saving", message: null });
+
+    const response = await fetch(
+      `/api/service-requests/${currentRequest.id}/appointments`,
+      {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          operation: "assign_technician",
+          appointmentId: currentRequest.appointmentId ?? null,
+          technicianProfileId: selectedAssignmentTechnicianId,
+        }),
+      },
+    );
+
+    const payload = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      message?: string;
+      appointment?: {
+        id?: string;
+        technician_profile_id?: string | null;
+        appointment_date?: string;
+        window_start_time?: string;
+        window_end_time?: string;
+        updated_at?: string;
+      } | null;
+      technician?: {
+        id?: string;
+        displayName?: string | null;
+        businessName?: string | null;
+        avatarColor?: string | null;
+      };
+    } | null;
+
+    if (!response.ok || !payload?.ok || !payload.technician?.id) {
+      setTechnicianAssignmentSaveState({
+        status: "error",
+        message:
+          payload?.message ??
+          "Technician assignment could not be saved.",
+      });
+      return;
+    }
+
+    setState((current) => {
+      if (current.status !== "ready") {
+        return current;
+      }
+
+      return {
+        status: "ready",
+        request: {
+          ...current.request,
+          assignedTechnicianProfileId: payload.technician?.id ?? current.request.assignedTechnicianProfileId,
+          selectedTechnicianBusinessName:
+            payload.technician?.displayName ??
+            payload.technician?.businessName ??
+            current.request.selectedTechnicianBusinessName,
+          appointmentId: payload.appointment?.id ?? current.request.appointmentId,
+          scheduledDate:
+            payload.appointment?.appointment_date ?? current.request.scheduledDate,
+          scheduledWindowStartTime:
+            payload.appointment?.window_start_time ??
+            current.request.scheduledWindowStartTime,
+          scheduledWindowEndTime:
+            payload.appointment?.window_end_time ??
+            current.request.scheduledWindowEndTime,
+          updatedAt: payload.appointment?.updated_at ?? current.request.updatedAt,
+        },
+        error: null,
+      };
+    });
+
+    setTechnicianAssignmentSaveState({
+      status: "success",
+      message: payload.appointment?.id
+        ? "Technician assigned and appointment updated."
+        : "Technician assigned.",
+    });
+    closeTechnicianSheet();
+  }
+
+  function updateScheduleDraft(nextDraft: Partial<ScheduleDraftState>) {
+    setScheduleDraft((current) => {
+      const draft = { ...current, ...nextDraft };
+      const startValue = getScheduleDateTimeValue(
+        draft.startDate,
+        draft.startTime,
+      );
+      const endValue = getScheduleDateTimeValue(draft.endDate, draft.endTime);
+
+      if (
+        Number.isFinite(startValue) &&
+        Number.isFinite(endValue) &&
+        endValue <= startValue
+      ) {
+        return {
+          ...draft,
+          endDate: draft.startDate,
+          endTime: addMinutesToInputTime(draft.startTime, 60),
+        };
+      }
+
+      return draft;
+    });
+  }
+
+  async function saveScheduleFromSheet() {
+    if (state.status !== "ready") {
+      return;
+    }
+
+    const currentRequest = state.request;
+    const startValue = getScheduleDateTimeValue(
+      scheduleDraft.startDate,
+      scheduleDraft.startTime,
+    );
+    const endValue = getScheduleDateTimeValue(
+      scheduleDraft.endDate,
+      scheduleDraft.endTime,
+    );
+
+    if (
+      !scheduleDraft.startDate ||
+      !scheduleDraft.startTime ||
+      !scheduleDraft.endDate ||
+      !scheduleDraft.endTime ||
+      !Number.isFinite(startValue) ||
+      !Number.isFinite(endValue) ||
+      endValue <= startValue
+    ) {
+      setScheduleSheetSaveState({
+        status: "error",
+        message: "Choose a valid start and end window.",
+      });
+      return;
+    }
+
+    if (scheduleDraft.endDate !== scheduleDraft.startDate) {
+      setScheduleSheetSaveState({
+        status: "error",
+        message:
+          "This scheduler supports same-day appointment windows only right now.",
+      });
+      return;
+    }
+
+    const technicianProfileId =
+      currentRequest.assignedTechnicianProfileId ??
+      bestTechnicianMatch?.technicianProfileId ??
+      null;
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setScheduleSheetSaveState({
+        status: "error",
+        message: "Scheduling is not available for this workspace.",
+      });
+      return;
+    }
+
+    const sessionResult = await getDashboardActionSession(supabase);
+
+    if (!sessionResult.ok) {
+      setScheduleSheetSaveState({
+        status: "error",
+        message: sessionResult.message,
+      });
+      return;
+    }
+
+    const { data: sessionData, error: sessionError } = sessionResult.response;
+    const accessToken = sessionData.session?.access_token;
+
+    if (sessionError || !accessToken) {
+      setScheduleSheetSaveState({
+        status: "error",
+        message: "Log in again before updating the appointment.",
+      });
+      return;
+    }
+
+    setScheduleSheetSaveState({ status: "saving", message: null });
+    const response = await fetch(
+      `/api/service-requests/${currentRequest.id}/appointments`,
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          appointmentId: currentRequest.appointmentId ?? null,
+          technicianProfileId,
+          appointmentDate: scheduleDraft.startDate,
+          windowStartTime: normalizeScheduleInputTime(scheduleDraft.startTime),
+          windowEndTime: normalizeScheduleInputTime(scheduleDraft.endTime),
+          dispatcherSnapshotId: dispatcherSnapshotState.snapshot?.id ?? null,
+        }),
+      },
+    );
+
+    const payload = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      operation?: "created" | "updated";
+      message?: string;
+      appointment?: {
+        id?: string;
+        technician_profile_id?: string | null;
+        appointment_date?: string;
+        window_start_time?: string;
+        window_end_time?: string;
+        updated_at?: string;
+      };
+      calendarSync?: {
+        provider?: "google" | null;
+        status?: "not_configured" | "pending" | "synced" | "failed" | "canceled";
+        eventId?: string | null;
+        error?: string | null;
+        migrationReady?: boolean;
+      } | null;
+    } | null;
+
+    if (!response.ok || !payload?.ok || !payload.appointment?.id) {
+      setScheduleSheetSaveState({
+        status: "error",
+        message:
+          payload?.message ??
+          "We could not update this appointment yet.",
+      });
+      return;
+    }
+
+    setState((current) => {
+      if (current.status !== "ready") {
+        return current;
+      }
+
+      return {
+        status: "ready",
+        request: {
+          ...current.request,
+          status:
+            payload.operation === "created" ? "scheduled" : current.request.status,
+          assignedTechnicianProfileId:
+            payload.appointment?.technician_profile_id ??
+            current.request.assignedTechnicianProfileId ??
+            technicianProfileId,
+          appointmentId: payload.appointment?.id ?? current.request.appointmentId,
+          scheduledDate:
+            payload.appointment?.appointment_date ?? scheduleDraft.startDate,
+          scheduledWindowStartTime:
+            payload.appointment?.window_start_time ??
+            normalizeScheduleInputTime(scheduleDraft.startTime),
+          scheduledWindowEndTime:
+            payload.appointment?.window_end_time ??
+            normalizeScheduleInputTime(scheduleDraft.endTime),
+          updatedAt: payload.appointment?.updated_at ?? current.request.updatedAt,
+        },
+        error: null,
+      };
+    });
+    if (payload.operation === "created") {
+      setSelectedStatus("scheduled");
+    }
+    setCalendarSyncSummary(
+      payload.calendarSync?.status
+        ? {
+            provider: payload.calendarSync.provider ?? null,
+            status: payload.calendarSync.status,
+            eventId: payload.calendarSync.eventId ?? null,
+            error: payload.calendarSync.error ?? null,
+            migrationReady: payload.calendarSync.migrationReady ?? false,
+          }
+        : null,
+    );
+    setScheduleSheetSaveState({
+      status: "success",
+      message:
+        payload.operation === "created"
+          ? "Appointment created."
+          : "Schedule updated.",
+    });
+    closeScheduleSheet();
+  }
+
   if (state.status === "loading") {
     return (
       <section className="rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] p-6 text-[#334155]">
@@ -3358,6 +5306,11 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     latitude: request.latitude,
     longitude: request.longitude,
   });
+  const propertyPreviewMapsUrl = fullAddress
+    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+        fullAddress,
+      )}`
+    : googleMapsUrl;
   const appleMapsUrl = buildAppleMapsUrl({
     fullAddress,
     latitude: request.latitude,
@@ -3435,20 +5388,164 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
           latestEstimateStatusSignal.estimateStatus,
         )} estimate ${latestEstimateStatusSignal.estimateNumber}, but job status was manually changed to ${statusLabel}.`
       : null;
+  const assignedTechnicianProfile =
+    technicianProfilesState.profiles.find(
+      (profile) => profile.id === request.assignedTechnicianProfileId,
+    ) ?? null;
   const assignedTechnicianLabel =
-    request.selectedTechnicianBusinessName ??
-    (request.assignedTechnicianProfileId ? "Assigned technician" : "Unassigned");
+    assignedTechnicianProfile
+      ? getTechnicianProfileDisplayName(assignedTechnicianProfile)
+      : request.selectedTechnicianBusinessName ??
+        (request.assignedTechnicianProfileId
+          ? "Assigned technician"
+          : "Not assigned");
+  const assignedTechnicianInitials = assignedTechnicianProfile
+    ? getTechnicianProfileInitials(assignedTechnicianProfile)
+    : "T";
+  const assignedTechnicianAvatarColor =
+    assignedTechnicianProfile?.avatar_color ?? "#2563EB";
+  const assignedTechnicianMeta = request.assignedTechnicianProfileId
+    ? request.appointmentId
+      ? "Assigned to appointment"
+      : "Assigned, not scheduled"
+    : "Tap to assign";
+  const mobileAssignedTechnicianLabel = request.assignedTechnicianProfileId
+    ? assignedTechnicianLabel
+    : "Not assigned";
+  const assignmentJobZip = normalizeAssignmentZip(request.zipCode);
+  const assignmentHasScheduledWindow = Boolean(
+    request.scheduledDate &&
+      request.scheduledWindowStartTime &&
+      request.scheduledWindowEndTime,
+  );
+  const assignmentDayOfWeek = request.scheduledDate
+    ? getAssignmentDayOfWeek(request.scheduledDate)
+    : null;
+  const technicianAssignmentCandidates = technicianProfilesState.profiles
+    .map<TechnicianAssignmentCandidate>((profile) => {
+      const displayName = getTechnicianProfileDisplayName(profile);
+      const technicianZips = profile.service_zip_codes.map(normalizeAssignmentZip);
+      const coversZip =
+        !assignmentJobZip || technicianZips.includes(assignmentJobZip);
+      const isActive =
+        profile.technician_status === "verified" &&
+        profile.marketplace_enabled &&
+        !profile.archived_at &&
+        !profile.rejected_at &&
+        !profile.suspended_at;
+      let availabilityLabel = request.appointmentId
+        ? "Available"
+        : "Assignment only";
+      let isSelectable = isActive && coversZip;
+
+      if (!isActive) {
+        availabilityLabel = "Inactive";
+        isSelectable = false;
+      } else if (!coversZip) {
+        availabilityLabel = "Outside service area";
+        isSelectable = false;
+      } else if (
+        assignmentHasScheduledWindow &&
+        request.scheduledDate &&
+        request.scheduledWindowStartTime &&
+        request.scheduledWindowEndTime
+      ) {
+        const scheduledWindowStartTime = request.scheduledWindowStartTime;
+        const scheduledWindowEndTime = request.scheduledWindowEndTime;
+        const profileRules = technicianAvailabilityRulesState.rules.filter(
+          (rule) => rule.technicianProfileId === profile.id && rule.isAvailable,
+        );
+        const rulesForDay =
+          assignmentDayOfWeek === null
+            ? []
+            : profileRules.filter(
+                (rule) => rule.dayOfWeek === assignmentDayOfWeek,
+              );
+
+        if (profileRules.length > 0) {
+          const coversWindow = rulesForDay.some((rule) =>
+            doesRuleCoverWindow(
+              rule,
+              scheduledWindowStartTime,
+              scheduledWindowEndTime,
+            ),
+          );
+
+          if (!coversWindow) {
+            availabilityLabel =
+              rulesForDay.length > 0
+                ? "Not working this window"
+                : "Not working this day";
+            isSelectable = false;
+          }
+        } else {
+          const startMinutes = getAssignmentMinutes(scheduledWindowStartTime);
+          const endMinutes = getAssignmentMinutes(scheduledWindowEndTime);
+          const isDefaultWorkingDay =
+            assignmentDayOfWeek !== null &&
+            assignmentDayOfWeek >= 1 &&
+            assignmentDayOfWeek <= 5;
+          const isDefaultWorkingWindow =
+            startMinutes !== null &&
+            endMinutes !== null &&
+            startMinutes >= 8 * 60 &&
+            endMinutes <= 17 * 60;
+
+          if (!isDefaultWorkingDay || !isDefaultWorkingWindow) {
+            availabilityLabel = "Not working this day";
+            isSelectable = false;
+          }
+        }
+      }
+
+      const isAssigned = profile.id === request.assignedTechnicianProfileId;
+
+      return {
+        profile,
+        displayName,
+        businessName: profile.business_name?.trim() || null,
+        initials: getTechnicianProfileInitials(profile),
+        availabilityLabel: isAssigned ? "Current assignment" : availabilityLabel,
+        eligibilityLabel: coversZip ? "ZIP covered" : "Outside service area",
+        isAssigned,
+        isSelectable,
+        sortRank: isAssigned ? 0 : isSelectable ? 1 : coversZip ? 2 : 3,
+      };
+    })
+    .sort((first, second) => {
+      if (first.sortRank !== second.sortRank) {
+        return first.sortRank - second.sortRank;
+      }
+
+      return first.displayName.localeCompare(second.displayName);
+    });
+  const technicianAssignmentSearchTerm = technicianAssignmentSearch
+    .trim()
+    .toLowerCase();
+  const filteredTechnicianAssignmentCandidates =
+    technicianAssignmentSearchTerm.length === 0
+      ? technicianAssignmentCandidates
+      : technicianAssignmentCandidates.filter((candidate) => {
+          const profile = candidate.profile;
+          const haystack = [
+            candidate.displayName,
+            candidate.businessName,
+            profile.primary_city,
+            profile.primary_state,
+            ...profile.service_zip_codes,
+            ...profile.service_cities,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+
+          return haystack.includes(technicianAssignmentSearchTerm);
+        });
   const addressSummary = request.streetAddress
     ? fullAddress
     : `${request.city ? `${request.city}, ` : ""}${request.state} ${request.zipCode}`;
   const propertyPreview = propertyPreviewState.property;
-  const propertyPreviewMediaUrl =
-    propertyPreview?.photo ?? propertyPreview?.mapImage ?? null;
-  const propertyPreviewMediaLabel = propertyPreview?.photo
-    ? "Property"
-    : propertyPreview?.mapImage
-      ? "Property map"
-      : "Property preview";
+  const propertyPreviewPhotoUrl = propertyPreview?.photo ?? null;
   const hasPropertyPreviewData = Boolean(
     propertyPreview &&
       (propertyPreview.photo ||
@@ -3500,7 +5597,138 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
   ];
   const callCustomerHref = getPhoneHref(request.customerPhone, "tel");
   const textCustomerHref = getPhoneHref(request.customerPhone, "sms");
-  const emailCustomerHref = getEmailHref(request.customerEmail);
+  const customerProfileHref = request.customerId
+    ? `/dashboard/customers/${request.customerId}`
+    : null;
+  const clientInitials = getClientInitials(request.customerName);
+  const clientPhoneDisplay = formatClientPhoneDisplay(request.customerPhone);
+  const clientStreetLine = stripUsCountry(
+    [request.streetAddress, request.unit].filter(Boolean).join(", ") ||
+      request.fullAddress ||
+      addressSummary,
+  );
+  const clientCityLine = [
+    request.city,
+    [request.state, request.zipCode].filter(Boolean).join(" "),
+  ]
+    .filter(Boolean)
+    .join(", ");
+  const clientDistanceLabel = clientDistance.label;
+  const clientMapAddressLabel = stripUsCountry(fullAddress || addressSummary);
+  const scheduledDateLabel = request.scheduledDate ?? "Not scheduled";
+  const scheduledTimeLabel =
+    request.scheduledWindowStartTime && request.scheduledWindowEndTime
+      ? `${request.scheduledWindowStartTime.slice(0, 5)}-${request.scheduledWindowEndTime.slice(0, 5)}`
+      : request.preferredTimeWindow ?? "Window not set";
+  const mobileScheduleDateLabel = formatScheduleDateDisplay(request.scheduledDate);
+  const mobileScheduleTimeLabel =
+    request.scheduledWindowStartTime && request.scheduledWindowEndTime
+      ? `${formatScheduleTimeDisplay(request.scheduledWindowStartTime)} – ${formatScheduleTimeDisplay(
+          request.scheduledWindowEndTime,
+        )}`
+      : request.preferredTimeWindow ?? "Not scheduled";
+  const shortLocation = [
+    request.city,
+    request.zipCode,
+  ].filter(Boolean).join(" ");
+  const recentPhotos = photosState.photos
+    .filter((photo) => Boolean(photo.signedUrl))
+    .slice(0, 3);
+  const attachmentPreviewPhotos = photosState.photos.slice(0, 3);
+  const attachmentOverflowCount = Math.max(photosState.photos.length - 3, 0);
+  const attachmentCountLabel =
+    photosState.status === "loading"
+      ? "Loading..."
+      : photosState.photos.length === 0
+        ? "No files"
+        : `${photosState.photos.length} ${
+            photosState.photos.length === 1 ? "photo" : "photos"
+          }`;
+  const activeAttachment =
+    activeAttachmentIndex === null
+      ? null
+      : photosState.photos[activeAttachmentIndex] ?? null;
+  const jobDetailsSnapshot =
+    jobDetailsState.details?.job ?? {
+      jobTypeId: request.jobTypeId,
+      jobName:
+        request.jobName ??
+        deriveJobNameFromAppliance(request.applianceType),
+      problemTypeId: request.problemTypeId,
+      description: request.issueDescription,
+      marketingSourceId: request.marketingSourceId,
+      marketingSource: null,
+      technicalRequestSource: request.requestSource,
+      tags: [],
+    };
+  const jobSummaryTitle = jobDetailsSnapshot.jobName || "Service Job";
+  const jobSummaryComplaint =
+    jobDetailsSnapshot.description.trim() || "No customer complaint recorded.";
+  const availableJobTypes =
+    jobDetailsState.details?.jobTypes && jobDetailsState.details.jobTypes.length > 0
+      ? jobDetailsState.details.jobTypes
+      : fallbackJobTypes;
+  const activeJobType =
+    availableJobTypes.find((jobType) => jobType.id === selectedJobTypeId) ??
+    availableJobTypes.find((jobType) => jobType.id === jobDetailsSnapshot.jobTypeId) ??
+    availableJobTypes.find(
+      (jobType) =>
+        normalizeCatalogText(jobType.name) ===
+        normalizeCatalogText(jobDetailsSnapshot.jobName),
+    ) ??
+    null;
+  const availableProblems = [
+    ...(jobDetailsState.details?.problemTypes ?? []).filter((problem) => {
+      if (!activeJobType) {
+        return false;
+      }
+
+      return (
+        !problem.jobTypeId ||
+        problem.jobTypeId === activeJobType.id ||
+        (problem.applianceCategory &&
+          activeJobType.applianceCategory &&
+          normalizeCatalogText(problem.applianceCategory) ===
+            normalizeCatalogText(activeJobType.applianceCategory))
+      );
+    }),
+    ...(activeJobType && !jobDetailsState.details?.problemTypes?.length
+      ? getFallbackProblemItems(activeJobType.name)
+      : []),
+  ];
+  const availableMarketingSources =
+    jobDetailsState.details?.marketingSources &&
+    jobDetailsState.details.marketingSources.length > 0
+      ? jobDetailsState.details.marketingSources
+      : fallbackMarketingSources;
+  const selectedMarketingSource =
+    availableMarketingSources.find((source) => source.id === selectedMarketingSourceId) ??
+    jobDetailsSnapshot.marketingSource ??
+    null;
+  const availableTags = jobDetailsState.details?.tags ?? [];
+  const visibleTags = jobDetailsSnapshot.tags.slice(0, 2);
+  const hiddenTagsCount = Math.max(0, jobDetailsSnapshot.tags.length - visibleTags.length);
+  const normalizedJobDetailsSearch = normalizeCatalogText(jobDetailsSearch);
+  const filteredJobTypes = availableJobTypes.filter((item) =>
+    normalizeCatalogText(item.name).includes(normalizedJobDetailsSearch),
+  );
+  const filteredProblems = availableProblems.filter((item) =>
+    normalizeCatalogText(item.name).includes(normalizedJobDetailsSearch),
+  );
+  const descriptionMatchesSelectedJobType =
+    !activeJobType ||
+    !jobDetailsSnapshot.description.trim() ||
+    availableProblems.some(
+      (problem) =>
+        normalizeCatalogText(problem.name) ===
+        normalizeCatalogText(jobDetailsSnapshot.description),
+    );
+  const filteredMarketingSources = availableMarketingSources.filter((item) =>
+    normalizeCatalogText(item.name).includes(normalizedJobDetailsSearch),
+  );
+  const filteredTags = availableTags.filter((item) =>
+    normalizeCatalogText(item.name).includes(normalizedJobDetailsSearch),
+  );
   const latestDiagnosticNote =
     notesState.notes.find((note) => note.noteType === "diagnostic") ?? null;
   const latestPartsNote =
@@ -4054,7 +6282,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
         key={estimate.id}
       >
         <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-start">
-          <div className="min-w-0">
+          <div className="flex min-w-0 w-full flex-col">
             {isExpanded ? (
               <p className="mb-2 text-xs font-black uppercase tracking-[0.16em] text-[#0F6BFF]">
                 Viewing estimate
@@ -4382,8 +6610,88 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
 
   return (
     <article className="rounded-2xl border border-[#E5E7EB] bg-white p-4 text-[#0F172A] shadow-[0_8px_24px_rgba(15,23,42,0.06)] sm:p-5">
-      <div className="grid gap-4 xl:grid-cols-[1fr_auto] xl:items-start">
+      <header className="lg:hidden">
+        <div className="grid grid-cols-[44px_1fr_44px] items-center gap-2">
+          <Link
+            aria-label="Back to jobs"
+            className="flex h-10 w-10 items-center justify-center rounded-full border border-[#E5E7EB] bg-[#F8FAFC] text-xl font-black text-[#0F172A] transition hover:border-[#0F6BFF] hover:text-[#0F6BFF]"
+            href="/dashboard/leads"
+          >
+            ←
+          </Link>
+          <div className="min-w-0 text-center">
+            <p className="truncate text-sm font-black text-[#0F172A]">
+              Job #{jobNumber}
+            </p>
+            <p className="mt-0.5 truncate text-xs font-bold text-[#64748B]">
+              {statusLabel}
+            </p>
+          </div>
+          <details className="relative">
+            <summary className="flex h-10 w-10 cursor-pointer list-none items-center justify-center rounded-full border border-[#E5E7EB] bg-[#F8FAFC] text-xl font-black text-[#0F172A] transition hover:border-[#0F6BFF] hover:text-[#0F6BFF] [&::-webkit-details-marker]:hidden">
+              ⋯
+            </summary>
+            <div className="absolute right-0 z-20 mt-2 w-44 rounded-2xl border border-[#E5E7EB] bg-white p-2 shadow-[0_16px_40px_rgba(15,23,42,0.16)]">
+              {callCustomerHref ? (
+                <a
+                  className="block rounded-[10px] px-3 py-2 text-sm font-bold text-[#0F172A] hover:bg-[#F8FAFC]"
+                  href={callCustomerHref}
+                >
+                  Call customer
+                </a>
+              ) : null}
+              {textCustomerHref ? (
+                <a
+                  className="block rounded-[10px] px-3 py-2 text-sm font-bold text-[#0F172A] hover:bg-[#F8FAFC]"
+                  href={textCustomerHref}
+                >
+                  SMS customer
+                </a>
+              ) : null}
+              <button
+                className="block w-full rounded-[10px] px-3 py-2 text-left text-sm font-bold text-[#0F172A] hover:bg-[#F8FAFC]"
+                onClick={() => setActiveJobTab("photos")}
+                type="button"
+              >
+                Photos
+              </button>
+            </div>
+          </details>
+        </div>
+
+        <nav
+          aria-label="Mobile job workspace sections"
+          className="mt-3 grid grid-cols-3 border-b border-[#E5E7EB]"
+        >
+          {[
+            { id: "overview", label: "Details" },
+            { id: "estimate", label: "Finance" },
+            { id: "timeline", label: "Timeline" },
+          ].map((tab) => (
+            <button
+              className={`border-b-2 px-3 py-2 text-sm font-black transition ${
+                activeJobTab === tab.id
+                  ? "border-[#2563EB] text-[#2563EB]"
+                  : "border-transparent text-[#475569] hover:text-[#0F172A]"
+              }`}
+              key={tab.id}
+              onClick={() => setActiveJobTab(tab.id as JobWorkspaceTab)}
+              type="button"
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+      </header>
+
+      <div className="hidden gap-3 lg:grid xl:grid-cols-[1fr_auto] xl:items-start">
         <div className="min-w-0">
+          <Link
+            className="mb-2 inline-flex text-xs font-black text-[#0F6BFF] transition hover:text-[#0057D9]"
+            href="/dashboard/leads"
+          >
+            Back to jobs
+          </Link>
           <div className="flex flex-wrap items-center gap-2">
             <span className="rounded-full border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-1 text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
               Job #{jobNumber}
@@ -4392,10 +6700,10 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
               {statusLabel}
             </StatusBadge>
           </div>
-          <h1 className="mt-3 text-2xl font-black tracking-tight text-[#0F172A] sm:text-3xl">
+          <h1 className="mt-2 text-2xl font-black tracking-tight text-[#0F172A] sm:text-3xl">
             {request.customerName} · {request.applianceType}
           </h1>
-          <p className="mt-2 text-sm font-semibold text-[#64748B]">
+          <p className="mt-1 text-sm font-semibold text-[#64748B]">
             {request.applianceBrand ?? "Unknown brand"} ·{" "}
             {scheduledWindowLabel ?? "Not scheduled"} ·{" "}
             {assignedTechnicianLabel}
@@ -4426,27 +6734,8 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
         </label>
       </div>
 
-      <dl className="mt-4 grid gap-2 rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] p-3 sm:grid-cols-2 xl:grid-cols-4">
-        {[
-          ["Customer", request.customerName],
-          ["Service Address", addressSummary],
-          ["Appliance", request.applianceType],
-          ["Appointment", scheduledWindowLabel ?? "Not scheduled"],
-          ["Technician", assignedTechnicianLabel],
-        ].map(([label, value]) => (
-          <div className="rounded-[10px] border border-[#E5E7EB] bg-white px-3 py-2.5" key={label}>
-            <dt className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#64748B]">
-              {label}
-            </dt>
-            <dd className="mt-1 line-clamp-2 text-sm font-semibold leading-5 text-[#0F172A]">
-              {value}
-            </dd>
-          </div>
-        ))}
-      </dl>
-
-      <section className="mt-4 rounded-2xl border border-[#E5E7EB] bg-white p-3 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+      <section className="mt-3 hidden rounded-2xl border border-[#E5E7EB] bg-white p-2 shadow-[0_8px_24px_rgba(15,23,42,0.04)] lg:block">
+        <div className="grid grid-cols-5 gap-1.5">
           {quickActions.map((action) => (
             <button
               className={getQuickActionClasses(action.variant)}
@@ -4463,7 +6752,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
 
       <nav
         aria-label="Job workspace sections"
-        className="mt-4 flex gap-2 overflow-x-auto rounded-2xl border border-[#E5E7EB] bg-white p-2 shadow-[0_8px_24px_rgba(15,23,42,0.04)]"
+        className="mt-4 hidden gap-2 overflow-x-auto rounded-2xl border border-[#E5E7EB] bg-white p-2 shadow-[0_8px_24px_rgba(15,23,42,0.04)] lg:flex"
       >
         {jobWorkspaceTabs.map((tab) => (
           <button
@@ -4484,7 +6773,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
       {activeJobTab === "overview" ? (
         <>
       {statusUpdateState.message || estimateStatusMismatchMessage ? (
-      <section className="mt-4 rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] p-3">
+      <section className="border-b border-[#E5E7EB] py-2 lg:mt-4 lg:rounded-2xl lg:border lg:bg-[#F8FAFC] lg:p-3">
         {statusUpdateState.message ? (
           <p
             className={`text-sm font-semibold ${
@@ -4504,54 +6793,30 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
       </section>
       ) : null}
 
-      <section className="mt-4 rounded-2xl border border-blue-100 bg-blue-50 p-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
-              Next action
-            </p>
-            <h2 className="mt-1 text-xl font-black text-[#0F172A]">
-              {operationalNextStep.title}
-            </h2>
-            <p className="mt-1 max-w-3xl text-sm font-semibold leading-6 text-[#334155]">
-              {operationalNextStep.body}
-            </p>
-          </div>
-          <button
-            className="rounded-[10px] bg-[#0F6BFF] px-4 py-3 text-sm font-black text-white transition hover:bg-[#0057D9] disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={statusUpdateState.status === "saving"}
-            onClick={() => {
-              if ("status" in operationalNextStep) {
-                void updateStatus(operationalNextStep.status);
-                return;
-              }
-
-              if ("tab" in operationalNextStep) {
-                setActiveJobTab(operationalNextStep.tab);
-              }
-            }}
-            type="button"
-          >
-            {operationalNextStep.actionLabel}
-          </button>
-        </div>
-      </section>
-
-      <section className="mt-4 rounded-2xl border border-[#E5E7EB] bg-white p-3 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
-        <div className="grid gap-3 sm:grid-cols-[96px_96px_1fr] sm:items-center">
-          <div className="aspect-[16/9] overflow-hidden rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] sm:hidden">
-            {propertyPreviewMediaUrl ? (
+      <section className="relative py-3 lg:mt-4 lg:rounded-2xl lg:border lg:border-[#E5E7EB] lg:bg-white lg:p-3 lg:shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+        <div className="grid grid-cols-[42%_1fr] gap-3 sm:grid-cols-[96px_96px_1fr] sm:items-center">
+          <div className="min-w-0 sm:hidden">
+            <div className="aspect-[4/3] overflow-hidden rounded-xl border border-[#E5E7EB] bg-[#F8FAFC]">
+            {propertyPreviewPhotoUrl ? (
               <div
-                aria-label={propertyPreviewMediaLabel}
+                aria-label="Property"
                 className="h-full w-full bg-cover bg-center"
                 role="img"
-                style={getBackgroundImageStyle(propertyPreviewMediaUrl)}
+                style={getBackgroundImageStyle(propertyPreviewPhotoUrl)}
               />
             ) : (
               <div className="flex h-full w-full items-center justify-center px-3 text-center text-xs font-black uppercase tracking-[0.12em] text-[#94A3B8]">
                 Property image unavailable
               </div>
             )}
+            </div>
+            <div className="mt-2">
+              {hasPropertyPreviewData ? (
+                <p className="text-[10px] font-bold text-[#64748B]">
+                  Source: Zillow
+                </p>
+              ) : null}
+            </div>
           </div>
 
           <div className="hidden aspect-square overflow-hidden rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] sm:block">
@@ -4583,7 +6848,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
             )}
           </div>
           <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="hidden flex-wrap items-center gap-2 sm:flex">
               <p className="text-[11px] font-black uppercase tracking-[0.16em] text-[#0F6BFF]">
                 Property Preview
               </p>
@@ -4599,11 +6864,14 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
               </p>
             ) : hasPropertyPreviewData ? (
               <>
-                <p className="mt-1 truncate text-lg font-black text-[#0F172A] sm:text-xl">
+                <p className="text-[10px] font-black uppercase tracking-[0.12em] text-[#0F6BFF] sm:hidden">
+                  Zestimate
+                </p>
+                <p className="truncate text-lg font-black text-[#0F172A] sm:mt-1 sm:text-xl">
                   {formatCompactCurrency(propertyPreview?.zestimate ?? null)}
                 </p>
-                <div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-1 text-xs font-bold text-[#64748B] sm:flex sm:flex-wrap sm:gap-x-3 sm:gap-y-1 sm:text-sm">
-                  <span>Zestimate</span>
+                <div className="mt-1 grid gap-1 text-xs font-bold text-[#64748B] sm:flex sm:flex-wrap sm:gap-x-3 sm:gap-y-1 sm:text-sm">
+                  <span>Estimated Value</span>
                   <span>{formatLivingArea(propertyPreview?.livingArea ?? null)}</span>
                   <span>
                     Built{" "}
@@ -4619,129 +6887,1796 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                   Property details unavailable
                 </p>
                 <p className="mt-1 text-xs font-semibold leading-5 text-[#64748B]">
-                  Add or confirm the service address to show map, photo, Zestimate,
+                  Add or confirm the service address to show photo, Zestimate,
                   square footage, and year built.
                 </p>
               </>
             )}
+            {hasRoutableAddress ? (
+              <a
+                className="absolute bottom-3 right-3 inline-flex min-h-9 items-center border-b border-[#2563EB] px-0 pb-0.5 pt-2 text-sm font-bold text-[#2563EB] transition hover:border-[#0F6BFF] hover:text-[#0F6BFF] sm:hidden"
+                href={propertyPreviewMapsUrl}
+                rel="noreferrer"
+                target="_blank"
+              >
+                Open in Maps
+              </a>
+            ) : null}
           </div>
         </div>
       </section>
 
-      <section className="mt-4 grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
-        <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
-          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-            <div>
-              <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
-                Customer communication
+      <section className="border-y border-[#E5E7EB] bg-white lg:hidden">
+        <button
+          aria-label="Edit job summary"
+          className="grid w-full grid-cols-[minmax(0,1fr)_44px] items-center gap-2 px-1 py-3 text-left transition active:bg-[#F8FAFC]"
+          onClick={openJobSummaryEditor}
+          type="button"
+        >
+          <div className="min-w-0">
+            <h2 className="break-words text-lg font-black leading-6 text-[#0F172A]">
+              {jobSummaryTitle}
+            </h2>
+            <p className="mt-1 break-words text-sm font-semibold leading-5 text-[#64748B]">
+              {jobSummaryComplaint}
+            </p>
+          </div>
+          <span
+            aria-hidden="true"
+            className="flex min-h-11 w-11 items-center justify-end pr-1 text-xl font-black leading-none text-[#2563EB]"
+          >
+            ✎
+          </span>
+        </button>
+      </section>
+
+      <section className="border-b border-[#E5E7EB] bg-white lg:hidden">
+        <button
+          aria-label="Change job status"
+          className="flex min-h-12 w-full items-center gap-2 px-1 py-2 text-left transition active:bg-[#F8FAFC]"
+          onClick={openStatusSheet}
+          type="button"
+        >
+          <span className="shrink-0 text-sm font-black text-[#0F172A]">
+            Status
+          </span>
+          <div className="ml-auto flex min-w-0 items-center justify-end gap-2">
+            <StatusBadge tone={SERVICE_REQUEST_STATUS_TONES[request.status] ?? "slate"}>
+              <span className="block max-w-[150px] truncate">
+                {statusLabel}
+              </span>
+            </StatusBadge>
+            <span
+              aria-hidden="true"
+              className="flex min-h-10 w-7 shrink-0 items-center justify-end text-xl font-black leading-none text-[#2563EB]"
+            >
+              ✎
+            </span>
+          </div>
+        </button>
+      </section>
+
+      {jobDetailsSheet ? (
+        <div
+          aria-modal="true"
+          className={`fixed inset-0 z-50 flex items-end bg-[#0F172A]/45 transition-opacity duration-200 ease-out lg:hidden ${
+            isJobDetailsSheetVisible && !isClosingJobDetailsSheet
+              ? "opacity-100"
+              : "opacity-0"
+          }`}
+          role="dialog"
+        >
+          <button
+            aria-label="Close job details sheet"
+            className="absolute inset-0 cursor-default"
+            onClick={closeJobDetailsSheet}
+            type="button"
+          />
+          <div
+            className={`relative z-10 max-h-[84dvh] w-full overflow-hidden rounded-t-[28px] bg-white shadow-[0_-18px_50px_rgba(15,23,42,0.22)] transition-transform duration-300 ease-out ${
+              isJobDetailsSheetVisible && !isClosingJobDetailsSheet
+                ? "translate-y-0"
+                : "translate-y-full"
+            }`}
+          >
+            <div className="mx-auto mt-3 h-1.5 w-12 rounded-full bg-[#CBD5E1]" />
+            <div className="flex items-center justify-between px-4 pb-3 pt-4">
+              <h2 className="text-xl font-black text-[#0F172A]">
+                {jobDetailsSheet === "jobType"
+                  ? "Job Details"
+                  : jobDetailsSheet === "problem"
+                    ? "Problem / Complaint"
+                    : jobDetailsSheet === "adSource"
+                      ? "Ad Source"
+                      : "Tags"}
+              </h2>
+              <button
+                className="flex min-h-10 min-w-10 items-center justify-center text-2xl font-bold text-[#334155]"
+                onClick={closeJobDetailsSheet}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <div className="max-h-[calc(84dvh-82px)] overflow-y-auto px-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+              {jobDetailsSheet === "jobType" ? (
+                <div className="grid gap-3">
+                  <div className="grid gap-2">
+                    <span className="text-sm font-black text-[#0F172A]">
+                      Job Type
+                    </span>
+                    <button
+                      className="flex min-h-12 w-full items-center justify-between gap-3 rounded-[14px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 text-left transition active:bg-[#EEF2FF]"
+                      onClick={() => {
+                        setExpandedJobDetailsSelector((current) =>
+                          current === "jobType" ? null : "jobType",
+                        );
+                        setJobDetailsSearch("");
+                        setNewCatalogValue("");
+                      }}
+                      type="button"
+                    >
+                      <span className="min-w-0 truncate text-base font-black text-[#0F172A]">
+                        {activeJobType?.name ?? "Choose job type"}
+                      </span>
+                      <span className="text-lg font-black text-[#64748B]">⌄</span>
+                    </button>
+                    {expandedJobDetailsSelector === "jobType" ? (
+                      <div className="rounded-[16px] border border-[#E5E7EB] bg-white p-2">
+                        <input
+                          className="w-full rounded-[12px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-2.5 text-base font-bold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
+                          onChange={(event) =>
+                            setJobDetailsSearch(event.target.value)
+                          }
+                          placeholder="Search job types"
+                          value={jobDetailsSearch}
+                        />
+                        <div className="mt-2 max-h-[34dvh] touch-pan-y overflow-y-auto overscroll-contain pr-1">
+                          <div className="grid gap-2">
+                            {filteredJobTypes.map((item) => {
+                              const isSelected = selectedJobTypeId === item.id;
+
+                              return (
+                                <button
+                                  className="flex min-h-11 w-full items-center gap-3 rounded-[12px] border border-[#E5E7EB] bg-white px-3 py-2 text-left transition active:bg-[#F8FAFC]"
+                                  key={item.id}
+                                  onClick={() => {
+                                    setSelectedJobTypeId(item.id);
+                                    setSelectedProblemTypeId(null);
+                                  }}
+                                  type="button"
+                                >
+                                  <span
+                                    className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border text-xs font-black ${
+                                      isSelected
+                                        ? "border-[#2563EB] bg-[#2563EB] text-white"
+                                        : "border-[#CBD5E1] text-transparent"
+                                    }`}
+                                  >
+                                    ✓
+                                  </span>
+                                  <span className="min-w-0 flex-1 truncate text-sm font-black text-[#0F172A]">
+                                    {item.name}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                        <label className="mt-3 grid gap-2">
+                          <span className="text-sm font-black text-[#0F172A]">
+                            Add new job type
+                          </span>
+                          <input
+                            className="w-full rounded-[12px] border border-[#E5E7EB] bg-white px-3 py-2.5 text-base font-bold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
+                            onChange={(event) =>
+                              setNewCatalogValue(event.target.value)
+                            }
+                            placeholder="Type a new reusable job type"
+                            value={newCatalogValue}
+                          />
+                        </label>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="grid gap-2">
+                    <span className="text-sm font-black text-[#0F172A]">
+                      Ad Source
+                    </span>
+                    <button
+                      className="flex min-h-12 w-full items-center justify-between gap-3 rounded-[14px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 text-left transition active:bg-[#EEF2FF]"
+                      onClick={() => {
+                        setExpandedJobDetailsSelector((current) =>
+                          current === "adSource" ? null : "adSource",
+                        );
+                        setJobDetailsSearch("");
+                        setNewCatalogValue("");
+                      }}
+                      type="button"
+                    >
+                      <span className="min-w-0 truncate text-base font-black text-[#0F172A]">
+                        {selectedMarketingSource?.name ?? "Not set"}
+                      </span>
+                      <span className="text-lg font-black text-[#64748B]">⌄</span>
+                    </button>
+                    {expandedJobDetailsSelector === "adSource" ? (
+                      <div className="rounded-[16px] border border-[#E5E7EB] bg-white p-2">
+                        <input
+                          className="w-full rounded-[12px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-2.5 text-base font-bold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
+                          onChange={(event) =>
+                            setJobDetailsSearch(event.target.value)
+                          }
+                          placeholder="Search ad sources"
+                          value={jobDetailsSearch}
+                        />
+                        <button
+                          className="mt-2 flex min-h-10 w-full items-center justify-between rounded-[12px] border border-[#E5E7EB] bg-white px-3 text-sm font-black text-[#334155] transition active:bg-[#F8FAFC]"
+                          onClick={() => setSelectedMarketingSourceId(null)}
+                          type="button"
+                        >
+                          Clear source
+                          {!selectedMarketingSourceId ? (
+                            <span className="text-[#2563EB]">✓</span>
+                          ) : null}
+                        </button>
+                        <div className="mt-2 max-h-[30dvh] touch-pan-y overflow-y-auto overscroll-contain pr-1">
+                          <div className="grid gap-2">
+                            {filteredMarketingSources.map((item) => {
+                              const isSelected =
+                                selectedMarketingSourceId === item.id;
+
+                              return (
+                                <button
+                                  className="flex min-h-11 w-full items-center gap-3 rounded-[12px] border border-[#E5E7EB] bg-white px-3 py-2 text-left transition active:bg-[#F8FAFC]"
+                                  key={item.id}
+                                  onClick={() => setSelectedMarketingSourceId(item.id)}
+                                  type="button"
+                                >
+                                  <span
+                                    className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border text-xs font-black ${
+                                      isSelected
+                                        ? "border-[#2563EB] bg-[#2563EB] text-white"
+                                        : "border-[#CBD5E1] text-transparent"
+                                    }`}
+                                  >
+                                    ✓
+                                  </span>
+                                  <span className="min-w-0 flex-1 truncate text-sm font-black text-[#0F172A]">
+                                    {item.name}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                        <label className="mt-3 grid gap-2">
+                          <span className="text-sm font-black text-[#0F172A]">
+                            Add new source
+                          </span>
+                          <input
+                            className="w-full rounded-[12px] border border-[#E5E7EB] bg-white px-3 py-2.5 text-base font-bold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
+                            onChange={(event) =>
+                              setNewCatalogValue(event.target.value)
+                            }
+                            placeholder="Type a new reusable source"
+                            value={newCatalogValue}
+                          />
+                        </label>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <input
+                    className="w-full rounded-[14px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-3 text-base font-bold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
+                    onChange={(event) => setJobDetailsSearch(event.target.value)}
+                    placeholder="Search"
+                    value={jobDetailsSearch}
+                  />
+
+                  {jobDetailsSheet === "problem" && !activeJobType ? (
+                    <p className="mt-4 rounded-[12px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-3 text-sm font-bold text-[#64748B]">
+                      Choose Job Name first.
+                    </p>
+                  ) : null}
+
+                  {jobDetailsSheet === "problem" &&
+                  activeJobType &&
+                  !descriptionMatchesSelectedJobType ? (
+                    <p className="mt-4 rounded-[12px] border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-800">
+                      Current description is kept. Choose a matching problem or add
+                      a new one for this job type.
+                    </p>
+                  ) : null}
+
+                  <div className="mt-4 grid max-h-[42dvh] touch-pan-y gap-2 overflow-y-auto overscroll-contain pr-1">
+                    {(jobDetailsSheet === "problem"
+                      ? filteredProblems
+                      : jobDetailsSheet === "adSource"
+                        ? filteredMarketingSources
+                        : filteredTags
+                    ).map((item) => {
+                      const isSelected =
+                        jobDetailsSheet === "problem"
+                          ? selectedProblemTypeId === item.id
+                          : jobDetailsSheet === "adSource"
+                            ? selectedMarketingSourceId === item.id
+                            : selectedTagIds.includes(item.id);
+
+                      return (
+                        <button
+                          className="flex min-h-11 w-full items-center gap-3 rounded-[12px] border border-[#E5E7EB] bg-white px-3 py-2 text-left transition active:bg-[#F8FAFC]"
+                          key={item.id}
+                          onClick={() => {
+                            if (jobDetailsSheet === "problem") {
+                              setSelectedProblemTypeId(item.id);
+                            } else if (jobDetailsSheet === "adSource") {
+                              setSelectedMarketingSourceId(item.id);
+                            } else {
+                              setSelectedTagIds((current) =>
+                                current.includes(item.id)
+                                  ? current.filter((id) => id !== item.id)
+                                  : [...current, item.id],
+                              );
+                            }
+                          }}
+                          type="button"
+                        >
+                          <span
+                            className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border text-xs font-black ${
+                              isSelected
+                                ? "border-[#2563EB] bg-[#2563EB] text-white"
+                                : "border-[#CBD5E1] text-transparent"
+                            }`}
+                          >
+                            ✓
+                          </span>
+                          <span className="min-w-0 flex-1 truncate text-sm font-black text-[#0F172A]">
+                            {item.name}
+                          </span>
+                          {jobDetailsSheet === "tags" ? (
+                            <span
+                              className={`rounded-full border px-2 py-0.5 text-[11px] font-black ${toTagToneClass(item.tone)}`}
+                            >
+                              {item.category ?? "custom"}
+                            </span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {jobDetailsSheet === "problem" && activeJobType ? (
+                    <label className="mt-4 grid gap-2">
+                      <span className="text-sm font-black text-[#0F172A]">
+                        Add new problem
+                      </span>
+                      <input
+                        className="w-full rounded-[14px] border border-[#E5E7EB] bg-white px-3 py-3 text-base font-bold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
+                        onChange={(event) => setNewCatalogValue(event.target.value)}
+                        placeholder={`Add problem for ${activeJobType.name}`}
+                        value={newCatalogValue}
+                      />
+                    </label>
+                  ) : jobDetailsSheet === "tags" ? (
+                    <label className="mt-4 grid gap-2">
+                      <span className="text-sm font-black text-[#0F172A]">
+                        Add new tag
+                      </span>
+                      <input
+                        className="w-full rounded-[14px] border border-[#E5E7EB] bg-white px-3 py-3 text-base font-bold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
+                        onChange={(event) => setNewCatalogValue(event.target.value)}
+                        placeholder="Type a new reusable value"
+                        value={newCatalogValue}
+                      />
+                    </label>
+                  ) : null}
+                </>
+              )}
+
+              {jobDetailsSaveState.status === "error" ? (
+                <p className="mt-3 rounded-[12px] border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-800">
+                  {jobDetailsSaveState.message}
+                </p>
+              ) : null}
+
+              <div className="sticky bottom-0 mt-4 grid grid-cols-2 gap-2 bg-white pb-1 pt-3">
+                <button
+                  className="min-h-11 rounded-[12px] border border-[#CBD5E1] bg-white px-4 text-sm font-black text-[#334155]"
+                  onClick={closeJobDetailsSheet}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  className="min-h-11 rounded-[12px] bg-[#2563EB] px-4 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={jobDetailsSaveState.status === "saving"}
+                  onClick={() => {
+                    const newValue = newCatalogValue.trim();
+
+                    void saveJobDetailsFromSheet(
+                      newValue
+                        ? {
+                            newJobTypeName:
+                              jobDetailsSheet === "jobType" &&
+                              expandedJobDetailsSelector === "jobType"
+                                ? newValue
+                                : null,
+                            newProblemName:
+                              jobDetailsSheet === "problem" ? newValue : null,
+                            newMarketingSourceName:
+                              jobDetailsSheet === "jobType" &&
+                              expandedJobDetailsSelector === "adSource"
+                                ? newValue
+                                : null,
+                            newTagName:
+                              jobDetailsSheet === "tags" ? newValue : null,
+                          }
+                        : undefined,
+                    );
+                  }}
+                  type="button"
+                >
+                  {jobDetailsSaveState.status === "saving" ? "Saving..." : "Save"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isEditingJobSummary ? (
+        <div
+          aria-modal="true"
+          className={`fixed inset-0 z-50 flex items-center justify-center bg-[#0F172A]/45 px-4 py-6 transition-opacity duration-200 ease-out lg:hidden ${
+            isJobSummaryEditorVisible && !isClosingJobSummaryEditor
+              ? "opacity-100"
+              : "opacity-0"
+          }`}
+          role="dialog"
+        >
+          <button
+            aria-label="Close edit job modal"
+            className="absolute inset-0 cursor-default"
+            onClick={closeJobSummaryEditor}
+            type="button"
+          />
+          <div
+            className={`relative z-10 w-[calc(100%-32px)] max-w-[420px] rounded-2xl border border-[#E5E7EB] bg-white shadow-[0_20px_60px_rgba(15,23,42,0.24)] transition-transform duration-300 ease-out ${
+              isJobSummaryEditorVisible && !isClosingJobSummaryEditor
+                ? "translate-y-0 scale-100"
+                : "translate-y-3 scale-[0.98]"
+            }`}
+          >
+            <div className="max-h-[84dvh] overflow-y-auto px-4 py-4">
+              <button
+                aria-label="Close edit job"
+                className="absolute right-3 top-3 flex min-h-10 min-w-10 items-center justify-center text-2xl font-bold leading-none text-[#334155]"
+                onClick={closeJobSummaryEditor}
+                type="button"
+              >
+                ×
+              </button>
+              <h2 className="pr-10 text-xl font-black text-[#0F172A]">
+                Edit Job
+              </h2>
+              <div className="mt-3 grid gap-3">
+                <label className="grid gap-2">
+                  <span className="text-sm font-black text-[#0F172A]">
+                    Job Name
+                  </span>
+                  <input
+                    className="w-full rounded-[12px] border border-[#CBD5E1] bg-white px-3 py-2.5 text-base font-bold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
+                    onChange={(event) =>
+                      setJobSummaryDraft((current) => ({
+                        ...current,
+                        title: event.target.value,
+                      }))
+                    }
+                    value={jobSummaryDraft.title}
+                  />
+                </label>
+                <label className="grid gap-2">
+                  <span className="text-sm font-black text-[#0F172A]">
+                    Customer Complaint
+                  </span>
+                  <textarea
+                    className="min-h-[108px] w-full rounded-[12px] border border-[#CBD5E1] bg-white px-3 py-2.5 text-base font-semibold leading-6 text-[#0F172A] outline-none transition focus:border-[#2563EB]"
+                    onChange={(event) =>
+                      setJobSummaryDraft((current) => ({
+                        ...current,
+                        complaint: event.target.value,
+                      }))
+                    }
+                    value={jobSummaryDraft.complaint}
+                  />
+                </label>
+              </div>
+              {jobDetailsSaveState.status === "error" ? (
+                <p className="mt-3 rounded-[12px] border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-800">
+                  {jobDetailsSaveState.message}
+                </p>
+              ) : null}
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <button
+                  className="min-h-11 rounded-[12px] border border-[#CBD5E1] bg-white px-4 text-sm font-black text-[#334155]"
+                  onClick={closeJobSummaryEditor}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  className="min-h-11 rounded-[12px] bg-[#2563EB] px-4 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={
+                    jobDetailsSaveState.status === "saving" ||
+                    !jobSummaryDraft.title.trim() ||
+                    !jobSummaryDraft.complaint.trim()
+                  }
+                  onClick={() => void saveJobSummaryDraft()}
+                  type="button"
+                >
+                  {jobDetailsSaveState.status === "saving" ? "Saving..." : "Save"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isEditingClient ? (
+        <div
+          aria-modal="true"
+          className={`fixed inset-0 z-50 flex items-center justify-center bg-[#0F172A]/45 px-4 py-6 transition-opacity duration-200 ease-out lg:hidden ${
+            isClientEditorVisible && !isClosingClientEditor
+              ? "opacity-100"
+              : "opacity-0"
+          }`}
+          role="dialog"
+        >
+          <button
+            aria-label="Close edit client modal"
+            className="absolute inset-0 cursor-default"
+            onClick={closeClientEditor}
+            type="button"
+          />
+          <div
+            className={`relative z-10 w-[calc(100%-32px)] max-w-[430px] rounded-2xl border border-[#E5E7EB] bg-white shadow-[0_20px_60px_rgba(15,23,42,0.24)] transition-transform duration-300 ease-out ${
+              isClientEditorVisible && !isClosingClientEditor
+                ? "translate-y-0 scale-100"
+                : "translate-y-3 scale-[0.98]"
+            }`}
+          >
+            <div className="max-h-[84dvh] overflow-y-auto px-4 py-4">
+              <button
+                aria-label="Close edit client"
+                className="absolute right-3 top-3 flex min-h-10 min-w-10 items-center justify-center text-2xl font-bold leading-none text-[#334155]"
+                onClick={closeClientEditor}
+                type="button"
+              >
+                ×
+              </button>
+              <h2 className="pr-10 text-xl font-black text-[#0F172A]">
+                Edit Client
+              </h2>
+              <div className="mt-3 grid gap-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="grid gap-2">
+                    <span className="text-sm font-black text-[#0F172A]">
+                      First Name
+                    </span>
+                    <input
+                      className="w-full rounded-[12px] border border-[#CBD5E1] bg-white px-3 py-2.5 text-base font-semibold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
+                      onChange={(event) =>
+                        setClientDraft((current) => ({
+                          ...current,
+                          firstName: event.target.value,
+                        }))
+                      }
+                      value={clientDraft.firstName}
+                    />
+                  </label>
+                  <label className="grid gap-2">
+                    <span className="text-sm font-black text-[#0F172A]">
+                      Last Name
+                    </span>
+                    <input
+                      className="w-full rounded-[12px] border border-[#CBD5E1] bg-white px-3 py-2.5 text-base font-semibold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
+                      onChange={(event) =>
+                        setClientDraft((current) => ({
+                          ...current,
+                          lastName: event.target.value,
+                        }))
+                      }
+                      value={clientDraft.lastName}
+                    />
+                  </label>
+                </div>
+                <label className="grid gap-2">
+                  <span className="text-sm font-black text-[#0F172A]">
+                    Phone
+                  </span>
+                  <input
+                    className="w-full rounded-[12px] border border-[#CBD5E1] bg-white px-3 py-2.5 text-base font-semibold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
+                    inputMode="tel"
+                    onChange={(event) =>
+                      setClientDraft((current) => ({
+                        ...current,
+                        phone: event.target.value,
+                      }))
+                    }
+                    value={clientDraft.phone}
+                  />
+                </label>
+                <label className="grid gap-2">
+                  <span className="text-sm font-black text-[#0F172A]">
+                    Email
+                  </span>
+                  <input
+                    className="w-full rounded-[12px] border border-[#CBD5E1] bg-white px-3 py-2.5 text-base font-semibold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
+                    inputMode="email"
+                    onChange={(event) =>
+                      setClientDraft((current) => ({
+                        ...current,
+                        email: event.target.value,
+                      }))
+                    }
+                    value={clientDraft.email}
+                  />
+                </label>
+                <label className="grid gap-2">
+                  <span className="text-sm font-black text-[#0F172A]">
+                    Service Address
+                  </span>
+                  <input
+                    className="w-full rounded-[12px] border border-[#CBD5E1] bg-white px-3 py-2.5 text-base font-semibold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
+                    onChange={(event) =>
+                      setClientDraft((current) => ({
+                        ...current,
+                        streetAddress: event.target.value,
+                      }))
+                    }
+                    value={clientDraft.streetAddress}
+                  />
+                </label>
+                <label className="grid gap-2">
+                  <span className="text-sm font-black text-[#0F172A]">
+                    Unit / Apartment
+                  </span>
+                  <input
+                    className="w-full rounded-[12px] border border-[#CBD5E1] bg-white px-3 py-2.5 text-base font-semibold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
+                    onChange={(event) =>
+                      setClientDraft((current) => ({
+                        ...current,
+                        unit: event.target.value,
+                      }))
+                    }
+                    value={clientDraft.unit}
+                  />
+                </label>
+                <div className="grid grid-cols-[minmax(0,1fr)_72px_96px] gap-2">
+                  <label className="grid gap-2">
+                    <span className="text-sm font-black text-[#0F172A]">
+                      City
+                    </span>
+                    <input
+                      className="w-full rounded-[12px] border border-[#CBD5E1] bg-white px-3 py-2.5 text-base font-semibold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
+                      onChange={(event) =>
+                        setClientDraft((current) => ({
+                          ...current,
+                          city: event.target.value,
+                        }))
+                      }
+                      value={clientDraft.city}
+                    />
+                  </label>
+                  <label className="grid gap-2">
+                    <span className="text-sm font-black text-[#0F172A]">
+                      State
+                    </span>
+                    <input
+                      className="w-full rounded-[12px] border border-[#CBD5E1] bg-white px-3 py-2.5 text-base font-semibold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
+                      onChange={(event) =>
+                        setClientDraft((current) => ({
+                          ...current,
+                          state: event.target.value,
+                        }))
+                      }
+                      value={clientDraft.state}
+                    />
+                  </label>
+                  <label className="grid gap-2">
+                    <span className="text-sm font-black text-[#0F172A]">
+                      ZIP
+                    </span>
+                    <input
+                      className="w-full rounded-[12px] border border-[#CBD5E1] bg-white px-3 py-2.5 text-base font-semibold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
+                      inputMode="numeric"
+                      onChange={(event) =>
+                        setClientDraft((current) => ({
+                          ...current,
+                          zipCode: event.target.value,
+                        }))
+                      }
+                      value={clientDraft.zipCode}
+                    />
+                  </label>
+                </div>
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <button
+                  className="min-h-11 rounded-[12px] border border-[#CBD5E1] bg-white px-4 text-sm font-black text-[#334155]"
+                  onClick={closeClientEditor}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  className="min-h-11 rounded-[12px] bg-[#2563EB] px-4 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={
+                    !clientDraft.firstName.trim() &&
+                    !clientDraft.lastName.trim()
+                  }
+                  onClick={saveClientDraft}
+                  type="button"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isAvatarSheetOpen ? (
+        <div
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/45 px-3 transition-opacity duration-200 ease-out lg:hidden"
+          role="dialog"
+        >
+          <button
+            aria-label="Close avatar actions"
+            className="absolute inset-0 cursor-default"
+            onClick={() => setIsAvatarSheetOpen(false)}
+            type="button"
+          />
+          <div className="relative z-10 w-full max-w-md rounded-t-[24px] border border-[#E5E7EB] bg-white shadow-[0_-18px_50px_rgba(15,23,42,0.22)]">
+            <div className="mx-auto mt-3 h-1.5 w-12 rounded-full bg-[#CBD5E1]" />
+            <div className="px-4 pb-[calc(env(safe-area-inset-bottom)+16px)] pt-4">
+              <h2 className="text-lg font-black text-[#0F172A]">
+                Client Photo
+              </h2>
+              <div className="mt-3 overflow-hidden border-y border-[#E5E7EB]">
+                <button
+                  className="flex min-h-12 w-full items-center justify-between border-b border-[#E5E7EB] py-3 text-left text-sm font-bold text-[#0F172A]"
+                  disabled={avatarActionState.status === "saving"}
+                  onClick={() => openAvatarFilePicker(true)}
+                  type="button"
+                >
+                  Take Photo
+                  <span aria-hidden="true" className="text-[#94A3B8]">›</span>
+                </button>
+                <button
+                  className="flex min-h-12 w-full items-center justify-between border-b border-[#E5E7EB] py-3 text-left text-sm font-bold text-[#0F172A]"
+                  disabled={avatarActionState.status === "saving"}
+                  onClick={() => openAvatarFilePicker(false)}
+                  type="button"
+                >
+                  Choose from Library
+                  <span aria-hidden="true" className="text-[#94A3B8]">›</span>
+                </button>
+                <button
+                  className="flex min-h-12 w-full items-center justify-between border-b border-[#E5E7EB] py-3 text-left text-sm font-bold text-[#0F172A]"
+                  disabled={avatarActionState.status === "saving"}
+                  onClick={() => openAvatarFilePicker(false)}
+                  type="button"
+                >
+                  Upload File
+                  <span aria-hidden="true" className="text-[#94A3B8]">›</span>
+                </button>
+                {clientAvatar.storagePath ? (
+                  <button
+                    className="flex min-h-12 w-full items-center justify-between border-b border-[#E5E7EB] py-3 text-left text-sm font-bold text-red-600"
+                    disabled={avatarActionState.status === "saving"}
+                    onClick={() => void removeClientAvatar()}
+                    type="button"
+                  >
+                    Remove Photo
+                  </button>
+                ) : null}
+                <button
+                  className="flex min-h-12 w-full items-center justify-between py-3 text-left text-sm font-bold text-[#475569]"
+                  onClick={() => setIsAvatarSheetOpen(false)}
+                  type="button"
+                >
+                  Cancel
+                </button>
+              </div>
+              {avatarActionState.message ? (
+                <p
+                  className={`mt-3 text-sm font-semibold ${
+                    avatarActionState.status === "error"
+                      ? "text-red-600"
+                      : "text-[#64748B]"
+                  }`}
+                >
+                  {avatarActionState.message}
+                </p>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isMapConfirmOpen ? (
+        <div
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[#0F172A]/45 px-4 py-6 transition-opacity duration-200 ease-out lg:hidden"
+          role="dialog"
+        >
+          <button
+            aria-label="Cancel opening maps"
+            className="absolute inset-0 cursor-default"
+            onClick={() => setIsMapConfirmOpen(false)}
+            type="button"
+          />
+          <div className="relative z-10 w-[calc(100%-32px)] max-w-[360px] rounded-2xl border border-[#E5E7EB] bg-white p-4 shadow-[0_20px_60px_rgba(15,23,42,0.24)]">
+            <h2 className="text-lg font-black text-[#0F172A]">
+              Open Google Maps?
+            </h2>
+            <p className="mt-2 text-sm font-semibold leading-6 text-[#475569]">
+              {clientMapAddressLabel || "Service address unavailable"}
+            </p>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <button
+                className="min-h-11 rounded-[12px] border border-[#CBD5E1] bg-white px-4 text-sm font-black text-[#334155]"
+                onClick={() => setIsMapConfirmOpen(false)}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="min-h-11 rounded-[12px] bg-[#2563EB] px-4 text-sm font-black text-white"
+                onClick={openServiceAddressInMaps}
+                type="button"
+              >
+                Open Maps
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isStatusSheetOpen ? (
+        <div
+          aria-modal="true"
+          className={`fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/45 px-3 transition-opacity duration-200 ease-out lg:hidden ${
+            isStatusSheetVisible && !isClosingStatusSheet
+              ? "opacity-100"
+              : "opacity-0"
+          }`}
+          role="dialog"
+        >
+          <button
+            aria-label="Close status picker"
+            className="absolute inset-0 cursor-default"
+            onClick={closeStatusSheet}
+            type="button"
+          />
+          <div
+            className={`relative z-10 w-full max-w-md rounded-t-[24px] border border-[#E5E7EB] bg-white shadow-[0_-18px_50px_rgba(15,23,42,0.22)] transition-transform duration-300 ease-out ${
+              isStatusSheetVisible && !isClosingStatusSheet
+                ? "translate-y-0"
+                : "translate-y-full"
+            }`}
+          >
+            <div className="mx-auto mt-3 h-1.5 w-12 rounded-full bg-[#CBD5E1]" />
+            <div className="px-4 pb-[calc(env(safe-area-inset-bottom)+16px)] pt-4">
+              <h2 className="text-lg font-black text-[#0F172A]">
+                Select Status
+              </h2>
+              <div className="mt-3 max-h-[48dvh] overflow-y-auto border-y border-[#E5E7EB]">
+                {SERVICE_REQUEST_CRM_STATUSES.map((status) => {
+                  const isCurrentStatus = status === request.status;
+
+                  return (
+                    <button
+                      className="flex min-h-12 w-full items-center justify-between gap-3 border-b border-[#E5E7EB] py-3 text-left last:border-b-0 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={statusUpdateState.status === "saving"}
+                      key={status}
+                      onClick={() => selectStatusFromSheet(status)}
+                      type="button"
+                    >
+                      <span
+                        className={`text-sm font-bold ${
+                          isCurrentStatus ? "text-[#2563EB]" : "text-[#0F172A]"
+                        }`}
+                      >
+                        {formatServiceRequestSource(status)}
+                      </span>
+                      <span
+                        aria-hidden="true"
+                        className={`flex h-5 w-5 items-center justify-center rounded-full border text-xs font-black ${
+                          isCurrentStatus
+                            ? "border-[#2563EB] bg-[#2563EB] text-white"
+                            : "border-[#CBD5E1] text-transparent"
+                        }`}
+                      >
+                        ✓
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isTechnicianSheetOpen ? (
+        <div
+          aria-modal="true"
+          className={`fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/45 px-3 transition-opacity duration-200 ease-out lg:hidden ${
+            isTechnicianSheetVisible && !isClosingTechnicianSheet
+              ? "opacity-100"
+              : "opacity-0"
+          }`}
+          role="dialog"
+        >
+          <button
+            aria-label="Close technician assignment"
+            className="absolute inset-0 cursor-default"
+            onClick={closeTechnicianSheet}
+            type="button"
+          />
+          <div
+            className={`relative z-10 max-h-[84dvh] w-full max-w-md rounded-t-[24px] border border-[#E5E7EB] bg-white shadow-[0_-18px_50px_rgba(15,23,42,0.22)] transition-transform duration-300 ease-out ${
+              isTechnicianSheetVisible && !isClosingTechnicianSheet
+                ? "translate-y-0"
+                : "translate-y-full"
+            }`}
+          >
+            <div className="mx-auto mt-3 h-1.5 w-12 rounded-full bg-[#CBD5E1]" />
+            <div className="flex items-center justify-between gap-3 px-4 pt-4">
+              <h2 className="text-lg font-black text-[#0F172A]">
+                Assign Technician
+              </h2>
+              <button
+                aria-label="Close technician assignment"
+                className="flex h-9 w-9 items-center justify-center rounded-full text-xl font-black text-[#64748B] transition active:bg-[#F1F5F9]"
+                onClick={closeTechnicianSheet}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <div className="px-4 pb-[calc(env(safe-area-inset-bottom)+16px)] pt-3">
+              <input
+                className="w-full rounded-[14px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-3 text-base font-bold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
+                onChange={(event) =>
+                  setTechnicianAssignmentSearch(event.target.value)
+                }
+                placeholder="Search technicians"
+                value={technicianAssignmentSearch}
+              />
+
+              {technicianProfilesState.status === "loading" ? (
+                <p className="mt-3 rounded-[12px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-3 text-sm font-bold text-[#64748B]">
+                  Loading technicians...
+                </p>
+              ) : null}
+
+              {technicianProfilesState.status === "error" ? (
+                <p className="mt-3 rounded-[12px] border border-amber-200 bg-amber-50 px-3 py-3 text-sm font-bold text-amber-800">
+                  {technicianProfilesState.error}
+                </p>
+              ) : null}
+
+              <div className="mt-3 max-h-[46dvh] touch-pan-y overflow-y-auto overscroll-contain border-y border-[#E5E7EB]">
+                {filteredTechnicianAssignmentCandidates.length > 0 ? (
+                  filteredTechnicianAssignmentCandidates.map((candidate) => {
+                    const isSelected =
+                      selectedAssignmentTechnicianId === candidate.profile.id;
+
+                    return (
+                      <button
+                        className="flex min-h-14 w-full items-center gap-3 border-b border-[#E5E7EB] py-2.5 text-left last:border-b-0 disabled:cursor-not-allowed disabled:opacity-55"
+                        disabled={
+                          !candidate.isSelectable ||
+                          technicianAssignmentSaveState.status === "saving"
+                        }
+                        key={candidate.profile.id}
+                        onClick={() =>
+                          setSelectedAssignmentTechnicianId(candidate.profile.id)
+                        }
+                        type="button"
+                      >
+                        <span
+                          aria-hidden="true"
+                          className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs font-black text-white"
+                          style={{
+                            backgroundColor:
+                              candidate.profile.avatar_color ?? "#2563EB",
+                          }}
+                        >
+                          {candidate.initials}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-black text-[#0F172A]">
+                            {candidate.displayName}
+                          </span>
+                          <span className="mt-0.5 block truncate text-xs font-bold text-[#64748B]">
+                            {candidate.businessName ?? candidate.eligibilityLabel}
+                          </span>
+                          <span
+                            className={`mt-1 inline-flex max-w-full rounded-full px-2 py-0.5 text-[11px] font-black ${
+                              candidate.isSelectable
+                                ? "bg-emerald-50 text-emerald-700"
+                                : "bg-amber-50 text-amber-800"
+                            }`}
+                          >
+                            <span className="truncate">
+                              {candidate.availabilityLabel}
+                              {candidate.isAssigned ? "" : ` · ${candidate.eligibilityLabel}`}
+                            </span>
+                          </span>
+                        </span>
+                        <span
+                          aria-hidden="true"
+                          className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border text-xs font-black ${
+                            isSelected
+                              ? "border-[#2563EB] bg-[#2563EB] text-white"
+                              : "border-[#CBD5E1] text-transparent"
+                          }`}
+                        >
+                          ✓
+                        </span>
+                      </button>
+                    );
+                  })
+                ) : technicianProfilesState.status === "ready" ? (
+                  <p className="py-5 text-center text-sm font-bold text-[#64748B]">
+                    No technicians match this search.
+                  </p>
+                ) : null}
+              </div>
+
+              {technicianAssignmentSaveState.status === "error" ? (
+                <p className="mt-3 rounded-[12px] border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-800">
+                  {technicianAssignmentSaveState.message}
+                </p>
+              ) : null}
+
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <button
+                  className="min-h-11 rounded-[12px] border border-[#CBD5E1] bg-white px-4 text-sm font-black text-[#334155]"
+                  onClick={closeTechnicianSheet}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  className="min-h-11 rounded-[12px] bg-[#2563EB] px-4 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={
+                    technicianAssignmentSaveState.status === "saving" ||
+                    !selectedAssignmentTechnicianId
+                  }
+                  onClick={() => void saveTechnicianAssignment()}
+                  type="button"
+                >
+                  {technicianAssignmentSaveState.status === "saving"
+                    ? "Saving..."
+                    : "Save"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isScheduleSheetOpen ? (
+        <div
+          aria-modal="true"
+          className={`fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/45 px-3 transition-opacity duration-200 ease-out lg:hidden ${
+            isScheduleSheetVisible && !isClosingScheduleSheet
+              ? "opacity-100"
+              : "opacity-0"
+          }`}
+          role="dialog"
+        >
+          <button
+            aria-label="Close schedule editor"
+            className="absolute inset-0 cursor-default"
+            onClick={closeScheduleSheet}
+            type="button"
+          />
+          <div
+            className={`relative z-10 max-h-[70dvh] w-full max-w-md rounded-t-[24px] border border-[#E5E7EB] bg-white shadow-[0_-18px_50px_rgba(15,23,42,0.22)] transition-transform duration-300 ease-out ${
+              isScheduleSheetVisible && !isClosingScheduleSheet
+                ? "translate-y-0"
+                : "translate-y-full"
+            }`}
+          >
+            <div className="mx-auto mt-3 h-1.5 w-12 rounded-full bg-[#CBD5E1]" />
+            <div className="flex items-center justify-between gap-3 px-4 pt-4">
+              <h2 className="text-lg font-black text-[#0F172A]">Reschedule</h2>
+              <button
+                aria-label="Close schedule editor"
+                className="flex h-9 w-9 items-center justify-center rounded-full text-xl font-black text-[#64748B] transition active:bg-[#F1F5F9]"
+                onClick={closeScheduleSheet}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <div className="max-h-[calc(70dvh-68px)] overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom)+16px)] pt-3">
+              <div className="grid gap-3">
+                <label className="grid gap-1 text-sm font-black text-[#0F172A]">
+                  Start date
+                  <input
+                    className="h-11 rounded-[12px] border border-[#CBD5E1] bg-white px-3 text-sm font-bold text-[#0F172A] outline-none transition focus:border-[#2563EB] focus:ring-4 focus:ring-blue-100"
+                    onChange={(event) =>
+                      updateScheduleDraft({ startDate: event.target.value })
+                    }
+                    onInput={(event) =>
+                      updateScheduleDraft({
+                        startDate: event.currentTarget.value,
+                      })
+                    }
+                    type="date"
+                    value={scheduleDraft.startDate}
+                  />
+                </label>
+                <label className="grid gap-1 text-sm font-black text-[#0F172A]">
+                  Start time
+                  <input
+                    className="h-11 rounded-[12px] border border-[#CBD5E1] bg-white px-3 text-sm font-bold text-[#0F172A] outline-none transition focus:border-[#2563EB] focus:ring-4 focus:ring-blue-100"
+                    onChange={(event) =>
+                      updateScheduleDraft({ startTime: event.target.value })
+                    }
+                    onInput={(event) =>
+                      updateScheduleDraft({
+                        startTime: event.currentTarget.value,
+                      })
+                    }
+                    type="time"
+                    value={scheduleDraft.startTime}
+                  />
+                </label>
+                <label className="grid gap-1 text-sm font-black text-[#0F172A]">
+                  End date
+                  <input
+                    className="h-11 rounded-[12px] border border-[#CBD5E1] bg-white px-3 text-sm font-bold text-[#0F172A] outline-none transition focus:border-[#2563EB] focus:ring-4 focus:ring-blue-100"
+                    onChange={(event) =>
+                      updateScheduleDraft({ endDate: event.target.value })
+                    }
+                    onInput={(event) =>
+                      updateScheduleDraft({
+                        endDate: event.currentTarget.value,
+                      })
+                    }
+                    type="date"
+                    value={scheduleDraft.endDate}
+                  />
+                </label>
+                <label className="grid gap-1 text-sm font-black text-[#0F172A]">
+                  End time
+                  <input
+                    className="h-11 rounded-[12px] border border-[#CBD5E1] bg-white px-3 text-sm font-bold text-[#0F172A] outline-none transition focus:border-[#2563EB] focus:ring-4 focus:ring-blue-100"
+                    onChange={(event) =>
+                      updateScheduleDraft({ endTime: event.target.value })
+                    }
+                    onInput={(event) =>
+                      updateScheduleDraft({
+                        endTime: event.currentTarget.value,
+                      })
+                    }
+                    type="time"
+                    value={scheduleDraft.endTime}
+                  />
+                </label>
+              </div>
+              {scheduleSheetSaveState.message ? (
+                <p
+                  className={`mt-3 text-sm font-bold ${
+                    scheduleSheetSaveState.status === "error"
+                      ? "text-red-600"
+                      : "text-emerald-700"
+                  }`}
+                >
+                  {scheduleSheetSaveState.message}
+                </p>
+              ) : null}
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <button
+                  className="min-h-11 rounded-[12px] border border-[#CBD5E1] bg-white px-4 text-sm font-black text-[#334155] transition active:bg-[#F8FAFC]"
+                  disabled={scheduleSheetSaveState.status === "saving"}
+                  onClick={closeScheduleSheet}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  className="min-h-11 rounded-[12px] bg-[#2563EB] px-4 text-sm font-black text-white transition active:bg-[#1D4ED8] disabled:cursor-wait disabled:opacity-70"
+                  disabled={scheduleSheetSaveState.status === "saving"}
+                  onClick={() => void saveScheduleFromSheet()}
+                  type="button"
+                >
+                  {scheduleSheetSaveState.status === "saving" ? "Saving..." : "Save"}
+                </button>
+              </div>
+              <p className="mt-3 text-xs font-semibold leading-5 text-[#64748B]">
+                Schedule later is not available yet because this job can only
+                have one active appointment window.
               </p>
-              <h2 className="mt-1 text-lg font-black text-[#0F172A]">
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <section className="mt-3 hidden rounded-2xl border border-blue-100 bg-blue-50 p-4 lg:block">
+        <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.16em] text-[#0F6BFF]">
+              Next action
+            </p>
+            <h2 className="mt-1 text-xl font-black text-[#0F172A]">
+              {operationalNextStep.title}
+            </h2>
+            <p className="mt-1 max-w-3xl text-sm font-semibold leading-6 text-[#334155]">
+              {operationalNextStep.body}
+            </p>
+          </div>
+          <button
+            className="rounded-[12px] bg-[#0F6BFF] px-4 py-3 text-sm font-black text-white transition hover:bg-[#0057D9] disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={statusUpdateState.status === "saving"}
+            onClick={() => {
+              if ("status" in operationalNextStep) {
+                void updateStatus(operationalNextStep.status);
+                return;
+              }
+
+              if ("tab" in operationalNextStep) {
+                setActiveJobTab(operationalNextStep.tab);
+              }
+            }}
+            type="button"
+          >
+            {operationalNextStep.actionLabel}
+          </button>
+        </div>
+      </section>
+
+      <section className="mt-3 grid gap-0 xl:grid-cols-[1.1fr_0.9fr] xl:gap-3">
+        <div className="border-y border-[#E5E7EB] bg-white py-3 lg:hidden">
+          <div className="flex min-h-9 items-center justify-between gap-3">
+            <h2 className="text-base font-black text-[#0F172A]">Client</h2>
+            {customerProfileHref ? (
+              <Link
+                className="inline-flex min-h-9 items-center text-sm font-bold text-[#2563EB]"
+                href={customerProfileHref}
+              >
+                View Client Details <span aria-hidden="true" className="ml-1">›</span>
+              </Link>
+            ) : (
+              <span className="text-xs font-bold text-[#94A3B8]">
+                Client details unavailable
+              </span>
+            )}
+          </div>
+
+          <div className="mt-2 grid grid-cols-[60px_minmax(0,1fr)_36px] items-start gap-3">
+            <button
+              aria-label="Change client avatar"
+              className="relative flex h-14 w-14 items-center justify-center overflow-hidden rounded-full bg-[#E0F2FE] text-base font-black text-[#0369A1] transition active:scale-[0.98] disabled:cursor-wait"
+              disabled={avatarActionState.status === "saving"}
+              onClick={() => {
+                setAvatarActionState({ status: "idle", message: null });
+                setIsAvatarSheetOpen(true);
+              }}
+              type="button"
+            >
+              {clientAvatar.signedUrl ? (
+                <span
+                  aria-hidden="true"
+                  className="h-full w-full bg-cover bg-center"
+                  style={getBackgroundImageStyle(clientAvatar.signedUrl)}
+                />
+              ) : (
+                clientInitials
+              )}
+              {!clientAvatar.signedUrl ? (
+                <span className="absolute bottom-0 right-0 flex h-5 w-5 items-center justify-center rounded-full border border-white bg-[#2563EB] text-[11px] text-white">
+                  📷
+                </span>
+              ) : null}
+              {avatarActionState.status === "saving" ? (
+                <span className="absolute inset-0 flex items-center justify-center bg-[#0F172A]/45 text-[10px] font-black uppercase tracking-[0.08em] text-white">
+                  Uploading
+                </span>
+              ) : null}
+            </button>
+            <input
+              accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+              capture={avatarCaptureMode ? "environment" : undefined}
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0] ?? null;
+                event.target.value = "";
+                void uploadClientAvatar(file);
+              }}
+              ref={avatarFileInputRef}
+              type="file"
+            />
+            <div className="min-w-0">
+              {avatarActionState.status === "error" && avatarActionState.message ? (
+                <p className="mb-1 text-xs font-bold text-red-600">
+                  {avatarActionState.message}
+                </p>
+              ) : null}
+              {customerProfileHref ? (
+                <Link
+                  className="block truncate text-base font-black leading-5 text-[#0F172A]"
+                  href={customerProfileHref}
+                >
+                  {request.customerName}
+                </Link>
+              ) : (
+                <p className="truncate text-base font-black leading-5 text-[#0F172A]">
+                  {request.customerName}
+                </p>
+              )}
+              <button
+                aria-label="Open service address in Google Maps"
+                className="mt-1 block w-full rounded-[8px] py-0.5 text-left transition active:bg-[#F8FAFC] disabled:cursor-default"
+                disabled={!hasRoutableAddress}
+                onClick={() => setIsMapConfirmOpen(true)}
+                type="button"
+              >
+                <span className="block break-words text-sm font-semibold leading-5 text-[#475569]">
+                  {clientStreetLine || "No service address recorded"}
+                </span>
+                {clientCityLine ? (
+                  <span className="block break-words text-sm font-semibold leading-5 text-[#475569]">
+                    {clientCityLine}
+                  </span>
+                ) : null}
+              </button>
+              {clientDistance.status === "missing_origin" && clientDistance.setupHref ? (
+                <Link
+                  className="mt-1 inline-flex text-xs font-bold text-[#2563EB]"
+                  href={clientDistance.setupHref}
+                >
+                  {clientDistanceLabel}
+                </Link>
+              ) : (
+                <p className="mt-1 text-xs font-bold text-[#94A3B8]">
+                  {clientDistanceLabel}
+                </p>
+              )}
+            </div>
+            <button
+              aria-label="Edit client for this job"
+              className="flex min-h-11 w-9 items-start justify-end pt-0.5 text-xl font-black leading-none text-[#2563EB]"
+              onClick={openClientEditor}
+              type="button"
+            >
+              ✎
+            </button>
+          </div>
+
+          <div className="mt-3 grid grid-cols-[minmax(0,1fr)_52px] gap-2">
+            {callCustomerHref ? (
+              <a
+                className="grid min-h-11 min-w-0 grid-cols-[1rem_minmax(0,1fr)] items-center gap-1 rounded-[12px] border border-emerald-200 bg-white px-3 text-sm font-black text-[#0F172A] transition active:bg-emerald-50"
+                href={callCustomerHref}
+              >
+                <PhoneHandsetIcon />
+                <span className="min-w-0 justify-self-center truncate pr-3">{clientPhoneDisplay}</span>
+              </a>
+            ) : (
+              <button
+                className="grid min-h-11 min-w-0 cursor-not-allowed grid-cols-[1rem_minmax(0,1fr)] items-center gap-1 rounded-[12px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 text-sm font-black text-[#94A3B8]"
+                disabled
+                type="button"
+              >
+                <PhoneHandsetIcon />
+                <span className="min-w-0 justify-self-center truncate pr-3">{clientPhoneDisplay}</span>
+              </button>
+            )}
+            {textCustomerHref ? (
+              <a
+                aria-label="Message client"
+                className="flex min-h-11 items-center justify-center rounded-[12px] border border-blue-200 bg-white text-xl font-black text-[#2563EB] transition active:bg-blue-50"
+                href={textCustomerHref}
+              >
+                💬
+              </a>
+            ) : (
+              <button
+                aria-label="Message client unavailable"
+                className="flex min-h-11 cursor-not-allowed items-center justify-center rounded-[12px] border border-[#E5E7EB] bg-[#F8FAFC] text-xl font-black text-[#CBD5E1]"
+                disabled
+                type="button"
+              >
+                💬
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="hidden rounded-2xl border border-[#E5E7EB] bg-white p-4 lg:block">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <p className="text-xs font-black uppercase tracking-[0.16em] text-[#0F6BFF]">
+                Customer
+              </p>
+              <h2 className="mt-1 truncate text-lg font-black text-[#0F172A]">
                 {request.customerName}
               </h2>
               <p className="mt-1 text-sm font-semibold text-[#64748B]">
-                {request.customerPhone ?? "No phone recorded"} ·{" "}
-                {request.customerEmail ?? "No email recorded"}
+                {request.customerPhone ?? "No phone recorded"}
+                {request.customerEmail ? ` · ${request.customerEmail}` : ""}
               </p>
             </div>
-            <div className="grid gap-2 sm:grid-cols-3 md:min-w-[24rem]">
+            <div className="flex flex-wrap gap-2">
               {callCustomerHref ? (
                 <a
-                  className="rounded-[10px] border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-center text-xs font-black text-emerald-800 transition hover:bg-emerald-100"
+                  className="rounded-[10px] border border-emerald-200 bg-emerald-50 px-3 py-2 text-center text-xs font-black text-emerald-800 transition hover:bg-emerald-100"
                   href={callCustomerHref}
                 >
                   Call
                 </a>
-              ) : (
-                <span className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-2.5 text-center text-xs font-black text-[#64748B]">
-                  No Phone
-                </span>
-              )}
+              ) : null}
               {textCustomerHref ? (
                 <a
-                  className="rounded-[10px] border border-blue-200 bg-blue-50 px-3 py-2.5 text-center text-xs font-black text-[#0F6BFF] transition hover:bg-blue-100"
+                  className="rounded-[10px] border border-blue-200 bg-blue-50 px-3 py-2 text-center text-xs font-black text-[#0F6BFF] transition hover:bg-blue-100"
                   href={textCustomerHref}
                 >
-                  Text
+                  SMS
                 </a>
-              ) : (
-                <span className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-2.5 text-center text-xs font-black text-[#64748B]">
-                  No Text
-                </span>
-              )}
-              {emailCustomerHref ? (
-                <a
-                  className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-2.5 text-center text-xs font-black text-[#334155] transition hover:border-[#0F6BFF] hover:text-[#0F6BFF]"
-                  href={emailCustomerHref}
+              ) : null}
+              {customerProfileHref ? (
+                <Link
+                  className="rounded-[10px] border border-[#E5E7EB] px-3 py-2 text-center text-xs font-black text-[#334155] transition hover:border-[#0F6BFF] hover:text-[#0F6BFF]"
+                  href={customerProfileHref}
                 >
-                  Email
+                  View Customer
+                </Link>
+              ) : null}
+              {hasRoutableAddress ? (
+                <a
+                  className="rounded-[10px] border border-[#E5E7EB] px-3 py-2 text-center text-xs font-black text-[#334155] transition hover:border-[#0F6BFF] hover:text-[#0F6BFF]"
+                  href={googleMapsUrl}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  Navigate
                 </a>
-              ) : (
-                <span className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-2.5 text-center text-xs font-black text-[#64748B]">
-                  No Email
-                </span>
-              )}
+              ) : null}
             </div>
           </div>
-          <div className="mt-4 grid gap-3 md:grid-cols-3">
-            <div className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] p-3">
-              <p className="text-[11px] font-black uppercase tracking-[0.16em] text-[#64748B]">
-                Service Address
-              </p>
-              <p className="mt-1 line-clamp-3 text-sm font-semibold leading-5 text-[#334155]">
-                {fullAddress || addressSummary}
-              </p>
-            </div>
-            <div className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] p-3">
-              <p className="text-[11px] font-black uppercase tracking-[0.16em] text-[#64748B]">
-                Appointment
-              </p>
-              <p className="mt-1 text-sm font-semibold leading-5 text-[#334155]">
-                {scheduledWindowLabel ?? request.preferredTimeWindow ?? "Not scheduled"}
-              </p>
-            </div>
-            <div className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] p-3">
-              <p className="text-[11px] font-black uppercase tracking-[0.16em] text-[#64748B]">
-                Source
-              </p>
-              <p className="mt-1 text-sm font-semibold leading-5 text-[#334155]">
-                {formatServiceRequestSource(request.requestSource)}
-              </p>
-            </div>
+          <div className="mt-3 rounded-[12px] border border-[#E5E7EB] bg-[#F8FAFC] p-3">
+            <p className="text-[11px] font-black uppercase tracking-[0.14em] text-[#64748B]">
+              Service Address
+            </p>
+            <p className="mt-1 line-clamp-2 text-sm font-semibold leading-5 text-[#334155]">
+              {fullAddress || addressSummary}
+            </p>
           </div>
         </div>
 
-        <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
-          <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
-            Repair workflow
-          </p>
-          <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            {workflowActions.map((action) => (
+        <section className="border-b border-[#E5E7EB] bg-white lg:hidden">
+          <button
+            aria-label="Reschedule job"
+            className="flex min-h-[68px] w-full items-center gap-3 px-1 py-2.5 text-left transition active:bg-[#F8FAFC]"
+            onClick={openScheduleSheet}
+            type="button"
+          >
+            <span className="w-[74px] shrink-0 text-sm font-black text-[#0F172A]">
+              Schedule
+            </span>
+            <ScheduleCalendarIcon />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-black text-[#0F172A]">
+                {mobileScheduleDateLabel}
+              </span>
+              <span className="mt-0.5 block truncate text-xs font-bold text-[#64748B]">
+                {mobileScheduleTimeLabel}
+              </span>
+            </span>
+            <span
+              aria-hidden="true"
+              className="flex min-h-10 w-7 shrink-0 items-center justify-end text-xl font-black leading-none text-[#2563EB]"
+            >
+              ✎
+            </span>
+          </button>
+        </section>
+
+        <section className="border-b border-[#E5E7EB] bg-white lg:hidden">
+          <button
+            className="grid min-h-12 w-full grid-cols-[94px_minmax(0,1fr)] items-center gap-3 px-1 text-left transition active:bg-[#F8FAFC]"
+            onClick={() => openJobDetailsSheet("jobType")}
+            type="button"
+          >
+            <span className="py-3 text-sm font-black text-[#0F172A]">
+              Job Name
+            </span>
+            <span className="flex min-w-0 items-center gap-3 border-b border-[#E5E7EB] py-3">
+              <span className="min-w-0 flex-1 truncate text-right text-sm font-bold text-[#334155]">
+                {jobSummaryTitle}
+              </span>
+              <span aria-hidden="true" className="w-7 shrink-0 text-right text-xl font-black text-[#2563EB]">
+                ✎
+              </span>
+            </span>
+          </button>
+          <button
+            className="grid min-h-12 w-full grid-cols-[94px_minmax(0,1fr)] items-center gap-3 px-1 text-left transition active:bg-[#F8FAFC]"
+            onClick={() => openJobDetailsSheet("problem")}
+            type="button"
+          >
+            <span className="py-3 text-sm font-black text-[#0F172A]">
+              Description
+            </span>
+            <span className="flex min-w-0 items-center gap-3 border-b border-[#E5E7EB] py-3">
+              <span className="min-w-0 flex-1 truncate text-right text-sm font-bold text-[#334155]">
+                {jobSummaryComplaint}
+              </span>
+              <span aria-hidden="true" className="w-7 shrink-0 text-right text-xl font-black text-[#2563EB]">
+                ✎
+              </span>
+            </span>
+          </button>
+          <button
+            className="grid min-h-12 w-full grid-cols-[94px_minmax(0,1fr)] items-center gap-3 px-1 text-left transition active:bg-[#F8FAFC]"
+            onClick={() => openJobDetailsSheet("tags")}
+            type="button"
+          >
+            <span className="py-3 text-sm font-black text-[#0F172A]">
+              Tags
+            </span>
+            <span className="flex min-w-0 items-center gap-3 py-3">
+              <span className="flex min-w-0 flex-1 items-center justify-end gap-1 overflow-hidden">
+                {visibleTags.length > 0 ? (
+                  visibleTags.map((tag) => (
+                    <span
+                      className={`max-w-[92px] truncate rounded-full border px-2 py-0.5 text-[11px] font-black ${toTagToneClass(tag.tone)}`}
+                      key={tag.id}
+                    >
+                      {tag.name}
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-sm font-bold text-[#94A3B8]">No tags</span>
+                )}
+                {hiddenTagsCount > 0 ? (
+                  <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-black text-slate-700">
+                    +{hiddenTagsCount}
+                  </span>
+                ) : null}
+              </span>
+              <span aria-hidden="true" className="w-7 shrink-0 text-right text-xl font-black text-[#2563EB]">
+                +
+              </span>
+            </span>
+          </button>
+          {jobDetailsState.status === "error" ? (
+            <p className="border-t border-[#E5E7EB] px-1 py-2 text-xs font-bold text-amber-700">
+              {jobDetailsState.error}
+            </p>
+          ) : null}
+        </section>
+
+        <section className="border-b border-[#E5E7EB] bg-white lg:hidden">
+          <button
+            aria-label="Assign technician"
+            className="grid min-h-12 w-full grid-cols-[94px_minmax(0,1fr)] items-center gap-3 px-1 text-left transition active:bg-[#F8FAFC]"
+            onClick={openTechnicianSheet}
+            type="button"
+          >
+            <span className="py-3 text-sm font-black text-[#0F172A]">
+              Technician
+            </span>
+            <span className="flex min-w-0 items-center gap-2 py-3">
+              {request.assignedTechnicianProfileId ? (
+                <span
+                  aria-hidden="true"
+                  className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-black text-white"
+                  style={{ backgroundColor: assignedTechnicianAvatarColor }}
+                >
+                  {assignedTechnicianInitials}
+                </span>
+              ) : null}
+              <span className="min-w-0 flex-1 text-right">
+                <span className="block truncate text-sm font-bold text-[#334155]">
+                  {mobileAssignedTechnicianLabel}
+                </span>
+                <span className="mt-0.5 block truncate text-xs font-bold text-[#94A3B8]">
+                  {assignedTechnicianMeta}
+                </span>
+              </span>
+              <span aria-hidden="true" className="w-7 shrink-0 text-right text-xl font-black text-[#2563EB]">
+                ✎
+              </span>
+            </span>
+          </button>
+          {technicianAssignmentSaveState.status === "error" ? (
+            <p className="border-t border-[#E5E7EB] px-1 py-2 text-xs font-bold text-amber-700">
+              {technicianAssignmentSaveState.message}
+            </p>
+          ) : null}
+        </section>
+
+        <section className="border-b border-[#E5E7EB] bg-white lg:hidden">
+          <div
+            className="grid min-h-12 w-full grid-cols-[minmax(0,1fr)_96px] items-center gap-3 px-1 text-left transition active:bg-[#F8FAFC]"
+            onClick={() => openAttachmentGallery()}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                openAttachmentGallery();
+              }
+            }}
+          >
+            <span className="flex min-w-0 items-center gap-3 py-3">
+              <span className="text-sm font-black text-[#0F172A]">
+                Attachments
+              </span>
+              <span className="min-w-0 truncate text-xs font-bold text-[#64748B]">
+                {attachmentCountLabel}
+              </span>
+            </span>
+            <span className="flex items-center justify-end gap-1">
               <button
-                className={getWorkflowActionClasses(action.tone)}
-                disabled={
-                  statusUpdateState.status === "saving" ||
-                  request.status === action.status
-                }
-                key={action.label}
-                onClick={() => void updateStatus(action.status)}
+                aria-label="Take attachment photo"
+                className="flex min-h-11 min-w-11 items-center justify-center rounded-full text-[#2563EB] transition active:bg-blue-50 disabled:cursor-wait disabled:opacity-50"
+                disabled={photoSaveState.status === "saving"}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openAttachmentCameraPicker();
+                }}
                 type="button"
               >
-                <span className="block">{action.label}</span>
-                <span className="mt-0.5 block text-[11px] font-bold opacity-75">
-                  {action.helper}
-                </span>
+                <AttachmentCameraIcon />
               </button>
-            ))}
+              <button
+                aria-label="Choose attachment from gallery"
+                className="flex min-h-11 min-w-11 items-center justify-center rounded-full text-[#2563EB] transition active:bg-blue-50 disabled:cursor-wait disabled:opacity-50"
+                disabled={photoSaveState.status === "saving"}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openAttachmentGalleryPicker();
+                }}
+                type="button"
+              >
+                <AttachmentGalleryIcon />
+              </button>
+            </span>
+          </div>
+          {photosState.photos.length > 0 ? (
+            <div className="flex items-center gap-2 px-1 pb-3">
+              {attachmentPreviewPhotos.map((photo, index) => (
+                <button
+                  aria-label={`Open attachment ${index + 1} of ${photosState.photos.length}`}
+                  className="relative h-14 w-14 shrink-0 overflow-hidden rounded-xl bg-[#F1F5F9] text-xs font-bold text-[#64748B] transition active:scale-[0.98]"
+                  key={photo.id}
+                  onClick={() => openAttachmentGallery(index)}
+                  type="button"
+                >
+                  {photo.signedUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      alt={photo.originalFilename ?? photoTypeLabels[photo.photoType]}
+                      className="h-full w-full object-cover"
+                      loading="lazy"
+                      src={photo.signedUrl}
+                    />
+                  ) : (
+                    <span className="flex h-full w-full items-center justify-center px-1 text-center">
+                      Preview unavailable
+                    </span>
+                  )}
+                </button>
+              ))}
+              {attachmentOverflowCount > 0 ? (
+                <button
+                  aria-label={`Open ${attachmentOverflowCount} more attachments`}
+                  className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-[#F1F5F9] text-sm font-black text-[#334155] transition active:scale-[0.98]"
+                  onClick={() => openAttachmentGallery(3)}
+                  type="button"
+                >
+                  +{attachmentOverflowCount}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+          <input
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={(event) => {
+              const file = event.target.files?.[0] ?? null;
+              event.target.value = "";
+              void uploadAttachmentFile(file);
+            }}
+            ref={attachmentCameraInputRef}
+            type="file"
+          />
+          <input
+            accept="image/*"
+            className="hidden"
+            onChange={(event) => {
+              const file = event.target.files?.[0] ?? null;
+              event.target.value = "";
+              void uploadAttachmentFile(file);
+            }}
+            ref={attachmentGalleryInputRef}
+            type="file"
+          />
+          {photoSaveState.status === "saving" ? (
+            <p className="border-t border-[#E5E7EB] px-1 py-2 text-xs font-bold text-[#64748B]">
+              Uploading photo...
+            </p>
+          ) : photoSaveState.status === "error" && photoSaveState.message ? (
+            <p className="border-t border-[#E5E7EB] px-1 py-2 text-xs font-bold text-amber-700">
+              {photoSaveState.message}
+            </p>
+          ) : null}
+        </section>
+
+        <div className="hidden rounded-2xl border border-[#E5E7EB] bg-white p-4 lg:block">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.16em] text-[#0F6BFF]">
+                Schedule
+              </p>
+              <h2 className="mt-1 text-lg font-black text-[#0F172A]">
+                {scheduledDateLabel}
+              </h2>
+              <p className="mt-1 text-sm font-semibold text-[#64748B]">
+                {scheduledTimeLabel}
+              </p>
+            </div>
+            <button
+              className="rounded-[10px] border border-[#E5E7EB] px-3 py-2 text-xs font-black text-[#334155] transition hover:border-[#0F6BFF] hover:text-[#0F6BFF]"
+              onClick={() => setActiveJobTab("appointment")}
+              type="button"
+            >
+              Edit
+            </button>
+          </div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+            <div className="rounded-[12px] border border-[#E5E7EB] bg-[#F8FAFC] p-3">
+              <p className="text-[11px] font-black uppercase tracking-[0.14em] text-[#64748B]">
+                Assigned
+              </p>
+              <p className="mt-1 text-sm font-semibold text-[#334155]">
+                {assignedTechnicianLabel}
+              </p>
+            </div>
+            <div className="rounded-[12px] border border-[#E5E7EB] bg-[#F8FAFC] p-3">
+              <p className="text-[11px] font-black uppercase tracking-[0.14em] text-[#64748B]">
+                Location
+              </p>
+              <p className="mt-1 text-sm font-semibold text-[#334155]">
+                {shortLocation || "Location not set"}
+              </p>
+            </div>
           </div>
         </div>
       </section>
 
-      <section className="mt-4 grid gap-4 xl:grid-cols-2">
+      <section className="hidden lg:mt-3 lg:grid lg:gap-3 xl:grid-cols-[1fr_1fr]">
         <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
-                Appliance and diagnosis
+            <div className="min-w-0">
+              <p className="text-xs font-black uppercase tracking-[0.16em] text-[#0F6BFF]">
+                Appliance / Problem
               </p>
               <h2 className="mt-1 text-lg font-black text-[#0F172A]">
                 {request.applianceBrand ?? "Unknown brand"} {request.applianceType}
@@ -4755,29 +8690,20 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
               onClick={() => setActiveJobTab("estimate")}
               type="button"
             >
-              Repair Intelligence
+              Estimate
             </button>
           </div>
-          <div className="mt-4 rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] p-3">
-            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-[#64748B]">
+          <div className="mt-3 rounded-[12px] border border-[#E5E7EB] bg-[#F8FAFC] p-3">
+            <p className="text-[11px] font-black uppercase tracking-[0.14em] text-[#64748B]">
               Customer complaint
             </p>
             <p className="mt-1 text-sm font-semibold leading-6 text-[#334155]">
               {request.issueDescription}
             </p>
           </div>
-          <div className="mt-3 rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] p-3">
-            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-[#64748B]">
-              Latest technician findings
-            </p>
-            <p className="mt-1 text-sm font-semibold leading-6 text-[#334155]">
-              {latestDiagnosticNote?.body ??
-                "No diagnostic findings recorded yet."}
-            </p>
-          </div>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <div className="rounded-[10px] border border-[#E5E7EB] bg-white p-3">
-              <p className="text-[11px] font-black uppercase tracking-[0.16em] text-[#64748B]">
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            <div className="rounded-[12px] border border-[#E5E7EB] bg-white p-3">
+              <p className="text-[11px] font-black uppercase tracking-[0.14em] text-[#64748B]">
                 Estimate
               </p>
               <p className="mt-1 text-sm font-semibold text-[#334155]">
@@ -4788,8 +8714,8 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                   : "No estimate yet"}
               </p>
             </div>
-            <div className="rounded-[10px] border border-[#E5E7EB] bg-white p-3">
-              <p className="text-[11px] font-black uppercase tracking-[0.16em] text-[#64748B]">
+            <div className="rounded-[12px] border border-[#E5E7EB] bg-white p-3">
+              <p className="text-[11px] font-black uppercase tracking-[0.14em] text-[#64748B]">
                 Invoice
               </p>
               <p className="mt-1 text-sm font-semibold text-[#334155]">
@@ -4804,23 +8730,26 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
         </div>
 
         <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
-          <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
+          <p className="text-xs font-black uppercase tracking-[0.16em] text-[#0F6BFF]">
             Technician findings
           </p>
           <h2 className="mt-1 text-lg font-black text-[#0F172A]">
-            Voice-ready note capture
+            Diagnosis notes
           </h2>
-          <p className="mt-1 text-sm font-semibold leading-6 text-[#64748B]">
-            Type or dictate findings here. Saved findings become diagnostic notes and feed the repair history.
-          </p>
+          {latestDiagnosticNote ? (
+            <p className="mt-2 rounded-[12px] border border-[#E5E7EB] bg-[#F8FAFC] p-3 text-sm font-semibold leading-6 text-[#334155]">
+              {latestDiagnosticNote.body}
+            </p>
+          ) : null}
           <textarea
-            className="mt-3 min-h-28 w-full rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-3 text-sm font-semibold text-[#0F172A] outline-none transition placeholder:text-[#94A3B8] focus:border-[#0F6BFF]"
+            ref={technicianFindingsInputRef}
+            className="mt-3 min-h-28 w-full rounded-[12px] border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-3 text-sm font-semibold text-[#0F172A] outline-none transition placeholder:text-[#94A3B8] focus:border-[#0F6BFF]"
             disabled={technicianFindingsSaveState.status === "saving"}
             onChange={(event) => {
               setTechnicianFindingsDraft(event.target.value);
               setTechnicianFindingsSaveState({ status: "idle", message: null });
             }}
-            placeholder="Example: Evaporator packed with ice. Fan not spinning. Need defrost heater and fan motor."
+            placeholder="Type or dictate findings. Example: Evaporator packed with ice. Fan not spinning."
             value={technicianFindingsDraft}
           />
           <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -4842,7 +8771,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
               onClick={() => setActiveJobTab("notes")}
               type="button"
             >
-              Open Notes
+              Notes
             </button>
           </div>
           {technicianFindingsSaveState.message ? (
@@ -4859,74 +8788,145 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
         </div>
       </section>
 
-      <section className="mt-4 grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
-        <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
-          <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
-            Parts workflow
-          </p>
-          <h2 className="mt-1 text-lg font-black text-[#0F172A]">
-            {partsWorkflowLabel}
-          </h2>
-          <p className="mt-2 text-sm font-semibold leading-6 text-[#64748B]">
-            {latestPartsNote?.body ??
-              "Use the parts statuses when a repair needs ordering, receiving, or a return visit."}
-          </p>
-          <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            {[
-              ["Parts Needed", "parts_needed"],
-              ["Parts Ordered", "parts_ordered"],
-              ["Parts Received", "parts_received"],
-              ["Return Visit", "return_visit_scheduled"],
-            ].map(([label, status]) => (
-              <button
-                className="rounded-[10px] border border-amber-200 bg-amber-50 px-3 py-2.5 text-left text-xs font-black text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-45"
-                disabled={
-                  statusUpdateState.status === "saving" ||
-                  request.status === status
-                }
-                key={status}
-                onClick={() => void updateStatus(status as ServiceRequestCrmStatus)}
-                type="button"
+      <section className="mt-3 hidden rounded-2xl border border-[#E5E7EB] bg-white p-4 lg:block">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.16em] text-[#0F6BFF]">
+              Photos / Attachments
+            </p>
+            <h2 className="mt-1 text-lg font-black text-[#0F172A]">
+              Add repair photos fast
+            </h2>
+            <p className="mt-1 text-sm font-semibold text-[#64748B]">
+              {photosState.photos.length} photo{photosState.photos.length === 1 ? "" : "s"} attached
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              className="rounded-[10px] bg-[#0F6BFF] px-4 py-3 text-sm font-black text-white transition hover:bg-[#0057D9]"
+              onClick={() => setActiveJobTab("photos")}
+              type="button"
+            >
+              Add Photo
+            </button>
+            <button
+              className="rounded-[10px] border border-[#E5E7EB] px-4 py-3 text-sm font-black text-[#334155] transition hover:border-[#0F6BFF] hover:text-[#0F6BFF]"
+              onClick={() => setActiveJobTab("photos")}
+              type="button"
+            >
+              Gallery
+            </button>
+          </div>
+        </div>
+        {recentPhotos.length > 0 ? (
+          <div className="mt-3 grid grid-cols-3 gap-2 sm:max-w-md">
+            {recentPhotos.map((photo) => (
+              <div
+                className="aspect-square overflow-hidden rounded-[12px] border border-[#E5E7EB] bg-[#F8FAFC]"
+                key={photo.id}
               >
-                {label}
-              </button>
+                <div
+                  aria-label={photo.originalFilename ?? "Service request photo"}
+                  className="h-full w-full bg-cover bg-center"
+                  role="img"
+                  style={getBackgroundImageStyle(photo.signedUrl ?? "")}
+                />
+              </div>
             ))}
           </div>
-        </div>
-        <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
-          <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
-            Customer repair history
-          </p>
-          <h2 className="mt-1 text-lg font-black text-[#0F172A]">
-            Current job history
-          </h2>
-          <div className="mt-3 grid gap-2 sm:grid-cols-3">
-            <div className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] p-3">
-              <p className="text-2xl font-black text-[#0F172A]">
-                {notesState.notes.length}
-              </p>
-              <p className="text-xs font-bold text-[#64748B]">Notes</p>
-            </div>
-            <div className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] p-3">
-              <p className="text-2xl font-black text-[#0F172A]">
-                {photosState.photos.length}
-              </p>
-              <p className="text-xs font-bold text-[#64748B]">Photos</p>
-            </div>
-            <div className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] p-3">
-              <p className="text-2xl font-black text-[#0F172A]">
-                {timelineItems.length}
-              </p>
-              <p className="text-xs font-bold text-[#64748B]">Timeline</p>
-            </div>
-          </div>
-          <p className="mt-3 text-sm font-semibold leading-6 text-[#64748B]">
-            Previous repairs from linked customer history are not attached to this job yet. Current job activity is available in Timeline.
-          </p>
-        </div>
+        ) : null}
       </section>
 
-      <section className="mt-6 rounded-2xl border border-[#E5E7EB] bg-white p-4">
+      <details className="mt-3 hidden rounded-2xl border border-[#E5E7EB] bg-white p-4 lg:block">
+        <summary className="cursor-pointer text-sm font-black text-[#0F172A]">
+          More job controls
+        </summary>
+        <div className="mt-4 grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.16em] text-[#0F6BFF]">
+              Status workflow
+            </p>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {workflowActions.map((action) => (
+                <button
+                  className={getWorkflowActionClasses(action.tone)}
+                  disabled={
+                    statusUpdateState.status === "saving" ||
+                    request.status === action.status
+                  }
+                  key={action.label}
+                  onClick={() => void updateStatus(action.status)}
+                  type="button"
+                >
+                  <span className="block">{action.label}</span>
+                  <span className="mt-0.5 block text-[11px] font-bold opacity-75">
+                    {action.helper}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.16em] text-[#0F6BFF]">
+              Parts
+            </p>
+            <h2 className="mt-1 text-lg font-black text-[#0F172A]">
+              {partsWorkflowLabel}
+            </h2>
+            <p className="mt-2 text-sm font-semibold leading-6 text-[#64748B]">
+              {latestPartsNote?.body ??
+                "Use parts statuses only when ordering, receiving, or scheduling a return visit."}
+            </p>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {[
+                ["Parts Needed", "parts_needed"],
+                ["Parts Ordered", "parts_ordered"],
+                ["Parts Received", "parts_received"],
+                ["Return Visit", "return_visit_scheduled"],
+              ].map(([label, status]) => (
+                <button
+                  className="rounded-[10px] border border-amber-200 bg-amber-50 px-3 py-2.5 text-left text-xs font-black text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-45"
+                  disabled={
+                    statusUpdateState.status === "saving" ||
+                    request.status === status
+                  }
+                  key={status}
+                  onClick={() => void updateStatus(status as ServiceRequestCrmStatus)}
+                  type="button"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="mt-4 grid gap-2 sm:grid-cols-3">
+          <div className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] p-3">
+            <p className="text-xl font-black text-[#0F172A]">
+              {notesState.notes.length}
+            </p>
+            <p className="text-xs font-bold text-[#64748B]">Notes</p>
+          </div>
+          <div className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] p-3">
+            <p className="text-xl font-black text-[#0F172A]">
+              {photosState.photos.length}
+            </p>
+            <p className="text-xs font-bold text-[#64748B]">Photos</p>
+          </div>
+          <div className="rounded-[10px] border border-[#E5E7EB] bg-[#F8FAFC] p-3">
+            <p className="text-xl font-black text-[#0F172A]">
+              {timelineItems.length}
+            </p>
+            <p className="text-xs font-bold text-[#64748B]">Timeline</p>
+          </div>
+        </div>
+      </details>
+
+      <details className="mt-3 hidden rounded-2xl border border-[#E5E7EB] bg-white p-4 lg:block">
+        <summary className="cursor-pointer text-sm font-black text-[#0F172A]">
+          Service address details
+        </summary>
+        <div className="mt-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#0F6BFF]">
@@ -5219,7 +9219,8 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
             {addressSaveState.message}
           </p>
         ) : null}
-      </section>
+        </div>
+      </details>
         </>
       ) : null}
 
@@ -5825,40 +9826,6 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
         ) : null}
       </section>
 
-      ) : null}
-
-      {activeJobTab === "overview" ? (
-        <>
-      <dl className="mt-8 grid gap-4 lg:grid-cols-2">
-        {[
-          ["Customer", request.customerName],
-          ["Platform phone action", request.customerPhone ? "Call via Platform" : "Not provided"],
-          ["Customer email", request.customerEmail ?? "Not provided"],
-          ["Location", `${request.city ? `${request.city}, ` : ""}${request.state} ${request.zipCode}`],
-          ["Appliance", `${request.applianceBrand ?? "Unknown brand"} ${request.applianceType}`],
-          ["Model", request.applianceModel ?? "Not provided"],
-          ["Preferred window", request.preferredTimeWindow ?? "Not provided"],
-          ["Scheduled window", scheduledWindowLabel ?? "Not scheduled"],
-          ["Selected technician", request.selectedTechnicianBusinessName ?? "Unassigned"],
-          ["Technician slug", request.selectedTechnicianSlug ?? "None"],
-          ["Source", formatServiceRequestSource(request.requestSource)],
-        ].map(([label, value]) => (
-          <div className="rounded-md border border-[#E5E7EB] bg-white p-4" key={label}>
-            <dt className="text-xs font-bold uppercase tracking-[0.18em] text-[#64748B]">
-              {label}
-            </dt>
-            <dd className="mt-2 text-sm leading-6 text-[#334155]">{value}</dd>
-          </div>
-        ))}
-      </dl>
-
-      <div className="mt-5 rounded-md border border-[#E5E7EB] bg-white p-4">
-        <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#64748B]">
-          Issue description
-        </p>
-        <p className="mt-2 leading-7 text-[#334155]">{request.issueDescription}</p>
-      </div>
-        </>
       ) : null}
 
       {activeJobTab === "estimate" ? (
@@ -6888,6 +10855,200 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
         </div>
         ) : null}
       </section>
+      ) : null}
+
+      {isAttachmentGalleryOpen ? (
+        <div className="fixed inset-0 z-50 flex flex-col bg-white lg:hidden">
+          <div className="flex shrink-0 items-center justify-between border-b border-[#E5E7EB] px-4 py-3">
+            <div>
+              <p className="text-lg font-black text-[#0F172A]">Attachments</p>
+              <p className="text-xs font-bold text-[#64748B]">
+                {attachmentCountLabel}
+              </p>
+            </div>
+            <button
+              aria-label="Close attachments"
+              className="flex min-h-11 min-w-11 items-center justify-center rounded-full text-2xl font-light text-[#334155] transition active:bg-[#F1F5F9]"
+              onClick={closeAttachmentGallery}
+              type="button"
+            >
+              ×
+            </button>
+          </div>
+
+          {activeAttachment ? (
+            <div className="flex min-h-0 flex-1 flex-col bg-[#0F172A] text-white">
+              <div className="flex shrink-0 items-center justify-between px-4 py-3">
+                <button
+                  className="text-sm font-bold text-white/80"
+                  onClick={() => setActiveAttachmentIndex(null)}
+                  type="button"
+                >
+                  Gallery
+                </button>
+                <p className="text-sm font-black">
+                  {(activeAttachmentIndex ?? 0) + 1} of {photosState.photos.length}
+                </p>
+                <button
+                  aria-label="Close attachment viewer"
+                  className="flex min-h-11 min-w-11 items-center justify-center rounded-full text-2xl font-light text-white transition active:bg-white/10"
+                  onClick={closeAttachmentGallery}
+                  type="button"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="flex min-h-0 flex-1 items-center justify-center px-3">
+                {activeAttachment.signedUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    alt={
+                      activeAttachment.originalFilename ??
+                      photoTypeLabels[activeAttachment.photoType]
+                    }
+                    className="max-h-full max-w-full object-contain"
+                    src={activeAttachment.signedUrl}
+                  />
+                ) : (
+                  <div className="rounded-2xl bg-white/10 px-4 py-6 text-center text-sm font-bold text-white/80">
+                    Photo uploaded, but preview could not be loaded.
+                  </div>
+                )}
+              </div>
+              <div className="shrink-0 px-4 pb-5 pt-3">
+                <div className="flex items-center justify-between">
+                  <button
+                    aria-label="Previous attachment"
+                    className="flex min-h-11 min-w-20 items-center justify-center rounded-full bg-white/10 px-4 text-sm font-black text-white disabled:opacity-35"
+                    disabled={photosState.photos.length < 2}
+                    onClick={showPreviousAttachment}
+                    type="button"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    aria-label="Next attachment"
+                    className="flex min-h-11 min-w-20 items-center justify-center rounded-full bg-white/10 px-4 text-sm font-black text-white disabled:opacity-35"
+                    disabled={photosState.photos.length < 2}
+                    onClick={showNextAttachment}
+                    type="button"
+                  >
+                    Next
+                  </button>
+                </div>
+                <div className="mt-4 rounded-2xl bg-white/10 p-3">
+                  <p className="truncate text-sm font-black">
+                    {activeAttachment.originalFilename ??
+                      photoTypeLabels[activeAttachment.photoType]}
+                  </p>
+                  <p className="mt-1 text-xs font-bold text-white/70">
+                    Uploaded {formatServiceRequestDate(activeAttachment.createdAt)}
+                  </p>
+                  <p className="mt-1 text-xs font-bold text-white/70">
+                    {photoTypeLabels[activeAttachment.photoType]}
+                  </p>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div className="grid grid-cols-2 gap-2 border-b border-[#E5E7EB] px-4 py-3">
+                <button
+                  className="flex min-h-11 items-center justify-center rounded-xl bg-[#EEF6FF] px-3 text-sm font-black text-[#2563EB] disabled:cursor-wait disabled:opacity-50"
+                  disabled={photoSaveState.status === "saving"}
+                  onClick={openAttachmentCameraPicker}
+                  type="button"
+                >
+                  Camera
+                </button>
+                <button
+                  className="flex min-h-11 items-center justify-center rounded-xl bg-[#EEF6FF] px-3 text-sm font-black text-[#2563EB] disabled:cursor-wait disabled:opacity-50"
+                  disabled={photoSaveState.status === "saving"}
+                  onClick={openAttachmentGalleryPicker}
+                  type="button"
+                >
+                  Add from Gallery
+                </button>
+              </div>
+              {photoSaveState.status === "saving" ? (
+                <p className="px-4 py-3 text-sm font-bold text-[#64748B]">
+                  Uploading photo...
+                </p>
+              ) : photoSaveState.status === "error" && photoSaveState.message ? (
+                <p className="mx-4 mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-800">
+                  {photoSaveState.message}
+                </p>
+              ) : null}
+              {photosState.status === "loading" ? (
+                <div className="grid grid-cols-3 gap-2 p-4">
+                  {[0, 1, 2, 3, 4, 5].map((item) => (
+                    <div
+                      className="aspect-square animate-pulse rounded-2xl bg-[#F1F5F9]"
+                      key={item}
+                    />
+                  ))}
+                </div>
+              ) : null}
+              {photosState.status === "error" ? (
+                <div className="m-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                  <p className="text-sm font-bold text-amber-800">
+                    Attachment list could not be loaded.
+                  </p>
+                  <p className="mt-1 text-xs font-semibold text-amber-700">
+                    {photosState.error}
+                  </p>
+                  <button
+                    className="mt-3 text-sm font-black text-[#2563EB]"
+                    onClick={() => void loadPhotos()}
+                    type="button"
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : null}
+              {photosState.status === "ready" && photosState.photos.length === 0 ? (
+                <div className="flex flex-1 items-center justify-center px-6 text-center">
+                  <div>
+                    <p className="text-lg font-black text-[#0F172A]">
+                      No attachments yet
+                    </p>
+                    <p className="mt-2 text-sm font-semibold leading-6 text-[#64748B]">
+                      Add a photo from the camera or gallery when the job needs
+                      visual documentation.
+                    </p>
+                  </div>
+                </div>
+              ) : null}
+              {photosState.photos.length > 0 ? (
+                <div className="grid grid-cols-3 gap-2 overflow-y-auto p-4">
+                  {photosState.photos.map((photo, index) => (
+                    <button
+                      aria-label={`Open attachment ${index + 1} of ${photosState.photos.length}`}
+                      className="overflow-hidden rounded-2xl bg-[#F1F5F9] text-xs font-bold text-[#64748B] transition active:scale-[0.98]"
+                      key={photo.id}
+                      onClick={() => setActiveAttachmentIndex(index)}
+                      type="button"
+                    >
+                      {photo.signedUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          alt={photo.originalFilename ?? photoTypeLabels[photo.photoType]}
+                          className="aspect-square w-full object-cover"
+                          loading="lazy"
+                          src={photo.signedUrl}
+                        />
+                      ) : (
+                        <span className="flex aspect-square w-full items-center justify-center px-2 text-center">
+                          Preview unavailable
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          )}
+        </div>
       ) : null}
 
       <Link className="mt-6 inline-flex text-sm font-bold text-[#0F6BFF]" href="/dashboard/leads">

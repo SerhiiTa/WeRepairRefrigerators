@@ -479,6 +479,17 @@ export type Database = {
           slug: string;
           primary_city: string | null;
           primary_state: string | null;
+          base_address_line1?: string | null;
+          base_address_line2?: string | null;
+          base_city?: string | null;
+          base_state?: string | null;
+          base_zip?: string | null;
+          base_country?: string | null;
+          base_formatted_address?: string | null;
+          base_latitude?: number | null;
+          base_longitude?: number | null;
+          base_place_id?: string | null;
+          base_address_updated_at?: string | null;
           business_phone: string | null;
           business_email: string | null;
           website_url: string | null;
@@ -531,6 +542,8 @@ export type Database = {
           full_name: string;
           phone: string | null;
           email: string | null;
+          avatar_storage_path?: string | null;
+          avatar_updated_at?: string | null;
           preferred_contact_method: DatabaseCustomerContactMethod | null;
           customer_status: DatabaseCustomerStatus;
           notes: string | null;
@@ -807,6 +820,10 @@ export type Database = {
           appliance_type: string;
           appliance_brand: string | null;
           appliance_model: string | null;
+          job_type_id?: string | null;
+          job_name?: string | null;
+          problem_type_id?: string | null;
+          marketing_source_id?: string | null;
           issue_description: string;
           full_address: string | null;
           street_address: string | null;
@@ -828,6 +845,8 @@ export type Database = {
           scheduled_window_end_time: string | null;
           request_source: string;
           status: DatabaseServiceRequestStatus;
+          job_client_avatar_storage_path?: string | null;
+          job_client_avatar_updated_at?: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -848,6 +867,17 @@ export type Database = {
           bio_private: string | null;
           primary_city: string | null;
           primary_state: string | null;
+          base_address_line1?: string | null;
+          base_address_line2?: string | null;
+          base_city?: string | null;
+          base_state?: string | null;
+          base_zip?: string | null;
+          base_country?: string | null;
+          base_formatted_address?: string | null;
+          base_latitude?: number | null;
+          base_longitude?: number | null;
+          base_place_id?: string | null;
+          base_address_updated_at?: string | null;
           service_zip_codes: string[];
           service_cities: string[];
           appliance_categories: string[];
@@ -1203,6 +1233,10 @@ export type Database = {
         Args: Record<string, never>;
         Returns: DatabaseAppRole;
       };
+      current_dashboard_company_id: {
+        Args: Record<string, never>;
+        Returns: string | null;
+      };
       update_service_request_status_rpc: {
         Args: {
           p_request_id: string;
@@ -1266,6 +1300,32 @@ export type Database = {
           p_brands_serviced?: string[] | null;
           p_avatar_color?: string | null;
           p_marketplace_enabled?: boolean | null;
+          p_base_address_line1?: string | null;
+          p_base_address_line2?: string | null;
+          p_base_city?: string | null;
+          p_base_state?: string | null;
+          p_base_zip?: string | null;
+          p_base_country?: string | null;
+          p_base_formatted_address?: string | null;
+          p_base_latitude?: number | null;
+          p_base_longitude?: number | null;
+          p_base_place_id?: string | null;
+        };
+        Returns: Json;
+      };
+      update_company_base_address_rpc: {
+        Args: {
+          p_company_id: string;
+          p_base_address_line1?: string | null;
+          p_base_address_line2?: string | null;
+          p_base_city?: string | null;
+          p_base_state?: string | null;
+          p_base_zip?: string | null;
+          p_base_country?: string | null;
+          p_base_formatted_address?: string | null;
+          p_base_latitude?: number | null;
+          p_base_longitude?: number | null;
+          p_base_place_id?: string | null;
         };
         Returns: Json;
       };
