@@ -332,7 +332,7 @@ async function fetchHasDataProperty(
 
 const getCachedPropertyIntelligence = unstable_cache(
   async (normalizedAddress: string) => fetchHasDataProperty(normalizedAddress),
-  ["property-intelligence-hasdata-zillow-v5"],
+  ["property-intelligence-hasdata-zillow-v6"],
   {
     revalidate: PROPERTY_INTELLIGENCE_CACHE_SECONDS,
   },
