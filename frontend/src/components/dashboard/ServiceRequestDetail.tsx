@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { ManualEstimateEditor } from "@/components/dashboard/ManualEstimateEditor";
 import { StatusBadge } from "@/components/StatusBadge";
 import {
   buildAppleMapsUrl,
@@ -74,6 +75,7 @@ import type {
   TechnicianAvailabilityRuleRow,
   TechnicianProfileRow,
 } from "@/lib/supabase/types";
+import { calculateRepairProposalTotals } from "@/server/finance/repair-proposal-calculations";
 
 type ServiceRequestDetailProps = {
   requestId: string;
@@ -137,6 +139,191 @@ type ClientAvatarState = {
   signedUrl: string | null;
   owner: "customer" | "service_request" | null;
 };
+
+type FinanceHomeIconName =
+  | "approved"
+  | "wallet"
+  | "invoice"
+  | "estimates"
+  | "payments"
+  | "expenses"
+  | "create"
+  | "sparkle"
+  | "mic"
+  | "note"
+  | "photo"
+  | "upload"
+  | "more";
+
+function FinanceHomeIcon({
+  name,
+  className,
+}: {
+  name: FinanceHomeIconName;
+  className?: string;
+}) {
+  const commonProps = {
+    className: className ?? "h-6 w-6",
+    fill: "none",
+    stroke: "currentColor",
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    strokeWidth: 2.2,
+    viewBox: "0 0 24 24",
+  };
+
+  if (name === "approved") {
+    return (
+      <svg {...commonProps} aria-hidden="true">
+        <path d="M20 6 9 17l-5-5" />
+        <path d="M21 12a9 9 0 1 1-3.1-6.8" />
+      </svg>
+    );
+  }
+
+  if (name === "wallet") {
+    return (
+      <svg {...commonProps} aria-hidden="true">
+        <path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H20v14H6.5A2.5 2.5 0 0 1 4 16.5v-9Z" />
+        <path d="M4 9h16" />
+        <path d="M15 13h5v4h-5a2 2 0 0 1 0-4Z" />
+      </svg>
+    );
+  }
+
+  if (name === "invoice") {
+    return (
+      <svg {...commonProps} aria-hidden="true">
+        <path d="M6 3h8l4 4v14H6V3Z" />
+        <path d="M14 3v5h5" />
+        <path d="M9 13h6" />
+        <path d="M9 17h5" />
+      </svg>
+    );
+  }
+
+  if (name === "estimates") {
+    return (
+      <svg {...commonProps} aria-hidden="true">
+        <path d="M8 5h9v14H8V5Z" />
+        <path d="M5 8h3v11h9v2H5V8Z" />
+        <path d="M11 9h3" />
+        <path d="M11 13h3" />
+      </svg>
+    );
+  }
+
+  if (name === "payments") {
+    return (
+      <svg {...commonProps} aria-hidden="true">
+        <path d="M4 7h16v10H4V7Z" />
+        <path d="M4 10h16" />
+        <path d="M15 15h2" />
+      </svg>
+    );
+  }
+
+  if (name === "sparkle") {
+    return (
+      <svg {...commonProps} aria-hidden="true">
+        <path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3Z" />
+        <path d="M19 14l.8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8L19 14Z" />
+        <path d="M5 15l.7 1.8L7.5 17.5l-1.8.7L5 20l-.7-1.8-1.8-.7 1.8-.7L5 15Z" />
+      </svg>
+    );
+  }
+
+  if (name === "mic") {
+    return (
+      <svg {...commonProps} aria-hidden="true">
+        <path d="M12 4a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V7a3 3 0 0 0-3-3Z" />
+        <path d="M5 11a7 7 0 0 0 14 0" />
+        <path d="M12 18v3" />
+      </svg>
+    );
+  }
+
+  if (name === "note") {
+    return (
+      <svg {...commonProps} aria-hidden="true">
+        <path d="M6 4h9l3 3v13H6V4Z" />
+        <path d="M15 4v4h4" />
+        <path d="M9 13h5" />
+        <path d="M9 16h4" />
+      </svg>
+    );
+  }
+
+  if (name === "photo") {
+    return (
+      <svg {...commonProps} aria-hidden="true">
+        <path d="M4 8h3l1.5-2h7L17 8h3v11H4V8Z" />
+        <path d="M12 16a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
+      </svg>
+    );
+  }
+
+  if (name === "upload") {
+    return (
+      <svg {...commonProps} aria-hidden="true">
+        <path d="M12 16V5" />
+        <path d="m7 10 5-5 5 5" />
+        <path d="M5 19h14" />
+      </svg>
+    );
+  }
+
+  if (name === "more") {
+    return (
+      <svg {...commonProps} aria-hidden="true">
+        <path d="M5 12h.01" />
+        <path d="M12 12h.01" />
+        <path d="M19 12h.01" />
+      </svg>
+    );
+  }
+
+  if (name === "expenses") {
+    return (
+      <svg {...commonProps} aria-hidden="true">
+        <path d="M6 4h12v16H6V4Z" />
+        <path d="M9 8h6" />
+        <path d="M9 12h4" />
+        <path d="M14 17c0-1.1.9-2 2-2s2 .9 2 2-.9 2-2 2-2-.9-2-2Z" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg {...commonProps} aria-hidden="true">
+      <path d="M6 3h8l4 4v14H6V3Z" />
+      <path d="M14 3v5h5" />
+      <path d="M9 12h4" />
+      <path d="M11 10v4" />
+      <path d="M15 17h4" />
+      <path d="M17 15v4" />
+    </svg>
+  );
+}
+
+function FinanceChevron({ open }: { open?: boolean }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={`h-5 w-5 transition-transform duration-200 ${
+        open ? "rotate-180" : ""
+      }`}
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2.4"
+      viewBox="0 0 24 24"
+    >
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
 
 type ClientDistanceState = {
   label: string;
@@ -447,12 +634,14 @@ type JobWorkspaceTab =
   | "estimate"
   | "appointment";
 
+type FinanceEstimateMode = "home" | "manual" | "ai" | "template" | "saved";
+
 const jobWorkspaceTabs = [
   { id: "overview", label: "Details" },
   { id: "timeline", label: "Timeline" },
   { id: "notes", label: "Notes" },
   { id: "photos", label: "Photos" },
-  { id: "estimate", label: "Estimate" },
+  { id: "estimate", label: "Finance" },
   { id: "appointment", label: "Appointment" },
 ] as const satisfies readonly { id: JobWorkspaceTab; label: string }[];
 
@@ -684,6 +873,30 @@ function hasSavedServiceAddress(request: DashboardServiceRequest): boolean {
       request.city?.trim() ||
       request.zipCode?.trim(),
   );
+}
+
+function formatCustomerAddressSaveError(message: string): string {
+  if (
+    message.includes("dashboard company context") ||
+    message.includes("COMPANY_CONTEXT_MISSING") ||
+    message.includes("current_dashboard_company_id")
+  ) {
+    return "Customer address could not be saved because this dashboard account is missing active company access.";
+  }
+
+  if (message.includes("Customer is not accessible")) {
+    return "This customer is not available from the current dashboard account.";
+  }
+
+  if (message.includes("Address is not accessible")) {
+    return "This saved address is no longer available.";
+  }
+
+  if (message.includes("ZIP") || message.includes("zip")) {
+    return "Enter a valid 5-digit ZIP code before saving the customer address.";
+  }
+
+  return "Customer address could not be saved. Please try again.";
 }
 
 function normalizeAddressComparisonPart(value: string | null | undefined): string {
@@ -1536,6 +1749,19 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     useState<EstimateDraftAgentResult | null>(null);
   const [estimateRepairPlanSummary, setEstimateRepairPlanSummary] =
     useState<EstimateRepairPlanSummary | null>(null);
+  const [isProposalPreviewOpen, setIsProposalPreviewOpen] = useState(false);
+  const [isRepairProposalBuilderOpen, setIsRepairProposalBuilderOpen] =
+    useState(false);
+  const [isRepairScopeSheetOpen, setIsRepairScopeSheetOpen] = useState(false);
+  const [isTemplateSheetOpen, setIsTemplateSheetOpen] = useState(false);
+  const [editingProposalLineId, setEditingProposalLineId] = useState<
+    string | null
+  >(null);
+  const [isAddProposalItemSheetOpen, setIsAddProposalItemSheetOpen] =
+    useState(false);
+  const [proposalEstimatedCompletion, setProposalEstimatedCompletion] =
+    useState("After approval and parts availability are confirmed.");
+  const [isDictatingRepairScope, setIsDictatingRepairScope] = useState(false);
   const [estimateGenerationState, setEstimateGenerationState] = useState<{
     status: "idle" | "generating" | "success" | "error";
     message: string | null;
@@ -1547,6 +1773,9 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
   const [customEstimateLines, setCustomEstimateLines] = useState<
     ProfessionalEstimateCustomLine[]
   >([]);
+  const [hiddenProposalLineIds, setHiddenProposalLineIds] = useState<string[]>(
+    [],
+  );
   const [estimateDiscountType, setEstimateDiscountType] = useState<
     "flat" | "percent"
   >("flat");
@@ -1578,6 +1807,15 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
   );
   const [showEstimateHistory, setShowEstimateHistory] = useState(false);
   const [showInvoiceHistory, setShowInvoiceHistory] = useState(false);
+  const [isFinanceEstimateWorkflowOpen, setIsFinanceEstimateWorkflowOpen] =
+    useState(false);
+  const [financeEstimateMode, setFinanceEstimateMode] =
+    useState<FinanceEstimateMode>("home");
+  const [manualEstimateId, setManualEstimateId] = useState<string | null>(null);
+  const [isFinanceEstimatesOpen, setIsFinanceEstimatesOpen] = useState(false);
+  const [isFinanceInvoiceOpen, setIsFinanceInvoiceOpen] = useState(false);
+  const [isFinancePaymentsOpen, setIsFinancePaymentsOpen] = useState(false);
+  const [isFinanceExpensesOpen, setIsFinanceExpensesOpen] = useState(false);
   const [invoiceActionId, setInvoiceActionId] = useState<string | null>(null);
   const [invoiceActionState, setInvoiceActionState] =
     useState<InvoiceActionState>({ status: "idle", message: null });
@@ -2622,7 +2860,10 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     });
 
     if (error) {
-      setAddressSaveState({ status: "error", message: error.message });
+      setAddressSaveState({
+        status: "error",
+        message: formatCustomerAddressSaveError(error.message),
+      });
       return;
     }
 
@@ -2929,6 +3170,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
   function applyGeneratedEstimateDraft(draft: EstimateDraftAgentResult) {
     setEstimateDraftAgentResult(draft);
     setSelectedCatalogItemIds([]);
+    setHiddenProposalLineIds([]);
     setCustomEstimateLines(
       draft.lines.map((line, index) => ({
         id: buildProfessionalLineId(index),
@@ -2949,6 +3191,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
       status: "idle",
       message: null,
     });
+    setIsRepairProposalBuilderOpen(true);
   }
 
   function summarizeEstimateRepairPlan(
@@ -3174,6 +3417,24 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     setEstimateSaveState({ status: "idle", message: null });
   }
 
+  function updateCustomEstimateLineCost(lineId: string, value: string) {
+    const nextCost = Number(value);
+
+    setCustomEstimateLines((current) =>
+      current.map((line) =>
+        line.id === lineId
+          ? {
+              ...line,
+              unitCost:
+                Number.isFinite(nextCost) && nextCost >= 0 ? nextCost : 0,
+            }
+          : line,
+      ),
+    );
+    setCreatedEstimateSummary(null);
+    setEstimateSaveState({ status: "idle", message: null });
+  }
+
   function updateCustomEstimateLineQuantity(lineId: string, value: string) {
     const nextQuantity = Number(value);
 
@@ -3209,6 +3470,43 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
       ),
     );
     setCreatedEstimateSummary(null);
+    setEstimateSaveState({ status: "idle", message: null });
+  }
+
+  function updateProposalRepairSolution(value: string) {
+    const title = value.slice(0, 160);
+
+    setEstimateDraftAgentResult((current) =>
+      current
+        ? {
+            ...current,
+            title,
+            repairScope: {
+              ...current.repairScope,
+              repairItem: title || current.repairScope.repairItem,
+            },
+          }
+        : current,
+    );
+    setEstimateSaveState({ status: "idle", message: null });
+  }
+
+  function updateProposalCustomerDescription(value: string) {
+    const description = value.slice(0, 900);
+
+    setEstimateDraftAgentResult((current) =>
+      current
+        ? {
+            ...current,
+            customerDescription: description,
+            repairScope: {
+              ...current.repairScope,
+              customerSummary:
+                description || current.repairScope.customerSummary,
+            },
+          }
+        : current,
+    );
     setEstimateSaveState({ status: "idle", message: null });
   }
 
@@ -3314,19 +3612,227 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     ]);
     setCreatedEstimateSummary(null);
     setEstimateSaveState({ status: "idle", message: null });
+    setIsRepairProposalBuilderOpen(true);
+  }
+
+  function createManualRepairProposalDraft() {
+    if (estimateDiagnosisText.trim().length === 0) {
+      setEstimateDiagnosisText(
+        state.status === "ready"
+          ? state.request.issueDescription || "Manual repair proposal"
+          : "Manual repair proposal",
+      );
+    }
+    if (customEstimateLines.length === 0 && selectedCatalogItemIds.length === 0) {
+      addEstimateItem("labor");
+    } else {
+      setIsRepairProposalBuilderOpen(true);
+    }
+    setEstimateSaveState({ status: "idle", message: null });
+  }
+
+  function createTemplateRepairProposalDraft(template: "standard" | "diagnostic") {
+    const baseTitle =
+      template === "diagnostic"
+        ? "Diagnostic and repair labor"
+        : "Repair solution";
+    const draftDescription =
+      template === "diagnostic"
+        ? "Diagnose the appliance, verify the failed system, complete approved repair work, and test operation."
+        : "Complete the approved repair, reinstall affected components, and test the appliance before completion.";
+
+    setEstimateDiagnosisText((current) =>
+      current.trim().length > 0 ? current : draftDescription,
+    );
+    setHiddenProposalLineIds([]);
+    setCustomEstimateLines([
+      {
+        id: buildProfessionalLineId(0),
+        lineType: "labor",
+        itemTitle: baseTitle,
+        customerName: baseTitle,
+        internalName: baseTitle,
+        quantity: 1,
+        unitPrice: 0,
+        unitCost: 0,
+        publicDescription: draftDescription,
+        taxable: getDefaultLineTaxable("labor"),
+        notes: draftDescription,
+      },
+    ]);
+    setEstimateDraftAgentResult((current) =>
+      current ?? {
+        title: baseTitle,
+        customerDescription:
+          "Review and customize this repair proposal before sending it to the customer.",
+        warrantyText:
+          "90 days labor and installed parts unless otherwise specified on the estimate.",
+        lines: [],
+        repairScope: {
+          scopeKey: "manual_template",
+          serviceCategory: "repair",
+          repairGroup: "manual",
+          repairItem: baseTitle,
+          customerSummary:
+            "Review and customize this repair proposal before sending it to the customer.",
+        },
+        diagnosisNormalization: {
+          providerMode: "local",
+          detectedLanguage: "english",
+          normalizedEnglishDiagnosis: baseTitle,
+          repairIntents: [],
+          confidence: "low",
+          matchedTerms: [],
+        },
+        internalNotes: "Created from technician-selected proposal template.",
+        confidence: "low",
+        sourceReason: "Manual template starter selected by technician.",
+      },
+    );
+    setSelectedCatalogItemIds([]);
+    setCreatedEstimateSummary(null);
+    setEstimateSaveState({ status: "idle", message: null });
+    setIsTemplateSheetOpen(false);
+    setIsRepairProposalBuilderOpen(true);
   }
 
   function removeCustomEstimateLine(lineId: string) {
     setCustomEstimateLines((current) =>
       current.filter((line) => line.id !== lineId),
     );
+    setHiddenProposalLineIds((current) =>
+      current.filter((currentLineId) => currentLineId !== lineId),
+    );
     setCreatedEstimateSummary(null);
     setEstimateSaveState({ status: "idle", message: null });
+  }
+
+  function updateCustomEstimateLineVisibility(
+    lineId: string,
+    customerVisible: boolean,
+  ) {
+    setHiddenProposalLineIds((current) =>
+      customerVisible
+        ? current.filter((currentLineId) => currentLineId !== lineId)
+        : current.includes(lineId)
+          ? current
+          : [...current, lineId],
+    );
+    setCreatedEstimateSummary(null);
+    setEstimateSaveState({ status: "idle", message: null });
+  }
+
+  function moveCustomEstimateLine(lineId: string, direction: "up" | "down") {
+    setCustomEstimateLines((current) => {
+      const currentIndex = current.findIndex((line) => line.id === lineId);
+
+      if (currentIndex < 0) {
+        return current;
+      }
+
+      const nextIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+
+      if (nextIndex < 0 || nextIndex >= current.length) {
+        return current;
+      }
+
+      const next = [...current];
+      const [line] = next.splice(currentIndex, 1);
+      next.splice(nextIndex, 0, line);
+
+      return next;
+    });
+    setCreatedEstimateSummary(null);
+    setEstimateSaveState({ status: "idle", message: null });
+  }
+
+  function startRepairScopeDictation() {
+    const speechWindow = window as Window & {
+      SpeechRecognition?: new () => {
+        lang: string;
+        interimResults: boolean;
+        continuous: boolean;
+        onresult: ((event: {
+          results: ArrayLike<{ 0: { transcript: string } }>;
+        }) => void) | null;
+        onerror: ((event?: { error?: string }) => void) | null;
+        onend: (() => void) | null;
+        start: () => void;
+      };
+      webkitSpeechRecognition?: new () => {
+        lang: string;
+        interimResults: boolean;
+        continuous: boolean;
+        onresult: ((event: {
+          results: ArrayLike<{ 0: { transcript: string } }>;
+        }) => void) | null;
+        onerror: (() => void) | null;
+        onend: (() => void) | null;
+        start: () => void;
+      };
+    };
+    const Recognition =
+      speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition;
+
+    if (!Recognition) {
+      setEstimateGenerationState({
+        status: "error",
+        message:
+          "Voice dictation is not available in this browser. You can still type or paste the confirmed repair scope.",
+        source: null,
+      });
+      return;
+    }
+
+    const recognition = new Recognition();
+    recognition.lang = "en-US";
+    recognition.interimResults = false;
+    recognition.continuous = false;
+    recognition.onresult = (event) => {
+      const transcript = Array.from(event.results)
+        .map((result) => result[0]?.transcript ?? "")
+        .join(" ")
+        .trim();
+
+      if (transcript) {
+        setEstimateDiagnosisText((current) =>
+          [current.trim(), transcript].filter(Boolean).join(" "),
+        );
+      }
+    };
+    recognition.onerror = (event) => {
+      setIsDictatingRepairScope(false);
+      setEstimateGenerationState({
+        status: "error",
+        message:
+          event?.error === "not-allowed"
+            ? "Microphone permission was not allowed. You can still type or paste the confirmed repair scope."
+            : "Voice dictation could not start in this browser. You can still type or paste the confirmed repair scope.",
+        source: null,
+      });
+    };
+    recognition.onend = () => {
+      setIsDictatingRepairScope(false);
+    };
+
+    try {
+      setIsDictatingRepairScope(true);
+      recognition.start();
+    } catch {
+      setIsDictatingRepairScope(false);
+      setEstimateGenerationState({
+        status: "error",
+        message:
+          "Voice dictation could not start in this browser. You can still type or paste the confirmed repair scope.",
+        source: null,
+      });
+    }
   }
 
   function resetEstimateBuilder() {
     setSelectedCatalogItemIds([]);
     setCustomEstimateLines([]);
+    setHiddenProposalLineIds([]);
     setEstimateDraftAgentResult(null);
     setEstimateRepairPlanSummary(null);
     setEstimateDiagnosisText("");
@@ -3339,6 +3845,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     setEstimateTaxRate("8.25");
     setShowEstimateAdjustments(false);
     setShowEstimateWarrantyEditor(false);
+    setIsProposalPreviewOpen(false);
     setExpandedEstimateLineIds([]);
     setEstimateGenerationState({ status: "idle", message: null, source: null });
     setEstimateSaveState({ status: "idle", message: null });
@@ -3347,6 +3854,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
   function beginNewDraft() {
     setSelectedCatalogItemIds([]);
     setCustomEstimateLines([]);
+    setHiddenProposalLineIds([]);
     setEstimateDraftAgentResult(null);
     setEstimateRepairPlanSummary(null);
     setEstimateDiagnosisText("");
@@ -3359,6 +3867,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     setEstimateTaxRate("8.25");
     setShowEstimateAdjustments(false);
     setShowEstimateWarrantyEditor(false);
+    setIsProposalPreviewOpen(false);
     setExpandedEstimateLineIds([]);
     setEstimateGenerationState({ status: "idle", message: null, source: null });
     setEstimateSaveState({
@@ -3372,6 +3881,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
       .map((item) => item.pricingCatalogItemId)
       .filter((itemId): itemId is string => itemId !== null);
     setSelectedCatalogItemIds(catalogItemIds);
+    setHiddenProposalLineIds([]);
     setEstimateDraftAgentResult(null);
     setEstimateRepairPlanSummary(null);
     setCustomEstimateLines(
@@ -3397,11 +3907,14 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     setAllowNewDraftWithActiveDraft(false);
     setCreatedEstimateSummary(null);
     setEstimateApprovalLink(null);
-    setEstimateDiscountType("flat");
-    setEstimateDiscountValue("0");
-    setEstimateTaxRate("8.25");
-    setShowEstimateAdjustments(false);
+    setEstimateDiscountType(estimate.discountType);
+    setEstimateDiscountValue(String(estimate.discountValue));
+    setEstimateTaxRate(String(estimate.taxRate));
+    setShowEstimateAdjustments(
+      estimate.discountAmount > 0 || estimate.taxRate > 0,
+    );
     setShowEstimateWarrantyEditor(false);
+    setIsProposalPreviewOpen(false);
     setExpandedEstimateLineIds([]);
     setEstimateGenerationState({ status: "idle", message: null, source: null });
     setEstimateSaveState({
@@ -3410,17 +3923,69 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     });
   }
 
+  function openManualEstimateEditor() {
+    setManualEstimateId(null);
+    setFinanceEstimateMode("manual");
+    setIsFinanceEstimateWorkflowOpen(false);
+    setIsRepairProposalBuilderOpen(false);
+    setEstimateDraftAgentResult(null);
+    setEstimateRepairPlanSummary(null);
+    setEditingEstimateId(null);
+    setViewingEstimateId(null);
+    setViewingInvoiceId(null);
+    setCreatedEstimateSummary(null);
+    setEstimateApprovalLink(null);
+    setEstimateSaveState({ status: "idle", message: null });
+  }
+
+  function openSavedManualEstimateEditor(
+    estimate: DashboardServiceRequestEstimate,
+  ) {
+    setManualEstimateId(estimate.id);
+    setFinanceEstimateMode("saved");
+    setIsFinanceEstimateWorkflowOpen(false);
+    setIsRepairProposalBuilderOpen(false);
+    setEstimateDraftAgentResult(null);
+    setEstimateRepairPlanSummary(null);
+    setEditingEstimateId(null);
+    setViewingEstimateId(null);
+    setViewingInvoiceId(null);
+    setCreatedEstimateSummary(null);
+    setEstimateApprovalLink(null);
+    setEstimateSaveState({ status: "idle", message: null });
+  }
+
+  function closeManualEstimateEditor() {
+    setManualEstimateId(null);
+    setFinanceEstimateMode("home");
+  }
+
   async function createEstimate(options?: { sendAfterSave?: boolean }) {
     if (state.status !== "ready") {
       return null;
     }
 
-    const pendingCustomLines = customEstimateLines;
+    const pendingCustomLines = customEstimateLines.filter(
+      (line) => line.lineType === "warranty" || !hiddenProposalLineIds.includes(line.id),
+    );
 
     if (selectedCatalogItemIds.length === 0 && pendingCustomLines.length === 0) {
       setEstimateSaveState({
         status: "error",
-        message: "Generate an estimate or add at least one line before sending.",
+        message: "Generate a Repair Proposal or add at least one line first.",
+      });
+      return null;
+    }
+
+    const proposalSendBlockers = [
+      ...proposalBlockingErrors,
+      ...proposalWarnings,
+    ];
+
+    if (options?.sendAfterSave && proposalSendBlockers.length > 0) {
+      setEstimateSaveState({
+        status: "error",
+        message: proposalSendBlockers[0],
       });
       return null;
     }
@@ -3489,9 +4054,25 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
             : null,
         notes: line.notes,
       })),
+      adjustments: {
+        discountType: estimateCalculation.discountType,
+        discountValue: estimateCalculation.discountValue,
+        taxRate: estimateCalculation.taxRate,
+      },
       estimateDecisionContext: {
-        eventSource: "one_screen_estimate_agent",
+        eventSource: "repair_proposal_builder_vertical_slice",
         diagnosisText: estimateDiagnosisText.trim(),
+        confirmedRepairScope: estimateDiagnosisText.trim(),
+        repairProposal: {
+          repairSolution: proposalRepairSolution,
+          customerDescription: proposalCustomerDescription,
+          estimatedCompletion:
+            proposalEstimatedCompletion.trim().length > 0
+              ? proposalEstimatedCompletion.trim()
+              : null,
+          warnings: proposalWarnings,
+          source: estimateGenerationState.source,
+        },
         generatedAt: new Date().toISOString(),
         generatorVersion:
           estimateDraftAgentResult?.diagnosisNormalization.providerMode ===
@@ -3514,6 +4095,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
           unitCost: line.unitCost,
           publicDescription: line.publicDescription,
           taxable: line.taxable,
+          customerVisible: !hiddenProposalLineIds.includes(line.id),
           lineTotal: Math.round(line.quantity * line.unitPrice * 100) / 100,
           wasEdited: true,
         })),
@@ -3526,7 +4108,10 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
           taxRate: parsedTaxRate,
           tax: estimateTaxTotal,
           grandTotal: estimateGrandTotal,
-          persistedEstimateTotalsCurrentlyUseLineSubtotalOnly: true,
+          internalCostTotal: estimateInternalCostTotal,
+          margin: estimateMargin,
+          marginPercent: estimateMarginPercent,
+          persistedAuthoritatively: true,
         },
         total: estimateGrandTotal,
       },
@@ -3617,8 +4202,8 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
       status: "success",
       message:
         wasEditing
-          ? "Draft estimate updated. The builder was reset so the saved draft is now the source of truth."
-          : "Estimate created and saved. The builder was reset so you can prepare another option if needed.",
+          ? "Repair Proposal draft updated. The builder was reset so the saved draft is now the source of truth."
+          : "Repair Proposal draft saved. The builder was reset so you can prepare another option if needed.",
     });
     setViewingEstimateId(
       savedEstimate.id,
@@ -3733,7 +4318,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
         status: "error",
         message: "Customer approval links are not available for this workspace.",
       });
-      return;
+      return false;
     }
 
     const sessionResult = await getDashboardActionSession(supabase);
@@ -3744,7 +4329,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
         status: "error",
         message: sessionResult.message,
       });
-      return;
+      return false;
     }
 
     const { data: sessionData, error: sessionError } = sessionResult.response;
@@ -3754,9 +4339,9 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
       setSendingEstimateId(null);
       setEstimateSaveState({
         status: "error",
-        message: "Log in again before sending an estimate.",
+        message: "Log in again before sending a Repair Proposal.",
       });
-      return;
+      return false;
     }
 
     if (process.env.NODE_ENV === "development") {
@@ -3772,6 +4357,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
       message?: string;
       approvalUrl?: string;
       estimate?: {
+        estimate_status?: DashboardServiceRequestEstimate["estimateStatus"];
         service_request_status?: string;
       };
     } | null;
@@ -3788,6 +4374,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
         message?: string;
         approvalUrl?: string;
         estimate?: {
+          estimate_status?: DashboardServiceRequestEstimate["estimateStatus"];
           service_request_status?: string;
         };
       } | null;
@@ -3800,7 +4387,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
             ? error.message
             : "The estimate send request did not reach the server.",
       });
-      return;
+      return false;
     }
 
     if (!response.ok || !payload?.ok || !payload.approvalUrl) {
@@ -3808,15 +4395,159 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
       setEstimateSaveState({
         status: "error",
         message:
-          payload?.message ?? "We could not create an approval link for this estimate.",
+          payload?.message ??
+          "We could not create an approval link for this Repair Proposal.",
       });
-      return;
+      return false;
     }
 
     setEstimateApprovalLink({
       estimateId,
       approvalUrl: payload.approvalUrl,
     });
+    setViewingEstimateId(estimateId);
+    setViewingInvoiceId(null);
+    const nextEstimateStatus =
+      payload.estimate?.estimate_status === "approved" ? "approved" : "sent";
+
+    setEstimatesState((current) => {
+      if (current.status !== "ready") {
+        return current;
+      }
+
+      return {
+        status: "ready",
+        estimates: current.estimates.map((currentEstimate) =>
+          currentEstimate.id === estimateId
+            ? {
+                ...currentEstimate,
+                estimateStatus: nextEstimateStatus,
+                sentAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              }
+            : currentEstimate,
+        ),
+        error: null,
+      };
+    });
+    if (
+      payload.estimate?.service_request_status === "estimate_sent" ||
+      payload.estimate?.service_request_status === "estimate_approved"
+    ) {
+      const nextStatus =
+        payload.estimate.service_request_status === "estimate_approved"
+          ? "estimate_approved"
+          : "estimate_sent";
+      setState((current) =>
+        current.status === "ready"
+          ? {
+              status: "ready",
+              request: {
+                ...current.request,
+                status: nextStatus,
+              },
+              error: null,
+            }
+          : current,
+      );
+      setSelectedStatus(nextStatus);
+    }
+    setSendingEstimateId(null);
+    setEstimateSaveState({
+      status: "success",
+      message:
+        "Repair Proposal sent. Copy the approval link or open the customer view.",
+    });
+    void loadEstimates();
+    void loadNotes();
+    return true;
+  }
+
+  async function sendEstimateToCustomer(estimate: DashboardServiceRequestEstimate) {
+    await sendEstimateById(estimate.id, estimate.estimateNumber);
+  }
+
+  async function approveEstimateForCustomer(
+    estimateId: string,
+    estimateNumber: string,
+  ) {
+    setEstimateSaveState({
+      status: "saving",
+      message: `Approving ${estimateNumber} for customer...`,
+    });
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setEstimateSaveState({
+        status: "error",
+        message: "Manual approval is not available for this workspace.",
+      });
+      return false;
+    }
+
+    const sessionResult = await getDashboardActionSession(supabase);
+
+    if (!sessionResult.ok) {
+      setEstimateSaveState({
+        status: "error",
+        message: sessionResult.message,
+      });
+      return false;
+    }
+
+    const { data: sessionData, error: sessionError } = sessionResult.response;
+    const accessToken = sessionData.session?.access_token;
+
+    if (sessionError || !accessToken) {
+      setEstimateSaveState({
+        status: "error",
+        message: "Log in again before approving this estimate.",
+      });
+      return false;
+    }
+
+    let response: Response;
+    let payload: {
+      ok?: boolean;
+      message?: string;
+      estimate?: {
+        estimate_status?: DashboardServiceRequestEstimate["estimateStatus"];
+        service_request_status?: string;
+        customer_responded_at?: string | null;
+        approval_source?: "customer" | "technician_manual";
+      };
+    } | null;
+
+    try {
+      response = await fetch(`/api/estimates/${estimateId}/approve-for-customer`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+      payload = (await response.json().catch(() => null)) as typeof payload;
+    } catch {
+      setEstimateSaveState({
+        status: "error",
+        message: "Estimate could not be approved for the customer. Please try again.",
+      });
+      return false;
+    }
+
+    if (!response.ok || !payload?.ok) {
+      setEstimateSaveState({
+        status: "error",
+        message:
+          payload?.message ??
+          "Estimate could not be approved for the customer. Please try again.",
+      });
+      return false;
+    }
+
+    const approvedAt =
+      payload.estimate?.customer_responded_at ?? new Date().toISOString();
+
     setViewingEstimateId(estimateId);
     setViewingInvoiceId(null);
     setEstimatesState((current) => {
@@ -3830,8 +4561,9 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
           currentEstimate.id === estimateId
             ? {
                 ...currentEstimate,
-                estimateStatus: "sent",
-                sentAt: new Date().toISOString(),
+                estimateStatus: "approved",
+                approvalSource: "technician_manual",
+                customerRespondedAt: approvedAt,
                 updatedAt: new Date().toISOString(),
               }
             : currentEstimate,
@@ -3839,33 +4571,26 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
         error: null,
       };
     });
-    if (payload.estimate?.service_request_status === "estimate_sent") {
-      setState((current) =>
-        current.status === "ready"
-          ? {
-              status: "ready",
-              request: {
-                ...current.request,
-                status: "estimate_sent",
-              },
-              error: null,
-            }
-          : current,
-      );
-      setSelectedStatus("estimate_sent");
-    }
-    setSendingEstimateId(null);
+    setState((current) =>
+      current.status === "ready"
+        ? {
+            status: "ready",
+            request: {
+              ...current.request,
+              status: "estimate_approved",
+            },
+            error: null,
+          }
+        : current,
+    );
+    setSelectedStatus("estimate_approved");
     setEstimateSaveState({
       status: "success",
-      message:
-        "Estimate sent. Copy the approval link or open the customer view.",
+      message: "Estimate approved by technician on behalf of customer.",
     });
     void loadEstimates();
     void loadNotes();
-  }
-
-  async function sendEstimateToCustomer(estimate: DashboardServiceRequestEstimate) {
-    await sendEstimateById(estimate.id, estimate.estimateNumber);
+    return true;
   }
 
   async function createInvoiceFromEstimate(
@@ -5263,6 +5988,11 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
   const viewingEstimate =
     estimatesState.estimates.find((estimate) => estimate.id === viewingEstimateId) ??
     null;
+  const manualEstimate =
+    manualEstimateId === null
+      ? null
+      : estimatesState.estimates.find((estimate) => estimate.id === manualEstimateId) ??
+        null;
   const invoicesByEstimateId = new Map(
     invoicesState.invoices.map((invoice) => [invoice.estimateId, invoice]),
   );
@@ -5296,6 +6026,62 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     : invoiceHistory.filter((invoice) => invoice.invoiceStatus !== "void");
   const hiddenInvoiceHistoryCount =
     invoiceHistory.length - visibleInvoiceHistory.length;
+  const financeApprovedEstimates = estimatesState.estimates.filter(
+    (estimate) =>
+      estimate.estimateStatus === "approved" && estimate.archivedAt === null,
+  );
+  const financeApprovedTotal = financeApprovedEstimates.reduce(
+    (total, estimate) => total + estimate.total,
+    0,
+  );
+  const financePaidInvoices = invoicesState.invoices.filter(
+    (invoice) => invoice.invoiceStatus === "paid" && invoice.voidedAt === null,
+  );
+  const financePaidTotal = financePaidInvoices.reduce(
+    (total, invoice) => total + invoice.total,
+    0,
+  );
+  const financeOpenInvoices = invoicesState.invoices.filter(
+    (invoice) =>
+      invoice.voidedAt === null &&
+      (invoice.invoiceStatus === "draft" || invoice.invoiceStatus === "sent"),
+  );
+  const financeBalanceDueTotal = Math.max(
+    0,
+    financeOpenInvoices.reduce((total, invoice) => total + invoice.total, 0),
+  );
+  const financeEstimates = [...estimatesState.estimates].sort((left, right) => {
+    const getStatusPriority = (
+      status: DashboardServiceRequestEstimate["estimateStatus"],
+    ) =>
+      status === "approved"
+        ? 0
+        : status === "draft"
+          ? 1
+          : status === "sent"
+            ? 2
+            : status === "declined"
+              ? 3
+              : 4;
+    const priorityDelta =
+      getStatusPriority(left.estimateStatus) -
+      getStatusPriority(right.estimateStatus);
+
+    if (priorityDelta !== 0) {
+      return priorityDelta;
+    }
+
+    return (
+      new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+    );
+  });
+  const financePrimaryInvoice =
+    currentInvoices[0] ??
+    [...invoicesState.invoices].sort(
+      (left, right) =>
+        new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
+    )[0] ??
+    null;
   const addressAutocomplete = getAddressAutocompleteAdapter();
   const fullAddress = getRequestFullAddress(request);
   const hasRoutableAddress = fullAddress.length > 0;
@@ -5882,51 +6668,62 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
           : request.status === "return_visit_scheduled"
             ? "Return visit scheduled"
             : "No active parts hold";
-  const customEstimateLinesTotal = customEstimateLines.reduce(
-    (total, line) => total + line.quantity * line.unitPrice,
-    0,
-  );
-  const selectedCatalogItemsTotal = selectedCatalogItems.reduce(
-    (total, item) => total + item.customerPrice,
-    0,
-  );
-  const estimateSubtotal = selectedCatalogItemsTotal + customEstimateLinesTotal;
-  const parsedDiscountValue = Math.max(0, Number(estimateDiscountValue) || 0);
-  const estimateDiscountAmount =
-    estimateDiscountType === "percent"
-      ? Math.min(
-          estimateSubtotal,
-          estimateSubtotal * (Math.min(100, parsedDiscountValue) / 100),
-        )
-      : Math.min(estimateSubtotal, parsedDiscountValue);
-  const estimateTaxableSubtotalBeforeDiscount =
-    selectedCatalogItems.reduce(
-      (total, item) => total + (item.taxable ? item.customerPrice : 0),
-      0,
-    ) +
-    customEstimateLines.reduce(
-      (total, line) =>
-        total + (line.taxable ? line.quantity * line.unitPrice : 0),
-      0,
-    );
-  const taxableDiscountShare =
-    estimateSubtotal > 0
-      ? estimateDiscountAmount *
-        (estimateTaxableSubtotalBeforeDiscount / estimateSubtotal)
-      : 0;
-  const estimateTaxableSubtotal = Math.max(
-    0,
-    estimateTaxableSubtotalBeforeDiscount - taxableDiscountShare,
-  );
-  const parsedTaxRate = Math.max(0, Math.min(20, Number(estimateTaxRate) || 0));
-  const estimateTaxTotal =
-    Math.round(estimateTaxableSubtotal * (parsedTaxRate / 100) * 100) / 100;
-  const estimateGrandTotal =
-    Math.round(
-      (estimateSubtotal - estimateDiscountAmount + estimateTaxTotal) * 100,
-    ) / 100;
-  const visibleCustomEstimateLines = customEstimateLines.filter(
+  const proposalCustomEstimateLines = customEstimateLines.filter(
     (line) => line.lineType !== "warranty",
+  );
+  const customerVisibleCustomEstimateLines = customEstimateLines.filter(
+    (line) => line.lineType === "warranty" || !hiddenProposalLineIds.includes(line.id),
+  );
+  const estimateCalculation = calculateRepairProposalTotals({
+    lines: [
+      ...selectedCatalogItems.map((item) => ({
+        lineType: "labor",
+        quantity: 1,
+        unitPrice: item.customerPrice,
+        unitCost: item.technicianCost ?? 0,
+        taxable: item.taxable,
+      })),
+      ...customerVisibleCustomEstimateLines.map((line) => ({
+        lineType: line.lineType,
+        quantity: line.quantity,
+        unitPrice: line.unitPrice,
+        unitCost: line.unitCost,
+        taxable: line.taxable,
+      })),
+    ],
+    discountType: estimateDiscountType,
+    discountValue: Number(estimateDiscountValue),
+    taxRate: Number(estimateTaxRate),
+  });
+  const estimateSubtotal = estimateCalculation.subtotal;
+  const parsedDiscountValue = estimateCalculation.discountValue;
+  const estimateDiscountAmount = estimateCalculation.discountAmount;
+  const estimateTaxableSubtotal = estimateCalculation.taxableAmount;
+  const parsedTaxRate = estimateCalculation.taxRate;
+  const estimateTaxTotal = estimateCalculation.tax;
+  const estimateGrandTotal = estimateCalculation.total;
+  const estimateInternalCostTotal = estimateCalculation.internalCostTotal;
+  const estimateMargin = estimateCalculation.grossProfit;
+  const estimateMarginPercent = estimateCalculation.marginPercent;
+  const visibleCustomEstimateLines = proposalCustomEstimateLines.filter(
+    (line) => !hiddenProposalLineIds.includes(line.id),
+  );
+  const editingProposalLine =
+    editingProposalLineId !== null
+      ? proposalCustomEstimateLines.find((line) => line.id === editingProposalLineId) ??
+        null
+      : null;
+  const laborProposalLines = visibleCustomEstimateLines.filter(
+    (line) => line.lineType === "labor",
+  );
+  const partProposalLines = visibleCustomEstimateLines.filter(
+    (line) => line.lineType === "part",
+  );
+  const materialProposalLines = visibleCustomEstimateLines.filter(
+    (line) => line.lineType === "material",
+  );
+  const feeProposalLines = visibleCustomEstimateLines.filter(
+    (line) => line.lineType === "custom",
   );
   const warrantyEstimateLines = customEstimateLines.filter(
     (line) => line.lineType === "warranty",
@@ -5939,9 +6736,53 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     estimateDraftAgentResult?.warrantyText ||
     "90 days labor and installed parts unless otherwise specified on the estimate.";
   const selectedEstimateLineCount =
-    selectedCatalogItems.length + customEstimateLines.length;
+    selectedCatalogItems.length + customerVisibleCustomEstimateLines.length;
   const estimatePreviewTotal = estimateGrandTotal;
   const hasEstimateSelection = selectedEstimateLineCount > 0;
+  const shouldShowRepairProposalBuilder =
+    isRepairProposalBuilderOpen ||
+    hasEstimateSelection ||
+    Boolean(estimateDraftAgentResult);
+  const proposalRepairSolution =
+    estimateDraftAgentResult?.title?.trim() ||
+    visibleCustomEstimateLines[0]?.customerName ||
+    "Repair proposal";
+  const proposalCustomerDescription =
+    estimateDraftAgentResult?.customerDescription?.trim() ||
+    estimateRepairPlanSummary?.understoodSummary ||
+    "Review the confirmed repair scope, pricing, warranty, and included work before sending.";
+  const proposalWarnings = [
+    ...(estimateRepairPlanSummary?.missingInformation ?? []),
+    ...visibleCustomEstimateLines
+      .filter((line) => line.unitPrice <= 0)
+      .map((line) => `${line.customerName || "Line item"} needs customer price.`),
+  ].slice(0, 6);
+  const proposalBlockingErrors = [
+    proposalRepairSolution.trim().length === 0
+      ? "Repair Solution is required before sending."
+      : null,
+    proposalCustomerDescription.trim().length === 0 &&
+    visibleCustomEstimateLines.every(
+      (line) =>
+        !line.customerName.trim() && !(line.publicDescription ?? "").trim(),
+    )
+      ? "Add customer-facing proposal content before sending."
+      : null,
+    !hasEstimateSelection ? "Add at least one proposal line." : null,
+    visibleCustomEstimateLines.some((line) => !line.customerName.trim())
+      ? "Every line needs a customer-facing title."
+      : null,
+    visibleCustomEstimateLines.some((line) => line.quantity <= 0)
+      ? "Every line needs a valid quantity."
+      : null,
+    visibleCustomEstimateLines.some((line) => line.unitPrice <= 0)
+      ? "Every customer-facing line needs a customer price before sending."
+      : null,
+  ].filter((error): error is string => Boolean(error));
+  const proposalSendBlockers = [
+    ...proposalBlockingErrors,
+    ...proposalWarnings,
+  ];
   const activeDraftRequiresIntent =
     Boolean(activeDraftEstimate) &&
     !editingEstimateId &&
@@ -5950,6 +6791,11 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     hasEstimateSelection &&
     estimateSaveState.status !== "saving" &&
     !activeDraftRequiresIntent;
+  const canSendProposal =
+    canSaveEstimate &&
+    proposalSendBlockers.length === 0 &&
+    estimateGenerationState.status !== "generating" &&
+    sendingEstimateId === null;
   async function saveDispatcherPreviewSnapshot() {
     const supabase = getSupabaseBrowserClient();
 
@@ -6335,10 +7181,10 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                   </button>
                   <button
                     className="rounded-md border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-xs font-bold text-emerald-700 transition hover:bg-emerald-300/20"
-                    onClick={() => editEstimateDraft(estimate)}
+                    onClick={() => openSavedManualEstimateEditor(estimate)}
                     type="button"
                   >
-                    Edit Draft
+                    Open Draft
                   </button>
                   <button
                     className="rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs font-bold text-amber-800 transition hover:bg-amber-300/20"
@@ -6620,7 +7466,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
             ←
           </Link>
           <div className="min-w-0 text-center">
-            <p className="truncate text-sm font-black text-[#0F172A]">
+            <p className="truncate text-sm font-semibold text-[#334155]">
               Job #{jobNumber}
             </p>
             <p className="mt-0.5 truncate text-xs font-bold text-[#64748B]">
@@ -6887,8 +7733,9 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                   Property details unavailable
                 </p>
                 <p className="mt-1 text-xs font-semibold leading-5 text-[#64748B]">
-                  Add or confirm the service address to show photo, Zestimate,
-                  square footage, and year built.
+                  {propertyLookupAddress
+                    ? "Property information is not available for this service address yet."
+                    : "Add or confirm the service address to show photo, Zestimate, square footage, and year built."}
                 </p>
               </>
             )}
@@ -9829,41 +10676,387 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
       ) : null}
 
       {activeJobTab === "estimate" ? (
-      <section className="mt-6 rounded-2xl border border-[#E5E7EB] bg-white p-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#0F6BFF]">
-              Estimate
-            </p>
-            <h2 className="mt-2 text-xl font-bold text-[#0F172A]">
-              {editingEstimate
-                ? `Editing draft ${editingEstimate.estimateNumber}`
-                : "Create estimate draft"}
-            </h2>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-[#64748B]">
-              {editingEstimate
-                ? "Changes update the same estimate number. Sent, approved, declined, and void estimates stay read-only."
-                : "Describe the diagnosis in plain language. WRA will draft the customer wording and estimate lines, then you can adjust prices before saving."}
-            </p>
+        financeEstimateMode === "manual" || financeEstimateMode === "saved" ? (
+          <ManualEstimateEditor
+            initialEstimate={financeEstimateMode === "saved" ? manualEstimate : null}
+            onClose={closeManualEstimateEditor}
+            onSaved={loadEstimates}
+            onApproveForCustomer={(estimate) =>
+              approveEstimateForCustomer(estimate.id, estimate.estimateNumber)
+            }
+            onSendEstimate={(estimate) =>
+              sendEstimateById(estimate.id, estimate.estimateNumber)
+            }
+            request={state.request}
+            sendingEstimateId={sendingEstimateId}
+          />
+        ) : (
+      <section className="mt-4 bg-[#F8FAFE] px-3 pb-6 pt-4 sm:rounded-[2rem] sm:px-5 sm:pt-5">
+        <div className="grid grid-cols-3 gap-2 sm:gap-3">
+          {[
+            {
+              label: "Approved",
+              value: formatServiceRequestMoney(financeApprovedTotal),
+              detail:
+                financeApprovedEstimates.length > 0
+                  ? `${financeApprovedEstimates.length} approved`
+                  : "No approved estimates",
+              valueTone: "text-emerald-700",
+            },
+            {
+              label: "Paid",
+              value: formatServiceRequestMoney(financePaidTotal),
+              detail:
+                financePaidInvoices.length > 0
+                  ? `${financePaidInvoices.length} payment${
+                      financePaidInvoices.length === 1 ? "" : "s"
+                    }`
+                  : "No payments",
+              valueTone: "text-[#0F6BFF]",
+            },
+            {
+              label: "Balance Due",
+              value: formatServiceRequestMoney(financeBalanceDueTotal),
+              detail:
+                financeOpenInvoices.length > 0
+                  ? `${financeOpenInvoices.length} open invoice${
+                      financeOpenInvoices.length === 1 ? "" : "s"
+                    }`
+                  : "No open invoices",
+              valueTone: "text-orange-700",
+            },
+          ].map((card) => (
+            <div
+              className="flex min-h-[92px] min-w-0 flex-col justify-start gap-2.5 rounded-[1rem] border border-[#DCE3EF] bg-white px-3 py-3.5 shadow-none sm:min-h-[100px] sm:rounded-[1.15rem] sm:px-4"
+              key={card.label}
+            >
+              <span className="block truncate text-[0.74rem] font-bold text-[#657089] sm:text-sm">
+                {card.label}
+              </span>
+              <span
+                className={`block whitespace-nowrap text-[clamp(0.82rem,3.35vw,1.04rem)] font-black leading-[1.08] tracking-[-0.035em] sm:text-lg ${card.valueTone}`}
+              >
+                {card.value}
+              </span>
+              <span className="block whitespace-nowrap text-[0.62rem] font-bold text-[#657089] sm:text-xs">
+                {card.detail}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-7 px-3 sm:px-7">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <span className="block text-lg font-black tracking-[-0.035em] text-[#0B1228] sm:text-xl">
+                Create Estimate
+              </span>
+              <span className="mt-0.5 block text-[0.8rem] font-semibold leading-5 text-[#657089] sm:text-sm">
+                Generate with AI.
+              </span>
+            </div>
+            <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[0.65rem] font-black text-[#0F6BFF] shadow-none ring-1 ring-[#DCE6FF]">
+              AI Powered
+            </span>
           </div>
-          <div className="rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-right">
-            <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#0F6BFF]">
-              {hasEstimateSelection ? "Preview total" : "Builder total"}
+
+          <label className="mt-5 block text-[0.8rem] font-black text-[#0B1228]" htmlFor="finance-confirmed-repair">
+            Repair description
+          </label>
+          <div className="relative mt-2">
+            <textarea
+              className="min-h-[76px] w-full resize-none rounded-[0.85rem] border border-[#DCE3EF] bg-white px-3.5 py-2.5 pr-14 text-sm font-semibold leading-6 text-[#0B1228] outline-none transition placeholder:text-[#657089] focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
+              disabled={estimateSaveState.status === "saving"}
+              id="finance-confirmed-repair"
+              onChange={(event) => {
+                setEstimateDiagnosisText(event.target.value);
+                setEstimateSaveState({ status: "idle", message: null });
+                setEstimateGenerationState({
+                  status: "idle",
+                  message: null,
+                  source: null,
+                });
+              }}
+              placeholder="Example: Replaced evaporator, filter drier, installed service valve, evacuated system, recharged refrigerant, leak tested, and verified performance."
+              value={estimateDiagnosisText}
+            />
+            <button
+              aria-label="Dictate confirmed repair"
+              className="absolute bottom-3 right-3 flex h-9 w-9 items-center justify-center rounded-full border border-[#DCE6FF] bg-white text-[#0B1228] shadow-[0_8px_20px_rgba(15,23,42,0.08)] transition hover:text-[#0F6BFF] disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={isDictatingRepairScope || estimateSaveState.status === "saving"}
+              onClick={startRepairScopeDictation}
+              type="button"
+            >
+              <FinanceHomeIcon className="h-5 w-5" name="mic" />
+            </button>
+          </div>
+
+          <button
+            className="mt-4 flex w-full items-center justify-center gap-2 rounded-[0.8rem] bg-[#0F5BFF] px-4 py-2.5 text-sm font-black text-white shadow-[0_10px_20px_rgba(15,91,255,0.16)] transition hover:-translate-y-0.5 hover:bg-[#0A4FE0] disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={
+              estimateSaveState.status === "saving" ||
+              estimateGenerationState.status === "generating" ||
+              estimateDiagnosisText.trim().length === 0
+            }
+            onClick={() => {
+              setFinanceEstimateMode("ai");
+              setIsFinanceEstimateWorkflowOpen(true);
+              void generateEstimateDraftFromDiagnosis();
+            }}
+            type="button"
+          >
+            <FinanceHomeIcon className="h-5 w-5" name="sparkle" />
+            {estimateGenerationState.status === "generating"
+              ? "Generating..."
+              : "Generate with AI"}
+          </button>
+
+          <div className="my-4 flex items-center gap-3 text-sm font-bold text-[#657089]">
+            <span className="h-px flex-1 bg-[#DCE6FF]" />
+            or
+            <span className="h-px flex-1 bg-[#DCE6FF]" />
+          </div>
+
+          <button
+            className="mx-auto block rounded-full px-3 py-1.5 text-sm font-black text-[#0F5BFF] transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={estimateSaveState.status === "saving"}
+            onClick={openManualEstimateEditor}
+            type="button"
+          >
+            Create manually
+          </button>
+
+          {estimateGenerationState.message ? (
+            <p className="mt-4 rounded-2xl bg-white/80 p-3 text-sm font-semibold leading-6 text-[#475569] ring-1 ring-[#DCE6FF]">
+              {estimateGenerationState.message}
             </p>
-            <p className="mt-1 text-2xl font-bold text-[#0F172A]">
-              {formatServiceRequestMoney(estimatePreviewTotal)}
-            </p>
-            <p className="mt-1 text-xs font-semibold text-[#64748B]">
-              {hasEstimateSelection
-                ? `${selectedEstimateLineCount} selected line${
-                    selectedEstimateLineCount === 1 ? "" : "s"
-                  }`
-                : createdEstimateSummary
-                  ? "Reset after save"
-                  : "No jobs selected"}
+          ) : null}
+
+          <div className="mt-4 border-t border-[#DCE6FF] pt-3">
+            <p className="text-[0.8rem] font-semibold leading-5 text-[#657089]">
+              Uses job details and your Price Book.
             </p>
           </div>
         </div>
+
+        <div className="mt-7 space-y-0 border-y border-[#E3E8F0]">
+          <div className="border-b border-[#E3E8F0] bg-transparent last:border-b-0">
+            <button
+              className="flex w-full items-center justify-between gap-3 py-4 text-left sm:py-4"
+              onClick={() => setIsFinanceEstimatesOpen((current) => !current)}
+              type="button"
+            >
+              <span className="flex min-w-0 items-center gap-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[0.7rem] bg-blue-50 text-[#0F6BFF] sm:h-10 sm:w-10">
+                  <FinanceHomeIcon className="h-5 w-5" name="estimates" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-lg font-black text-[#0B1228]">
+                    Estimates
+                  </span>
+                  <span className="mt-0.5 block truncate text-[0.82rem] font-semibold text-[#657089]">
+                    {estimatesState.estimates.length > 0
+                      ? `${estimatesState.estimates.length} total · Approved first`
+                      : "No estimates yet"}
+                  </span>
+                </span>
+              </span>
+              <span className="shrink-0 text-[#0B1A33]">
+                <FinanceChevron open={isFinanceEstimatesOpen} />
+              </span>
+            </button>
+            {isFinanceEstimatesOpen ? (
+              <div className="space-y-3 border-t border-[#EEF2F7] p-4">
+                {estimatesState.status === "loading" ? (
+                  <p className="text-sm font-semibold text-[#64748B]">
+                    Loading estimates...
+                  </p>
+                ) : null}
+                {estimatesState.status === "error" ? (
+                  <p className="rounded-2xl bg-amber-50 p-3 text-sm font-semibold text-amber-800">
+                    {estimatesState.error}
+                  </p>
+                ) : null}
+                {estimatesState.status === "ready" && financeEstimates.length === 0 ? (
+                  <p className="rounded-2xl bg-[#F8FAFC] p-4 text-sm font-semibold text-[#64748B]">
+                    No estimates yet.
+                  </p>
+                ) : null}
+                {financeEstimates.map(renderEstimateCard)}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="border-b border-[#E3E8F0] bg-transparent last:border-b-0">
+            <button
+              className="flex w-full items-center justify-between gap-3 py-4 text-left sm:py-4"
+              onClick={() => setIsFinanceInvoiceOpen((current) => !current)}
+              type="button"
+            >
+              <span className="flex min-w-0 items-center gap-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[0.7rem] bg-emerald-50 text-emerald-700 sm:h-10 sm:w-10">
+                  <FinanceHomeIcon className="h-5 w-5" name="invoice" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-lg font-black text-[#0B1228]">
+                    Invoice
+                  </span>
+                  <span className="mt-0.5 block truncate text-[0.82rem] font-semibold text-[#657089]">
+                    {financePrimaryInvoice
+                      ? `${currentInvoices.length} open · ${invoiceHistory.length} history`
+                      : "No invoice yet"}
+                  </span>
+                </span>
+              </span>
+              <span className="flex shrink-0 items-center gap-3">
+                {financePrimaryInvoice ? (
+                  <span className="whitespace-nowrap text-sm font-black text-emerald-700 sm:text-base">
+                    {formatServiceRequestMoney(financePrimaryInvoice.total)}
+                  </span>
+                ) : null}
+                <span className="text-[#0B1A33]">
+                  <FinanceChevron open={isFinanceInvoiceOpen} />
+                </span>
+              </span>
+            </button>
+            {isFinanceInvoiceOpen ? (
+            <div className="border-t border-[#EEF2F7] p-4">
+              {invoicesState.status === "loading" ? (
+                <p className="text-sm font-semibold text-[#64748B]">
+                  Loading invoices...
+                </p>
+              ) : null}
+              {invoicesState.status === "error" ? (
+                <p className="rounded-2xl bg-amber-50 p-3 text-sm font-semibold text-amber-800">
+                  {invoicesState.error}
+                </p>
+              ) : null}
+              {financePrimaryInvoice ? (
+                renderInvoiceCard(financePrimaryInvoice)
+              ) : invoicesState.status === "ready" ? (
+                <p className="rounded-2xl bg-[#F8FAFC] p-4 text-sm font-semibold text-[#64748B]">
+                  No invoice yet. Create one from an approved estimate.
+                </p>
+              ) : null}
+            </div>
+            ) : null}
+          </div>
+
+          <div className="border-b border-[#E3E8F0] bg-transparent last:border-b-0">
+            <button
+              className="flex w-full items-center justify-between gap-3 py-4 text-left sm:py-4"
+              onClick={() => setIsFinancePaymentsOpen((current) => !current)}
+              type="button"
+            >
+              <span className="flex min-w-0 items-center gap-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[0.7rem] bg-purple-50 text-purple-700 sm:h-10 sm:w-10">
+                  <FinanceHomeIcon className="h-5 w-5" name="payments" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-lg font-black text-[#0B1228]">
+                    Payments
+                  </span>
+                  <span className="mt-0.5 block truncate text-[0.82rem] font-semibold text-[#657089]">
+                    {financePaidInvoices.length > 0
+                      ? `${financePaidInvoices.length} recorded paid invoice${financePaidInvoices.length === 1 ? "" : "s"}`
+                      : "No payments yet"}
+                  </span>
+                </span>
+              </span>
+              <span className="shrink-0 text-[#0B1A33]">
+                <FinanceChevron open={isFinancePaymentsOpen} />
+              </span>
+            </button>
+            {isFinancePaymentsOpen ? (
+              <div className="border-t border-[#EEF2F7] p-4">
+                {financePaidInvoices.length > 0 ? (
+                  <div className="space-y-3">
+                    {financePaidInvoices.map(renderInvoiceCard)}
+                  </div>
+                ) : (
+                  <p className="rounded-2xl bg-[#F8FAFC] p-4 text-sm font-semibold text-[#64748B]">
+                    No payments recorded yet.
+                  </p>
+                )}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="border-b border-[#E3E8F0] bg-transparent last:border-b-0">
+            <button
+              className="flex w-full items-center justify-between gap-3 py-4 text-left sm:py-4"
+              onClick={() => setIsFinanceExpensesOpen((current) => !current)}
+              type="button"
+            >
+              <span className="flex min-w-0 items-center gap-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[0.7rem] bg-orange-50 text-orange-700 sm:h-10 sm:w-10">
+                  <FinanceHomeIcon className="h-5 w-5" name="expenses" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-lg font-black text-[#0B1228]">
+                    Technician Expenses
+                  </span>
+                  <span className="mt-0.5 block truncate text-[0.82rem] font-semibold text-[#657089]">
+                    Track expenses for this job
+                  </span>
+                </span>
+              </span>
+              <span className="shrink-0 text-[#0B1A33]">
+                <FinanceChevron open={isFinanceExpensesOpen} />
+              </span>
+            </button>
+            {isFinanceExpensesOpen ? (
+              <div className="border-t border-[#EEF2F7] p-4">
+                <p className="rounded-2xl bg-[#F8FAFC] p-4 text-sm font-semibold text-[#64748B]">
+                  No technician expenses yet.
+                </p>
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="mt-7 px-3 sm:px-7">
+          <div className="pt-3">
+            <h3 className="text-lg font-black text-[#0B1228]">Quick Actions</h3>
+            <div className="mt-3 grid grid-cols-4 gap-2.5">
+              <button
+                className="flex min-h-[46px] min-w-0 items-center justify-center gap-1.5 rounded-[0.9rem] bg-white px-1.5 py-2 text-center text-[0.68rem] font-black leading-4 text-[#0F5BFF] shadow-[0_7px_18px_rgba(15,23,42,0.045)] ring-1 ring-[#D7E4FF] transition hover:-translate-y-0.5 sm:min-h-[60px] sm:flex-col sm:gap-1.5 sm:text-xs"
+                onClick={() => setActiveJobTab("notes")}
+                type="button"
+              >
+                <FinanceHomeIcon className="h-6 w-6 shrink-0 sm:h-8 sm:w-8" name="note" />
+                <span className="min-w-0">Add Note</span>
+              </button>
+              <button
+                className="flex min-h-[46px] min-w-0 items-center justify-center gap-1.5 rounded-[0.9rem] bg-white px-1.5 py-2 text-center text-[0.68rem] font-black leading-4 text-[#0F5BFF] shadow-[0_7px_18px_rgba(15,23,42,0.045)] ring-1 ring-[#E7ECF5] transition hover:-translate-y-0.5 sm:min-h-[60px] sm:flex-col sm:gap-1.5 sm:text-xs"
+                onClick={openAttachmentCameraPicker}
+                type="button"
+              >
+                <FinanceHomeIcon className="h-6 w-6 shrink-0 sm:h-8 sm:w-8" name="photo" />
+                <span className="min-w-0">Add Photo</span>
+              </button>
+              <button
+                className="flex min-h-[46px] min-w-0 items-center justify-center gap-1.5 rounded-[0.9rem] bg-white px-1.5 py-2 text-center text-[0.68rem] font-black leading-4 text-[#0F5BFF] shadow-[0_7px_18px_rgba(15,23,42,0.045)] ring-1 ring-[#E7ECF5] transition hover:-translate-y-0.5 sm:min-h-[60px] sm:flex-col sm:gap-1.5 sm:text-xs"
+                onClick={openAttachmentGalleryPicker}
+                type="button"
+              >
+                <FinanceHomeIcon className="h-6 w-6 shrink-0 sm:h-8 sm:w-8" name="upload" />
+                <span className="min-w-0">Upload Document</span>
+              </button>
+              <button
+                className="flex min-h-[46px] min-w-0 items-center justify-center gap-1.5 rounded-[0.9rem] bg-white px-1.5 py-2 text-center text-[0.68rem] font-black leading-4 text-[#0F5BFF] shadow-[0_7px_18px_rgba(15,23,42,0.045)] ring-1 ring-[#E7ECF5] transition hover:-translate-y-0.5 sm:min-h-[60px] sm:flex-col sm:gap-1.5 sm:text-xs"
+                onClick={() => setActiveJobTab("photos")}
+                type="button"
+              >
+                <FinanceHomeIcon className="h-6 w-6 shrink-0 sm:h-8 sm:w-8" name="more" />
+                <span className="min-w-0">More</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {isFinanceEstimateWorkflowOpen ? (
+          <div className="mt-6">
 
         {catalogState.status === "loading" ? (
           <p className="mt-4 text-sm text-[#64748B]">Loading pricing catalog...</p>
@@ -9916,17 +11109,1081 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
           </div>
         ) : null}
 
+        <div className="mt-5 rounded-[2rem] border border-[#E5E7EB] bg-[#F8FAFC] p-3 shadow-[0_12px_32px_rgba(15,23,42,0.06)] sm:p-5">
+          <div className="rounded-[1.5rem] bg-white p-4 sm:p-6">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h3 className="text-2xl font-black text-[#0F172A]">
+                  Repair Proposal
+                </h3>
+              </div>
+              <div className="rounded-2xl bg-[#F8FAFC] px-4 py-3 text-sm">
+                <p className="font-black text-[#0F172A]">
+                  {hasEstimateSelection ? "Draft in progress" : "No draft yet"}
+                </p>
+                <p className="mt-1 text-xs font-semibold text-[#64748B]">
+                  {editingEstimate
+                    ? `Editing ${editingEstimate.estimateNumber}`
+                    : activeDraftEstimate
+                      ? `Active draft ${activeDraftEstimate.estimateNumber}`
+                      : "Start with AI, manual entry, or a template."}
+                </p>
+              </div>
+            </div>
+
+            {!shouldShowRepairProposalBuilder ? (
+              <div className="mt-6 grid gap-3 md:grid-cols-3">
+                <button
+                  className="rounded-3xl bg-[#0F6BFF] px-5 py-5 text-left text-white shadow-[0_14px_28px_rgba(15,107,255,0.22)] transition hover:bg-[#0057D9] disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={
+                    estimateSaveState.status === "saving" ||
+                    estimateGenerationState.status === "generating"
+                  }
+                  onClick={() =>
+                    estimateDiagnosisText.trim()
+                      ? void generateEstimateDraftFromDiagnosis()
+                      : setIsRepairScopeSheetOpen(true)
+                  }
+                  type="button"
+                >
+                  <span className="block text-lg font-black">
+                    {estimateGenerationState.status === "generating"
+                      ? "Generating..."
+                      : "Generate with AI"}
+                  </span>
+                  <span className="mt-2 block text-sm font-semibold leading-6 text-blue-50">
+                    Turn confirmed technician scope into a proposal draft.
+                  </span>
+                </button>
+                <button
+                  className="rounded-3xl border border-[#E5E7EB] bg-white px-5 py-5 text-left transition hover:border-[#0F6BFF]"
+                  disabled={estimateSaveState.status === "saving"}
+                  onClick={createManualRepairProposalDraft}
+                  type="button"
+                >
+                  <span className="block text-lg font-black text-[#0F172A]">
+                    Create Manually
+                  </span>
+                  <span className="mt-2 block text-sm font-semibold leading-6 text-[#64748B]">
+                    Start with an empty technician-controlled proposal.
+                  </span>
+                </button>
+                <button
+                  className="rounded-3xl border border-[#E5E7EB] bg-white px-5 py-5 text-left transition hover:border-[#0F6BFF]"
+                  disabled={estimateSaveState.status === "saving"}
+                  onClick={() => setIsTemplateSheetOpen(true)}
+                  type="button"
+                >
+                  <span className="block text-lg font-black text-[#0F172A]">
+                    Use Template
+                  </span>
+                  <span className="mt-2 block text-sm font-semibold leading-6 text-[#64748B]">
+                    Use a lightweight starter and customize every line.
+                  </span>
+                </button>
+              </div>
+            ) : (
+              <div className="mt-6 space-y-4 pb-24 sm:pb-0">
+                <details className="rounded-3xl border border-[#E5E7EB] bg-white p-4" open>
+                  <summary className="cursor-pointer text-lg font-black text-[#0F172A]">
+                    What we found
+                  </summary>
+                  <textarea
+                    className="mt-4 min-h-28 w-full rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3 text-sm font-semibold leading-6 text-[#334155] outline-none transition focus:border-[#0F6BFF] focus:bg-white"
+                    disabled={estimateSaveState.status === "saving"}
+                    maxLength={1200}
+                    onChange={(event) => {
+                      setEstimateDiagnosisText(event.target.value);
+                      updateProposalCustomerDescription(event.target.value);
+                    }}
+                    placeholder="Confirmed diagnosis or technician findings."
+                    value={estimateDiagnosisText || proposalCustomerDescription}
+                  />
+                </details>
+
+                <details className="rounded-3xl border border-[#E5E7EB] bg-white p-4" open>
+                  <summary className="cursor-pointer text-lg font-black text-[#0F172A]">
+                    Repair Solution
+                  </summary>
+                  <input
+                    className="mt-4 w-full rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3 text-base font-black text-[#0F172A] outline-none transition focus:border-[#0F6BFF] focus:bg-white"
+                    disabled={estimateSaveState.status === "saving"}
+                    onChange={(event) => updateProposalRepairSolution(event.target.value)}
+                    value={proposalRepairSolution}
+                  />
+                </details>
+
+                <details className="rounded-3xl border border-[#E5E7EB] bg-white p-4" open>
+                  <summary className="cursor-pointer text-lg font-black text-[#0F172A]">
+                    What we will do
+                  </summary>
+                  {proposalCustomEstimateLines.length > 0 ? (
+                    <div className="mt-4 space-y-2">
+                      {proposalCustomEstimateLines.map((line, index) => {
+                        const isCustomerVisible = !hiddenProposalLineIds.includes(line.id);
+
+                        return (
+                        <div
+                          className="flex items-center gap-3 rounded-2xl bg-[#F8FAFC] px-3 py-3"
+                          key={line.id}
+                        >
+                          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#0F6BFF] text-xs font-black text-white">
+                            {index + 1}
+                          </span>
+                          <input
+                            className="min-w-0 flex-1 bg-transparent text-sm font-black text-[#0F172A] outline-none"
+                            disabled={estimateSaveState.status === "saving"}
+                            onChange={(event) =>
+                              updateCustomEstimateLineTitle(line.id, event.target.value)
+                            }
+                            value={line.customerName}
+                          />
+                          {!isCustomerVisible ? (
+                            <span className="shrink-0 rounded-full bg-slate-200 px-2 py-1 text-[10px] font-black uppercase text-[#64748B]">
+                              Hidden
+                            </span>
+                          ) : null}
+                          <button
+                            className="text-xs font-black text-[#64748B] transition hover:text-[#0F6BFF]"
+                            disabled={estimateSaveState.status === "saving"}
+                            onClick={() => setEditingProposalLineId(line.id)}
+                            type="button"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            className="text-xs font-black text-red-600 transition hover:text-red-700"
+                            disabled={estimateSaveState.status === "saving"}
+                            onClick={() => removeCustomEstimateLine(line.id)}
+                            type="button"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                        );
+                      })}
+                      <button
+                        className="w-full rounded-2xl border border-dashed border-[#0F6BFF]/40 bg-blue-50 px-4 py-3 text-sm font-black text-[#0F6BFF] transition hover:bg-blue-100"
+                        disabled={estimateSaveState.status === "saving"}
+                        onClick={() => setIsAddProposalItemSheetOpen(true)}
+                        type="button"
+                      >
+                        + Add checklist item
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="mt-4 rounded-2xl bg-[#F8FAFC] p-4">
+                      <p className="text-sm font-semibold text-[#64748B]">
+                        Add proposal items to build the work checklist.
+                      </p>
+                      <button
+                        className="mt-3 rounded-2xl border border-dashed border-[#0F6BFF]/40 bg-blue-50 px-4 py-3 text-sm font-black text-[#0F6BFF] transition hover:bg-blue-100"
+                        disabled={estimateSaveState.status === "saving"}
+                        onClick={() => setIsAddProposalItemSheetOpen(true)}
+                        type="button"
+                      >
+                        + Add checklist item
+                      </button>
+                    </div>
+                  )}
+                </details>
+
+                <details className="rounded-3xl border border-[#E5E7EB] bg-white p-4" open>
+                  <summary className="cursor-pointer text-lg font-black text-[#0F172A]">
+                    Included Items
+                  </summary>
+                  <div className="mt-4 space-y-3">
+                    {selectedCatalogItems.map((item) => (
+                      <div
+                        className="rounded-3xl border border-[#E5E7EB] bg-[#F8FAFC] p-4"
+                        key={item.id}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="font-black text-[#0F172A]">{item.title}</p>
+                            <p className="mt-1 text-xs font-bold text-[#64748B]">
+                              Price Book labor · Qty 1
+                            </p>
+                          </div>
+                          <p className="font-black text-[#0F6BFF]">
+                            {formatServiceRequestMoney(item.customerPrice)}
+                          </p>
+                        </div>
+                        <button
+                          className="mt-3 text-xs font-black text-[#64748B] transition hover:text-amber-800"
+                          disabled={estimateSaveState.status === "saving"}
+                          onClick={() => toggleCatalogItem(item.id)}
+                          type="button"
+                        >
+                          Remove
+                        </button>
+                        <dl className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-5">
+                          <div>
+                            <dt className="font-black uppercase text-[#94A3B8]">
+                              Customer Price
+                            </dt>
+                            <dd className="mt-1 font-black text-[#0F172A]">
+                              {formatServiceRequestMoney(item.customerPrice)}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt className="font-black uppercase text-[#94A3B8]">
+                              Internal Cost
+                            </dt>
+                            <dd className="mt-1 font-black text-[#0F172A]">
+                              {formatServiceRequestMoney(item.technicianCost ?? 0)}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt className="font-black uppercase text-[#94A3B8]">
+                              Quantity
+                            </dt>
+                            <dd className="mt-1 font-black text-[#0F172A]">1</dd>
+                          </div>
+                          <div>
+                            <dt className="font-black uppercase text-[#94A3B8]">
+                              Type
+                            </dt>
+                            <dd className="mt-1 font-black text-[#0F172A]">Labor</dd>
+                          </div>
+                          <div>
+                            <dt className="font-black uppercase text-[#94A3B8]">
+                              Customer Visible
+                            </dt>
+                            <dd className="mt-1 font-black text-[#0F172A]">Yes</dd>
+                          </div>
+                          <div>
+                            <dt className="font-black uppercase text-[#94A3B8]">
+                              Taxable
+                            </dt>
+                            <dd className="mt-1 font-black text-[#0F172A]">
+                              {item.taxable ? "Yes" : "No"}
+                            </dd>
+                          </div>
+                        </dl>
+                      </div>
+                    ))}
+                    {proposalCustomEstimateLines.map((line) => {
+                      const isCustomerVisible = !hiddenProposalLineIds.includes(line.id);
+                      const lineTotal =
+                        Math.round(line.quantity * line.unitPrice * 100) / 100;
+
+                      return (
+                        <button
+                          className="block w-full rounded-3xl border border-[#E5E7EB] bg-[#F8FAFC] p-4 text-left transition hover:border-[#0F6BFF]"
+                          disabled={estimateSaveState.status === "saving"}
+                          key={line.id}
+                          onClick={() => setEditingProposalLineId(line.id)}
+                          type="button"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="truncate font-black text-[#0F172A]">
+                                {line.customerName || "Untitled proposal item"}
+                              </p>
+                              <p className="mt-1 text-xs font-bold text-[#64748B]">
+                                {professionalEstimateLineTypeLabels[line.lineType]} · Qty{" "}
+                                {line.quantity}
+                                {!isCustomerVisible ? " · Hidden from customer" : ""}
+                              </p>
+                            </div>
+                            <p className="shrink-0 font-black text-[#0F6BFF]">
+                              {formatServiceRequestMoney(lineTotal)}
+                            </p>
+                          </div>
+                          <dl className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-6">
+                            <div>
+                              <dt className="font-black uppercase text-[#94A3B8]">
+                                Customer Price
+                              </dt>
+                              <dd className="mt-1 font-black text-[#0F172A]">
+                                {formatServiceRequestMoney(line.unitPrice)}
+                              </dd>
+                            </div>
+                            <div>
+                              <dt className="font-black uppercase text-[#94A3B8]">
+                                Internal Cost
+                              </dt>
+                              <dd className="mt-1 font-black text-[#0F172A]">
+                                {formatServiceRequestMoney(line.unitCost)}
+                              </dd>
+                            </div>
+                            <div>
+                              <dt className="font-black uppercase text-[#94A3B8]">
+                                Quantity
+                              </dt>
+                              <dd className="mt-1 font-black text-[#0F172A]">
+                                {line.quantity}
+                              </dd>
+                            </div>
+                            <div>
+                              <dt className="font-black uppercase text-[#94A3B8]">
+                                Type
+                              </dt>
+                              <dd className="mt-1 font-black text-[#0F172A]">
+                                {professionalEstimateLineTypeLabels[line.lineType]}
+                              </dd>
+                            </div>
+                            <div>
+                              <dt className="font-black uppercase text-[#94A3B8]">
+                                Taxable
+                              </dt>
+                              <dd className="mt-1 font-black text-[#0F172A]">
+                                {line.taxable ? "Yes" : "No"}
+                              </dd>
+                            </div>
+                            <div>
+                              <dt className="font-black uppercase text-[#94A3B8]">
+                                Customer Visible
+                              </dt>
+                              <dd className="mt-1 font-black text-[#0F172A]">
+                                {isCustomerVisible ? "Yes" : "No"}
+                              </dd>
+                            </div>
+                            <div>
+                              <dt className="font-black uppercase text-[#94A3B8]">
+                                Warranty
+                              </dt>
+                              <dd className="mt-1 font-black text-[#0F172A]">
+                                Included
+                              </dd>
+                            </div>
+                          </dl>
+                        </button>
+                      );
+                    })}
+                    <button
+                      className="w-full rounded-3xl border border-dashed border-[#0F6BFF]/40 bg-blue-50 px-4 py-4 text-sm font-black text-[#0F6BFF] transition hover:bg-blue-100"
+                      disabled={estimateSaveState.status === "saving"}
+                      onClick={() => setIsAddProposalItemSheetOpen(true)}
+                      type="button"
+                    >
+                      + Add Item
+                    </button>
+                  </div>
+                </details>
+
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <details className="rounded-3xl border border-[#E5E7EB] bg-white p-4" open>
+                    <summary className="cursor-pointer text-lg font-black text-[#0F172A]">
+                      Warranty
+                    </summary>
+                    <label className="mt-4 block">
+                      <span className="text-xs font-black uppercase tracking-[0.12em] text-[#64748B]">
+                        Parts / Labor Warranty
+                      </span>
+                      <textarea
+                        className="mt-2 min-h-24 w-full rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3 text-sm font-semibold leading-6 text-[#334155] outline-none transition focus:border-[#0F6BFF] focus:bg-white"
+                        disabled={estimateSaveState.status === "saving"}
+                        maxLength={1000}
+                        onChange={(event) => updateWarrantyFooterText(event.target.value)}
+                        value={warrantyFooterText}
+                      />
+                    </label>
+                  </details>
+
+                  <details className="rounded-3xl border border-[#E5E7EB] bg-white p-4" open>
+                    <summary className="cursor-pointer text-lg font-black text-[#0F172A]">
+                      Estimated Completion
+                    </summary>
+                    <textarea
+                      className="mt-4 min-h-24 w-full rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3 text-sm font-semibold leading-6 text-[#334155] outline-none transition focus:border-[#0F6BFF] focus:bg-white"
+                      disabled={estimateSaveState.status === "saving"}
+                      maxLength={400}
+                      onChange={(event) =>
+                        setProposalEstimatedCompletion(event.target.value.slice(0, 400))
+                      }
+                      value={proposalEstimatedCompletion}
+                    />
+                  </details>
+                </div>
+
+                <details className="rounded-3xl border border-[#E5E7EB] bg-white p-4" open>
+                  <summary className="cursor-pointer text-lg font-black text-[#0F172A]">
+                    Totals
+                  </summary>
+                  <dl className="mt-4 space-y-3 text-sm">
+                    <div className="flex items-center justify-between">
+                      <dt className="font-bold text-[#64748B]">Subtotal</dt>
+                      <dd className="font-black text-[#0F172A]">
+                        {formatServiceRequestMoney(estimateSubtotal)}
+                      </dd>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <dt className="font-bold text-[#64748B]">Discount</dt>
+                      <dd className="font-black text-[#0F172A]">
+                        -{formatServiceRequestMoney(estimateDiscountAmount)}
+                      </dd>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <dt className="font-bold text-[#64748B]">Tax</dt>
+                      <dd className="font-black text-[#0F172A]">
+                        {formatServiceRequestMoney(estimateTaxTotal)}
+                      </dd>
+                    </div>
+                    <div className="flex items-center justify-between border-t border-[#E5E7EB] pt-4">
+                      <dt className="text-lg font-black text-[#0F172A]">Total</dt>
+                      <dd className="text-2xl font-black text-[#0F6BFF]">
+                        {formatServiceRequestMoney(estimateGrandTotal)}
+                      </dd>
+                    </div>
+                    <div className="grid gap-2 pt-2 text-xs sm:grid-cols-2">
+                      <div className="rounded-2xl bg-[#F8FAFC] p-3">
+                        <dt className="font-black uppercase text-[#64748B]">
+                          Gross Profit
+                        </dt>
+                        <dd className="mt-1 font-black text-[#0F172A]">
+                          {formatServiceRequestMoney(estimateMargin)}
+                        </dd>
+                      </div>
+                      <div className="rounded-2xl bg-[#F8FAFC] p-3">
+                        <dt className="font-black uppercase text-[#64748B]">
+                          Margin
+                        </dt>
+                        <dd className="mt-1 font-black text-[#0F172A]">
+                          {estimateMarginPercent.toFixed(2)}%
+                        </dd>
+                      </div>
+                    </div>
+                  </dl>
+                  <button
+                    className="mt-4 text-sm font-black text-[#0F6BFF] transition hover:text-[#0057D9]"
+                    onClick={() => setShowEstimateAdjustments((current) => !current)}
+                    type="button"
+                  >
+                    {showEstimateAdjustments ? "Hide discount and tax" : "Edit discount and tax"}
+                  </button>
+                  {showEstimateAdjustments ? (
+                    <div className="mt-3 grid gap-3 rounded-2xl bg-[#F8FAFC] p-3 sm:grid-cols-3">
+                      <label className="block">
+                        <span className="mb-1 block text-xs font-black uppercase text-[#64748B]">
+                          Discount type
+                        </span>
+                        <select
+                          className="w-full rounded-xl border border-[#E5E7EB] bg-white px-3 py-2 text-sm font-bold text-[#0F172A] outline-none focus:border-[#0F6BFF]"
+                          disabled={estimateSaveState.status === "saving"}
+                          onChange={(event) =>
+                            setEstimateDiscountType(
+                              event.target.value === "percent" ? "percent" : "flat",
+                            )
+                          }
+                          value={estimateDiscountType}
+                        >
+                          <option value="flat">Dollar</option>
+                          <option value="percent">Percent</option>
+                        </select>
+                      </label>
+                      <label className="block">
+                        <span className="mb-1 block text-xs font-black uppercase text-[#64748B]">
+                          Discount
+                        </span>
+                        <input
+                          className="w-full rounded-xl border border-[#E5E7EB] bg-white px-3 py-2 text-right text-sm font-black text-[#0F172A] outline-none focus:border-[#0F6BFF]"
+                          disabled={estimateSaveState.status === "saving"}
+                          min="0"
+                          onChange={(event) => setEstimateDiscountValue(event.target.value)}
+                          step="0.01"
+                          type="number"
+                          value={estimateDiscountValue}
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="mb-1 block text-xs font-black uppercase text-[#64748B]">
+                          Tax rate %
+                        </span>
+                        <input
+                          className="w-full rounded-xl border border-[#E5E7EB] bg-white px-3 py-2 text-right text-sm font-black text-[#0F172A] outline-none focus:border-[#0F6BFF]"
+                          disabled={estimateSaveState.status === "saving"}
+                          min="0"
+                          onChange={(event) => setEstimateTaxRate(event.target.value)}
+                          step="0.01"
+                          type="number"
+                          value={estimateTaxRate}
+                        />
+                      </label>
+                    </div>
+                  ) : null}
+                </details>
+
+                {proposalWarnings.length > 0 || proposalBlockingErrors.length > 0 ? (
+                  <div className="space-y-2">
+                    {proposalWarnings.map((warning) => (
+                      <p
+                        className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold leading-6 text-amber-900"
+                        key={warning}
+                      >
+                        {warning}
+                      </p>
+                    ))}
+                    {proposalBlockingErrors.map((error) => (
+                      <p
+                        className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold leading-6 text-red-800"
+                        key={error}
+                      >
+                        {error}
+                      </p>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            )}
+
+            <div className="mt-5 rounded-2xl bg-[#F8FAFC] px-4 py-3 text-xs font-bold leading-5 text-[#64748B]">
+              <p>
+                Draft status:{" "}
+                <span className="text-[#0F172A]">
+                  {hasEstimateSelection ? "Ready for review" : "Not started"}
+                </span>
+              </p>
+              <p>
+                Last updated:{" "}
+                <span className="text-[#0F172A]">
+                  {editingEstimate
+                    ? formatServiceRequestDate(editingEstimate.updatedAt)
+                    : activeDraftEstimate
+                      ? formatServiceRequestDate(activeDraftEstimate.updatedAt)
+                      : "Not saved yet"}
+                </span>
+              </p>
+              <p>
+                Warnings:{" "}
+                <span className="text-[#0F172A]">
+                  {[...proposalWarnings, ...proposalBlockingErrors].length || "None"}
+                </span>
+              </p>
+            </div>
+          </div>
+
+          {shouldShowRepairProposalBuilder ? (
+            <div className="sticky bottom-3 z-20 mt-4 rounded-3xl border border-[#E5E7EB] bg-white/95 p-3 shadow-[0_16px_40px_rgba(15,23,42,0.16)] backdrop-blur">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-black text-[#0F172A]">
+                    Total {formatServiceRequestMoney(estimatePreviewTotal)}
+                  </p>
+                  {estimateSaveState.message ? (
+                    <p
+                      className={`mt-1 text-xs font-bold ${
+                        estimateSaveState.status === "error"
+                          ? "text-amber-800"
+                          : "text-[#0F6BFF]"
+                      }`}
+                    >
+                      {estimateSaveState.message}
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-xs font-semibold text-[#64748B]">
+                      Preview, save the draft, or send to the customer.
+                    </p>
+                  )}
+                </div>
+                <div className="grid grid-cols-3 gap-2 sm:flex">
+                  <button
+                    className="rounded-2xl border border-[#0F6BFF]/30 bg-blue-50 px-4 py-3 text-sm font-black text-[#0F6BFF] transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={!hasEstimateSelection}
+                    onClick={() => setIsProposalPreviewOpen(true)}
+                    type="button"
+                  >
+                    Preview
+                  </button>
+                  <button
+                    className="rounded-2xl border border-[#E5E7EB] bg-white px-4 py-3 text-sm font-black text-[#334155] transition hover:border-[#0F6BFF] hover:text-[#0F6BFF] disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={!canSaveEstimate}
+                    onClick={() => void createEstimate({ sendAfterSave: false })}
+                    type="button"
+                  >
+                    {estimateSaveState.status === "saving" ? "Saving..." : "Save Draft"}
+                  </button>
+                  <button
+                    className="rounded-2xl bg-[#0F6BFF] px-4 py-3 text-sm font-black text-white shadow-[0_8px_18px_rgba(15,107,255,0.22)] transition hover:bg-[#0057D9] disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={!canSendProposal}
+                    onClick={() => void createEstimate({ sendAfterSave: true })}
+                    type="button"
+                  >
+                    {estimateSaveState.status === "saving" || sendingEstimateId
+                      ? "Sending..."
+                      : "Send"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {isRepairScopeSheetOpen ? (
+            <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/55 px-3 py-4 backdrop-blur-sm sm:items-center">
+              <div className="w-full max-w-xl rounded-t-[2rem] bg-white p-5 shadow-2xl sm:rounded-[2rem]">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
+                      Confirmed Scope
+                    </p>
+                    <h3 className="mt-2 text-2xl font-black text-[#0F172A]">
+                      Generate with AI
+                    </h3>
+                  </div>
+                  <button
+                    className="rounded-full border border-[#E5E7EB] px-3 py-1 text-sm font-black text-[#334155]"
+                    onClick={() => setIsRepairScopeSheetOpen(false)}
+                    type="button"
+                  >
+                    Close
+                  </button>
+                </div>
+                <textarea
+                  className="mt-4 min-h-36 w-full rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3 text-sm font-semibold leading-6 text-[#334155] outline-none transition placeholder:text-[#94A3B8] focus:border-[#0F6BFF] focus:bg-white"
+                  maxLength={1200}
+                  onChange={(event) => {
+                    setEstimateDiagnosisText(event.target.value);
+                    setEstimateSaveState({ status: "idle", message: null });
+                  }}
+                  placeholder="Confirmed repair scope from technician. AI will format language, not decide the repair."
+                  value={estimateDiagnosisText}
+                />
+                <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
+                  <button
+                    className="rounded-2xl border border-[#E5E7EB] bg-white px-4 py-3 text-sm font-black text-[#334155]"
+                    onClick={startRepairScopeDictation}
+                    type="button"
+                  >
+                    {isDictatingRepairScope ? "Listening..." : "Dictate"}
+                  </button>
+                  <button
+                    className="rounded-2xl bg-[#0F6BFF] px-5 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={
+                      estimateGenerationState.status === "generating" ||
+                      estimateDiagnosisText.trim().length === 0
+                    }
+                    onClick={() => {
+                      setIsRepairScopeSheetOpen(false);
+                      void generateEstimateDraftFromDiagnosis();
+                    }}
+                    type="button"
+                  >
+                    {estimateGenerationState.status === "generating"
+                      ? "Generating..."
+                      : "Generate Draft"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {isTemplateSheetOpen ? (
+            <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/55 px-3 py-4 backdrop-blur-sm sm:items-center">
+              <div className="w-full max-w-lg rounded-t-[2rem] bg-white p-5 shadow-2xl sm:rounded-[2rem]">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
+                      Templates
+                    </p>
+                    <h3 className="mt-2 text-2xl font-black text-[#0F172A]">
+                      Use Template
+                    </h3>
+                  </div>
+                  <button
+                    className="rounded-full border border-[#E5E7EB] px-3 py-1 text-sm font-black text-[#334155]"
+                    onClick={() => setIsTemplateSheetOpen(false)}
+                    type="button"
+                  >
+                    Close
+                  </button>
+                </div>
+                <div className="mt-4 space-y-2">
+                  <button
+                    className="w-full rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] p-4 text-left transition hover:border-[#0F6BFF]"
+                    onClick={() => createTemplateRepairProposalDraft("standard")}
+                    type="button"
+                  >
+                    <span className="block font-black text-[#0F172A]">
+                      Standard Repair Solution
+                    </span>
+                    <span className="mt-1 block text-sm font-semibold text-[#64748B]">
+                      Starter for a technician-approved repair.
+                    </span>
+                  </button>
+                  <button
+                    className="w-full rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] p-4 text-left transition hover:border-[#0F6BFF]"
+                    onClick={() => createTemplateRepairProposalDraft("diagnostic")}
+                    type="button"
+                  >
+                    <span className="block font-black text-[#0F172A]">
+                      Diagnostic + Repair Labor
+                    </span>
+                    <span className="mt-1 block text-sm font-semibold text-[#64748B]">
+                      Starter when final parts/prices still need confirmation.
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {isAddProposalItemSheetOpen ? (
+            <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/55 px-3 py-4 backdrop-blur-sm sm:items-center">
+              <div className="w-full max-w-lg rounded-t-[2rem] bg-white p-5 shadow-2xl sm:rounded-[2rem]">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
+                      Included Item
+                    </p>
+                    <h3 className="mt-2 text-2xl font-black text-[#0F172A]">
+                      Add Item
+                    </h3>
+                  </div>
+                  <button
+                    className="rounded-full border border-[#E5E7EB] px-3 py-1 text-sm font-black text-[#334155]"
+                    onClick={() => setIsAddProposalItemSheetOpen(false)}
+                    type="button"
+                  >
+                    Close
+                  </button>
+                </div>
+                <div className="mt-4 grid gap-2">
+                  {estimateQuickLineTypes.map((item) => (
+                    <button
+                      className="rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3 text-left text-sm font-black text-[#0F172A] transition hover:border-[#0F6BFF]"
+                      key={item.lineType}
+                      onClick={() => {
+                        addEstimateItem(item.lineType);
+                        setIsAddProposalItemSheetOpen(false);
+                      }}
+                      type="button"
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {editingProposalLine ? (
+            <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/55 px-3 py-4 backdrop-blur-sm sm:items-center">
+              <div className="max-h-[92vh] w-full max-w-xl overflow-y-auto rounded-t-[2rem] bg-white p-5 shadow-2xl sm:rounded-[2rem]">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
+                      Included Item
+                    </p>
+                    <h3 className="mt-2 text-2xl font-black text-[#0F172A]">
+                      Edit Item
+                    </h3>
+                  </div>
+                  <button
+                    className="rounded-full border border-[#E5E7EB] px-3 py-1 text-sm font-black text-[#334155]"
+                    onClick={() => setEditingProposalLineId(null)}
+                    type="button"
+                  >
+                    Done
+                  </button>
+                </div>
+                <div className="mt-4 grid gap-3">
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-black uppercase text-[#64748B]">
+                      Item type
+                    </span>
+                    <select
+                      className="w-full rounded-xl border border-[#E5E7EB] bg-white px-3 py-2 text-sm font-bold text-[#0F172A] outline-none focus:border-[#0F6BFF]"
+                      disabled={estimateSaveState.status === "saving"}
+                      onChange={(event) =>
+                        updateCustomEstimateLineType(
+                          editingProposalLine.id,
+                          event.target.value as Exclude<
+                            ProfessionalEstimateLineType,
+                            "warranty"
+                          >,
+                        )
+                      }
+                      value={editingProposalLine.lineType}
+                    >
+                      {estimateQuickLineTypes.map((item) => (
+                        <option key={item.lineType} value={item.lineType}>
+                          {professionalEstimateLineTypeLabels[item.lineType]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-black uppercase text-[#64748B]">
+                      Title
+                    </span>
+                    <input
+                      className="w-full rounded-xl border border-[#E5E7EB] bg-white px-3 py-2 text-sm font-black text-[#0F172A] outline-none focus:border-[#0F6BFF]"
+                      disabled={estimateSaveState.status === "saving"}
+                      onChange={(event) =>
+                        updateCustomEstimateLineTitle(
+                          editingProposalLine.id,
+                          event.target.value,
+                        )
+                      }
+                      value={editingProposalLine.customerName}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-black uppercase text-[#64748B]">
+                      Description
+                    </span>
+                    <textarea
+                      className="min-h-24 w-full rounded-xl border border-[#E5E7EB] bg-white px-3 py-2 text-sm font-semibold leading-6 text-[#334155] outline-none focus:border-[#0F6BFF]"
+                      disabled={estimateSaveState.status === "saving"}
+                      maxLength={500}
+                      onChange={(event) =>
+                        updateCustomEstimateLineDescription(
+                          editingProposalLine.id,
+                          event.target.value,
+                        )
+                      }
+                      value={editingProposalLine.publicDescription ?? ""}
+                    />
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-black uppercase text-[#64748B]">
+                        Customer Price
+                      </span>
+                      <input
+                        className="w-full rounded-xl border border-[#E5E7EB] bg-white px-3 py-2 text-right text-sm font-black text-[#0F6BFF] outline-none focus:border-[#0F6BFF]"
+                        disabled={estimateSaveState.status === "saving"}
+                        min="0"
+                        onChange={(event) =>
+                          updateCustomEstimateLinePrice(
+                            editingProposalLine.id,
+                            event.target.value,
+                          )
+                        }
+                        step="0.01"
+                        type="number"
+                        value={String(editingProposalLine.unitPrice)}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-black uppercase text-[#64748B]">
+                        Internal Cost
+                      </span>
+                      <input
+                        className="w-full rounded-xl border border-[#E5E7EB] bg-white px-3 py-2 text-right text-sm font-black text-[#0F172A] outline-none focus:border-[#0F6BFF]"
+                        disabled={estimateSaveState.status === "saving"}
+                        min="0"
+                        onChange={(event) =>
+                          updateCustomEstimateLineCost(
+                            editingProposalLine.id,
+                            event.target.value,
+                          )
+                        }
+                        step="0.01"
+                        type="number"
+                        value={String(editingProposalLine.unitCost)}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-black uppercase text-[#64748B]">
+                        Quantity
+                      </span>
+                      <input
+                        className="w-full rounded-xl border border-[#E5E7EB] bg-white px-3 py-2 text-right text-sm font-black text-[#0F172A] outline-none focus:border-[#0F6BFF]"
+                        disabled={estimateSaveState.status === "saving"}
+                        min="1"
+                        onChange={(event) =>
+                          updateCustomEstimateLineQuantity(
+                            editingProposalLine.id,
+                            event.target.value,
+                          )
+                        }
+                        step="0.01"
+                        type="number"
+                        value={String(editingProposalLine.quantity)}
+                      />
+                    </label>
+                    <label className="mt-6 inline-flex min-h-10 items-center gap-2 rounded-xl border border-[#E5E7EB] bg-white px-3 text-xs font-black text-[#334155]">
+                      <input
+                        checked={editingProposalLine.taxable}
+                        className="h-4 w-4 accent-[#0F6BFF]"
+                        disabled={estimateSaveState.status === "saving"}
+                        onChange={(event) =>
+                          updateCustomEstimateLineTaxable(
+                            editingProposalLine.id,
+                            event.target.checked,
+                          )
+                        }
+                        type="checkbox"
+                      />
+                      Taxable
+                    </label>
+                    <label className="mt-6 inline-flex min-h-10 items-center gap-2 rounded-xl border border-[#E5E7EB] bg-white px-3 text-xs font-black text-[#334155]">
+                      <input
+                        checked={!hiddenProposalLineIds.includes(editingProposalLine.id)}
+                        className="h-4 w-4 accent-[#0F6BFF]"
+                        disabled={estimateSaveState.status === "saving"}
+                        onChange={(event) =>
+                          updateCustomEstimateLineVisibility(
+                            editingProposalLine.id,
+                            event.target.checked,
+                          )
+                        }
+                        type="checkbox"
+                      />
+                      Customer Visible
+                    </label>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      className="flex-1 rounded-2xl border border-[#E5E7EB] bg-white px-4 py-3 text-sm font-black text-[#334155] disabled:opacity-40"
+                      disabled={
+                        estimateSaveState.status === "saving" ||
+                        customEstimateLines[0]?.id === editingProposalLine.id
+                      }
+                      onClick={() => moveCustomEstimateLine(editingProposalLine.id, "up")}
+                      type="button"
+                    >
+                      Move Up
+                    </button>
+                    <button
+                      className="flex-1 rounded-2xl border border-[#E5E7EB] bg-white px-4 py-3 text-sm font-black text-[#334155] disabled:opacity-40"
+                      disabled={
+                        estimateSaveState.status === "saving" ||
+                        customEstimateLines[customEstimateLines.length - 1]?.id ===
+                          editingProposalLine.id
+                      }
+                      onClick={() =>
+                        moveCustomEstimateLine(editingProposalLine.id, "down")
+                      }
+                      type="button"
+                    >
+                      Move Down
+                    </button>
+                  </div>
+                  <button
+                    className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-black text-red-700 disabled:opacity-40"
+                    disabled={estimateSaveState.status === "saving"}
+                    onClick={() => {
+                      removeCustomEstimateLine(editingProposalLine.id);
+                      setEditingProposalLineId(null);
+                    }}
+                    type="button"
+                  >
+                    Delete Item
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {isProposalPreviewOpen ? (
+            <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/55 px-3 py-4 backdrop-blur-sm sm:items-center">
+              <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
+                      Customer Preview
+                    </p>
+                    <h3 className="mt-2 text-2xl font-black text-[#0F172A]">
+                      Repair Proposal
+                    </h3>
+                  </div>
+                  <button
+                    className="rounded-full border border-[#E5E7EB] px-3 py-1 text-sm font-black text-[#334155]"
+                    onClick={() => setIsProposalPreviewOpen(false)}
+                    type="button"
+                  >
+                    Close
+                  </button>
+                </div>
+                <div className="mt-5 rounded-2xl bg-[#F8FAFC] p-4">
+                  <p className="text-sm font-black text-[#0F172A]">
+                    {proposalRepairSolution}
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-[#475569]">
+                    {proposalCustomerDescription}
+                  </p>
+                  <div className="mt-4 rounded-2xl bg-white p-4">
+                    <p className="text-xs font-black uppercase tracking-[0.16em] text-[#64748B]">
+                      Proposal Total
+                    </p>
+                    <p className="mt-1 text-4xl font-black text-[#0F6BFF]">
+                      {formatServiceRequestMoney(estimatePreviewTotal)}
+                    </p>
+                  </div>
+                </div>
+                <details className="mt-4 rounded-2xl border border-[#E5E7EB] bg-white">
+                  <summary className="cursor-pointer px-4 py-3 text-sm font-black text-[#0F6BFF]">
+                    View Itemized Estimate
+                  </summary>
+                  <div className="divide-y divide-[#E5E7EB] border-t border-[#E5E7EB]">
+                    {selectedCatalogItems.map((item) => (
+                      <div
+                        className="flex items-start justify-between gap-3 px-4 py-3 text-sm"
+                        key={item.id}
+                      >
+                        <div>
+                          <p className="font-black text-[#0F172A]">
+                            1x {item.title}
+                          </p>
+                        </div>
+                        <p className="shrink-0 font-black text-[#0F172A]">
+                          {formatServiceRequestMoney(item.customerPrice)}
+                        </p>
+                      </div>
+                    ))}
+                    {visibleCustomEstimateLines.map((line) => (
+                      <div
+                        className="flex items-start justify-between gap-3 px-4 py-3 text-sm"
+                        key={line.id}
+                      >
+                        <div>
+                          <p className="font-black text-[#0F172A]">
+                            {line.quantity}x {line.customerName}
+                          </p>
+                          {line.publicDescription ? (
+                            <p className="mt-1 text-xs leading-5 text-[#64748B]">
+                              {line.publicDescription}
+                            </p>
+                          ) : null}
+                        </div>
+                        <p className="shrink-0 font-black text-[#0F172A]">
+                          {formatServiceRequestMoney(
+                            line.quantity * line.unitPrice,
+                          )}
+                        </p>
+                      </div>
+                    ))}
+                    <div className="px-4 py-3 text-sm">
+                      <div className="flex justify-between">
+                        <span>Subtotal</span>
+                        <span>{formatServiceRequestMoney(estimateSubtotal)}</span>
+                      </div>
+                      <div className="mt-1 flex justify-between">
+                        <span>Tax</span>
+                        <span>{formatServiceRequestMoney(estimateTaxTotal)}</span>
+                      </div>
+                      <div className="mt-3 flex justify-between border-t border-[#E5E7EB] pt-3 font-black">
+                        <span>Total</span>
+                        <span>{formatServiceRequestMoney(estimateGrandTotal)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </details>
+                <p className="mt-4 rounded-2xl bg-blue-50 p-3 text-sm leading-6 text-[#334155]">
+                  <span className="font-black text-[#0F172A]">Warranty: </span>
+                  {warrantyFooterText}
+                </p>
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        {estimateDraftAgentResult && estimateRepairPlanSummary && false ? (
         <div className="mt-5 rounded-2xl border border-[#0F6BFF]/20 bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
-                Create estimate
+                Repair Proposal Builder
               </p>
               <h3 className="mt-1 text-xl font-black text-[#0F172A]">
-                Diagnosis to sent estimate
+                Confirmed repair to customer approval
               </h3>
               <p className="mt-1 text-sm leading-6 text-[#64748B]">
-                Describe the repair, review the generated lines, then send.
+                Describe the confirmed repair scope. WRA drafts the proposal,
+                you review every line, then send it to the customer.
               </p>
             </div>
             <div className="rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3 text-sm text-[#334155]">
@@ -9941,7 +12198,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
 
           <label className="mt-4 block">
             <span className="text-sm font-bold text-[#0F172A]">
-              Diagnosis
+              Describe confirmed repair
             </span>
             <textarea
               className="mt-2 min-h-24 w-full rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-4 text-base text-[#0F172A] outline-none transition placeholder:text-[#94A3B8] focus:border-[#0F6BFF] focus:bg-white"
@@ -9956,7 +12213,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                   source: null,
                 });
               }}
-              placeholder="Sub-Zero condenser fan is not running. Replace condenser fan assembly."
+              placeholder="Example: Надо менять компрессор. Or: Not getting water. Replace water valve."
               value={estimateDiagnosisText}
             />
           </label>
@@ -9973,20 +12230,30 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                 3. Send
               </span>
             </div>
-            <button
-              className="rounded-xl bg-[#0F6BFF] px-5 py-3 text-sm font-black text-white shadow-[0_8px_18px_rgba(15,107,255,0.22)] transition hover:bg-[#0057D9] disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={
-                estimateSaveState.status === "saving" ||
-                estimateGenerationState.status === "generating" ||
-                estimateDiagnosisText.trim().length === 0
-              }
-              onClick={() => void generateEstimateDraftFromDiagnosis()}
-              type="button"
-            >
-              {estimateGenerationState.status === "generating"
-                ? "Generating..."
-                : "Generate Estimate"}
-            </button>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <button
+                className="rounded-xl border border-[#E5E7EB] bg-white px-4 py-3 text-sm font-black text-[#334155] transition hover:border-[#0F6BFF] hover:text-[#0F6BFF] disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={isDictatingRepairScope || estimateSaveState.status === "saving"}
+                onClick={startRepairScopeDictation}
+                type="button"
+              >
+                {isDictatingRepairScope ? "Listening..." : "Dictate"}
+              </button>
+              <button
+                className="rounded-xl bg-[#0F6BFF] px-5 py-3 text-sm font-black text-white shadow-[0_8px_18px_rgba(15,107,255,0.22)] transition hover:bg-[#0057D9] disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={
+                  estimateSaveState.status === "saving" ||
+                  estimateGenerationState.status === "generating" ||
+                  estimateDiagnosisText.trim().length === 0
+                }
+                onClick={() => void generateEstimateDraftFromDiagnosis()}
+                type="button"
+              >
+                {estimateGenerationState.status === "generating"
+                  ? "Generating..."
+                  : "Generate Repair Proposal"}
+              </button>
+            </div>
           </div>
 
           <div className="mt-3 grid gap-2 sm:grid-cols-4">
@@ -10006,14 +12273,42 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
           {estimateDraftAgentResult ? (
             <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2">
               <p className="text-xs font-black uppercase tracking-[0.14em] text-[#0F6BFF]">
-                Estimate Draft
+                Repair Proposal Draft
               </p>
               <p className="mt-1 text-sm font-black text-[#0F172A]">
                 Please review before sending.
               </p>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1 block text-[0.68rem] font-black uppercase tracking-[0.14em] text-[#64748B]">
+                    Repair Solution
+                  </span>
+                  <input
+                    className="w-full rounded-lg border border-blue-100 bg-white px-3 py-2 text-sm font-black text-[#0F172A] outline-none transition focus:border-[#0F6BFF]"
+                    disabled={estimateSaveState.status === "saving"}
+                    onChange={(event) =>
+                      updateProposalRepairSolution(event.target.value)
+                    }
+                    value={estimateDraftAgentResult?.title ?? ""}
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-[0.68rem] font-black uppercase tracking-[0.14em] text-[#64748B]">
+                    Customer Summary
+                  </span>
+                  <textarea
+                    className="min-h-20 w-full rounded-lg border border-blue-100 bg-white px-3 py-2 text-sm font-semibold leading-5 text-[#334155] outline-none transition focus:border-[#0F6BFF]"
+                    disabled={estimateSaveState.status === "saving"}
+                    onChange={(event) =>
+                      updateProposalCustomerDescription(event.target.value)
+                    }
+                    value={estimateDraftAgentResult?.customerDescription ?? ""}
+                  />
+                </label>
+              </div>
               <p className="mt-1 text-xs font-semibold leading-5 text-[#475569]">
                 {estimateRepairPlanSummary?.understoodSummary ||
-                  estimateDraftAgentResult.customerDescription ||
+                  estimateDraftAgentResult?.customerDescription ||
                   "The draft is ready for technician review."}
               </p>
               {estimateRepairPlanSummary ? (
@@ -10022,9 +12317,9 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                     <p className="text-[11px] font-black uppercase tracking-[0.12em] text-[#64748B]">
                       Repairs included
                     </p>
-                    {estimateRepairPlanSummary.includedRepairs.length > 0 ? (
+                    {(estimateRepairPlanSummary?.includedRepairs.length ?? 0) > 0 ? (
                       <ul className="mt-1 space-y-1 text-xs font-semibold leading-5 text-[#0F172A]">
-                        {estimateRepairPlanSummary.includedRepairs.map((item) => (
+                        {estimateRepairPlanSummary?.includedRepairs.map((item) => (
                           <li key={item}>{item}</li>
                         ))}
                       </ul>
@@ -10038,9 +12333,9 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                     <p className="text-[11px] font-black uppercase tracking-[0.12em] text-[#64748B]">
                       Parts included
                     </p>
-                    {estimateRepairPlanSummary.includedParts.length > 0 ? (
+                    {(estimateRepairPlanSummary?.includedParts.length ?? 0) > 0 ? (
                       <ul className="mt-1 space-y-1 text-xs font-semibold leading-5 text-[#0F172A]">
-                        {estimateRepairPlanSummary.includedParts.map((item) => (
+                        {estimateRepairPlanSummary?.includedParts.map((item) => (
                           <li key={item}>{item}</li>
                         ))}
                       </ul>
@@ -10054,9 +12349,9 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                     <p className="text-[11px] font-black uppercase tracking-[0.12em] text-[#64748B]">
                       Needs confirmation
                     </p>
-                    {estimateRepairPlanSummary.missingInformation.length > 0 ? (
+                    {(estimateRepairPlanSummary?.missingInformation.length ?? 0) > 0 ? (
                       <ul className="mt-1 space-y-1 text-xs font-semibold leading-5 text-amber-800">
-                        {estimateRepairPlanSummary.missingInformation.map((item) => (
+                        {estimateRepairPlanSummary?.missingInformation.map((item) => (
                           <li key={item}>{item}</li>
                         ))}
                       </ul>
@@ -10075,10 +12370,10 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
             <div className="flex items-center justify-between gap-3 border-b border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3">
               <div>
                 <p className="text-sm font-black text-[#0F172A]">
-                  Estimate lines
+                  Proposal lines
                 </p>
                 <p className="mt-1 text-xs font-semibold text-[#64748B]">
-                  Customer-facing names and sell prices.
+                  Technician can edit every customer-facing line before sending.
                 </p>
               </div>
               <p className="text-right text-2xl font-black text-[#0F6BFF]">
@@ -10087,7 +12382,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
             </div>
             {!hasEstimateSelection ? (
               <p className="p-4 text-sm font-semibold text-[#64748B]">
-                Generate an estimate to review labor, parts, material, warranty,
+                Generate a Repair Proposal to review labor, parts, material, warranty,
                 and custom lines here.
               </p>
             ) : (
@@ -10127,7 +12422,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
 
                   return (
                     <div className="bg-white px-3 py-2 text-sm" key={line.id}>
-                      <div className="grid gap-2 md:grid-cols-[7.5rem_minmax(0,1fr)_7.5rem_7.5rem_auto] md:items-center">
+                      <div className="grid gap-2 md:grid-cols-[7.5rem_minmax(0,1fr)_7.5rem_7.5rem_7.5rem_auto] md:items-center">
                         <label className="block">
                           <span className="sr-only">Type</span>
                           <select
@@ -10178,7 +12473,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                         </label>
 
                         <label className="block">
-                          <span className="sr-only">Unit price</span>
+                          <span className="sr-only">Customer price</span>
                           <input
                             className="w-full rounded-lg border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-1.5 text-right text-sm font-black text-[#0F6BFF] outline-none transition focus:border-[#0F6BFF] focus:bg-white"
                             disabled={estimateSaveState.status === "saving"}
@@ -10195,15 +12490,64 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                           />
                         </label>
 
+                        <label className="block">
+                          <span className="sr-only">Internal cost</span>
+                          <input
+                            className="w-full rounded-lg border border-[#E5E7EB] bg-white px-3 py-1.5 text-right text-sm font-bold text-[#334155] outline-none transition focus:border-[#0F6BFF]"
+                            disabled={estimateSaveState.status === "saving"}
+                            min="0"
+                            onChange={(event) =>
+                              updateCustomEstimateLineCost(
+                                line.id,
+                                event.target.value,
+                              )
+                            }
+                            step="0.01"
+                            type="number"
+                            value={String(line.unitCost)}
+                          />
+                        </label>
+
                         <div className="flex items-center justify-between gap-3 md:block md:text-right">
                           <div>
                             <p className="text-sm font-black text-[#0F172A]">
                               {formatServiceRequestMoney(lineTotal)}
                             </p>
+                            <p className="text-[0.68rem] font-bold text-[#64748B]">
+                              Margin{" "}
+                              {formatServiceRequestMoney(
+                                lineTotal - line.quantity * line.unitCost,
+                              )}
+                            </p>
                           </div>
                         </div>
 
                         <div className="flex items-center justify-end gap-3">
+                          <button
+                            className="text-xs font-black text-[#64748B] transition hover:text-[#0F6BFF] disabled:opacity-40"
+                            disabled={
+                              estimateSaveState.status === "saving" ||
+                              customEstimateLines[0]?.id === line.id
+                            }
+                            onClick={() => moveCustomEstimateLine(line.id, "up")}
+                            type="button"
+                          >
+                            Up
+                          </button>
+                          <button
+                            className="text-xs font-black text-[#64748B] transition hover:text-[#0F6BFF] disabled:opacity-40"
+                            disabled={
+                              estimateSaveState.status === "saving" ||
+                              customEstimateLines[customEstimateLines.length - 1]
+                                ?.id === line.id
+                            }
+                            onClick={() =>
+                              moveCustomEstimateLine(line.id, "down")
+                            }
+                            type="button"
+                          >
+                            Down
+                          </button>
                           <button
                             className="text-xs font-black text-[#0F6BFF] transition hover:text-[#0057D9]"
                             onClick={() => toggleEstimateLineDetails(line.id)}
@@ -10280,6 +12624,12 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                     </div>
                   );
                 })}
+                <div className="bg-[#F8FAFC] px-4 py-3 text-xs font-semibold text-[#64748B]">
+                  Labor {laborProposalLines.length} · Parts{" "}
+                  {partProposalLines.length} · Materials{" "}
+                  {materialProposalLines.length} · Service Fees{" "}
+                  {feeProposalLines.length}
+                </div>
               </div>
             )}
           </div>
@@ -10351,6 +12701,35 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                   </dd>
                 </div>
               </dl>
+              <dl className="mt-2 grid gap-2 text-sm sm:grid-cols-2">
+                <div className="rounded-xl bg-[#F8FAFC] px-3 py-2">
+                  <dt className="text-[0.68rem] font-black uppercase tracking-[0.14em] text-[#64748B]">
+                    Internal Cost
+                  </dt>
+                  <dd className="mt-1 font-black text-[#0F172A]">
+                    {formatServiceRequestMoney(estimateInternalCostTotal)}
+                  </dd>
+                </div>
+                <div className="rounded-xl bg-[#F8FAFC] px-3 py-2">
+                  <dt className="text-[0.68rem] font-black uppercase tracking-[0.14em] text-[#64748B]">
+                    Margin
+                  </dt>
+                  <dd className="mt-1 font-black text-[#0F172A]">
+                    {formatServiceRequestMoney(estimateMargin)} ·{" "}
+                    {estimateMarginPercent.toFixed(2)}%
+                  </dd>
+                </div>
+              </dl>
+              {proposalWarnings.length > 0 ? (
+                <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold leading-5 text-amber-900">
+                  <p className="font-black">Warnings</p>
+                  <ul className="mt-1 space-y-1">
+                    {proposalWarnings.map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
               <button
                 className="mt-2 text-xs font-black text-[#0F6BFF] transition hover:text-[#0057D9]"
                 onClick={() =>
@@ -10425,7 +12804,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
               {estimateApprovalLink ? (
                 <a
                   className="mt-1 inline-flex text-xs font-black text-[#0F6BFF] hover:text-[#0057D9]"
-                  href={estimateApprovalLink.approvalUrl}
+                  href={estimateApprovalLink?.approvalUrl ?? "#"}
                   rel="noreferrer"
                   target="_blank"
                 >
@@ -10433,9 +12812,16 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                 </a>
               ) : (
                 <p className="mt-1 text-xs font-semibold text-[#64748B]">
-                  Sends a saved draft to the customer in one action.
+                  Save a draft, preview the customer view, then send when ready.
                 </p>
               )}
+              {proposalBlockingErrors.length > 0 ? (
+                <ul className="mt-2 space-y-1 text-xs font-semibold text-amber-800">
+                  {proposalBlockingErrors.map((error) => (
+                    <li key={error}>{error}</li>
+                  ))}
+                </ul>
+              ) : null}
             </div>
             <div className="flex flex-col gap-2 sm:flex-row">
               <button
@@ -10453,8 +12839,28 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                   : "Regenerate"}
               </button>
               <button
+                className="rounded-xl border border-[#E5E7EB] bg-white px-4 py-3 text-sm font-black text-[#334155] transition hover:border-[#0F6BFF] hover:text-[#0F6BFF] disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={!canSaveEstimate}
+                onClick={() => void createEstimate({ sendAfterSave: false })}
+                type="button"
+              >
+                {estimateSaveState.status === "saving"
+                  ? "Saving..."
+                  : editingEstimateId
+                    ? "Update Draft"
+                    : "Save Draft"}
+              </button>
+              <button
+                className="rounded-xl border border-[#0F6BFF]/30 bg-blue-50 px-4 py-3 text-sm font-black text-[#0F6BFF] transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={!hasEstimateSelection}
+                onClick={() => setIsProposalPreviewOpen(true)}
+                type="button"
+              >
+                Preview
+              </button>
+              <button
                 className="rounded-xl bg-[#0F6BFF] px-5 py-3 text-sm font-black text-white shadow-[0_8px_18px_rgba(15,107,255,0.22)] transition hover:bg-[#0057D9] disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={!canSaveEstimate || sendingEstimateId !== null}
+                disabled={!canSendProposal}
                 onClick={() => void createEstimate({ sendAfterSave: true })}
                 type="button"
               >
@@ -10462,7 +12868,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                   ? "Sending..."
                   : editingEstimateId
                     ? "Update & Send"
-                    : "Send Estimate"}
+                    : "Send"}
               </button>
             </div>
           </div>
@@ -10477,8 +12883,99 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
               {estimateSaveState.message}
             </p>
           ) : null}
+          {isProposalPreviewOpen ? (
+            <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/55 px-3 py-4 backdrop-blur-sm sm:items-center">
+              <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
+                      Customer Preview
+                    </p>
+                    <h3 className="mt-2 text-2xl font-black text-[#0F172A]">
+                      Repair Proposal
+                    </h3>
+                  </div>
+                  <button
+                    className="rounded-full border border-[#E5E7EB] px-3 py-1 text-sm font-black text-[#334155]"
+                    onClick={() => setIsProposalPreviewOpen(false)}
+                    type="button"
+                  >
+                    Close
+                  </button>
+                </div>
+                <div className="mt-5 rounded-2xl bg-[#F8FAFC] p-4">
+                  <p className="text-sm font-black text-[#0F172A]">
+                    {proposalRepairSolution}
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-[#475569]">
+                    {proposalCustomerDescription}
+                  </p>
+                  <div className="mt-4 rounded-2xl bg-white p-4">
+                    <p className="text-xs font-black uppercase tracking-[0.16em] text-[#64748B]">
+                      Proposal Total
+                    </p>
+                    <p className="mt-1 text-4xl font-black text-[#0F6BFF]">
+                      {formatServiceRequestMoney(estimatePreviewTotal)}
+                    </p>
+                  </div>
+                </div>
+                <details className="mt-4 rounded-2xl border border-[#E5E7EB] bg-white">
+                  <summary className="cursor-pointer px-4 py-3 text-sm font-black text-[#0F6BFF]">
+                    View Itemized Estimate
+                  </summary>
+                  <div className="divide-y divide-[#E5E7EB] border-t border-[#E5E7EB]">
+                    {visibleCustomEstimateLines.map((line) => (
+                      <div
+                        className="flex items-start justify-between gap-3 px-4 py-3 text-sm"
+                        key={line.id}
+                      >
+                        <div>
+                          <p className="font-black text-[#0F172A]">
+                            {line.quantity}x {line.customerName}
+                          </p>
+                          {line.publicDescription ? (
+                            <p className="mt-1 text-xs leading-5 text-[#64748B]">
+                              {line.publicDescription}
+                            </p>
+                          ) : null}
+                        </div>
+                        <p className="shrink-0 font-black text-[#0F172A]">
+                          {formatServiceRequestMoney(
+                            line.quantity * line.unitPrice,
+                          )}
+                        </p>
+                      </div>
+                    ))}
+                    <div className="px-4 py-3 text-sm">
+                      <div className="flex justify-between">
+                        <span>Subtotal</span>
+                        <span>{formatServiceRequestMoney(estimateSubtotal)}</span>
+                      </div>
+                      <div className="mt-1 flex justify-between">
+                        <span>Tax</span>
+                        <span>{formatServiceRequestMoney(estimateTaxTotal)}</span>
+                      </div>
+                      <div className="mt-3 flex justify-between border-t border-[#E5E7EB] pt-3 font-black">
+                        <span>Total</span>
+                        <span>{formatServiceRequestMoney(estimateGrandTotal)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </details>
+                <p className="mt-4 rounded-2xl bg-blue-50 p-3 text-sm leading-6 text-[#334155]">
+                  <span className="font-black text-[#0F172A]">Warranty: </span>
+                  {warrantyFooterText}
+                </p>
+              </div>
+            </div>
+          ) : null}
         </div>
+        ) : null}
+        </div>
+        ) : null}
 
+        {false ? (
+        <div>
         <div className="mt-6 space-y-6">
           <div>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
@@ -10634,7 +13131,10 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
             )}
           </div>
         </div>
+        </div>
+        ) : null}
       </section>
+        )
       ) : null}
 
       {activeJobTab === "notes" ||

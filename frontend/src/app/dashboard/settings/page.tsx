@@ -1,4 +1,5 @@
 import { CompanyBaseAddressSettings } from "@/components/dashboard/CompanyBaseAddressSettings";
+import { PriceBookSettings } from "@/components/dashboard/PriceBookSettings";
 
 export default function SettingsPage() {
   return (
@@ -17,6 +18,7 @@ export default function SettingsPage() {
       </section>
 
       <CompanyBaseAddressSettings />
+      <PriceBookSettings />
     </div>
   );
 }

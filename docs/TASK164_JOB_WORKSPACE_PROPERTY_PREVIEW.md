@@ -97,3 +97,39 @@ Mobile layout update:
 - If no photo exists but a map exists, mobile shows the map.
 - If neither exists, mobile shows a compact placeholder.
 - Desktop can still show map + photo + stats side by side.
+
+## Address/Property Repair Finalization
+
+Final visual QA passed in an external browser for the real job address:
+
+`20406 Ranger Point Ct, Katy, TX, 77450`
+
+The Job Property Details card now visibly shows:
+
+- Property photo.
+- Zestimate.
+- Square footage.
+- Year built.
+- Property type.
+- Static map image.
+
+Root cause:
+
+- ZIP validation parsed the first ZIP-like numeric token from the full address.
+- For `20406 Ranger Point Ct, Katy, TX, 77450`, the street number `20406` was incorrectly selected as the expected ZIP.
+- HasData/Zillow returned a valid property response for ZIP `77450`.
+- WRA rejected the valid response as a ZIP mismatch and returned `property: null`.
+
+Fix:
+
+- Property Intelligence ZIP validation now uses the last ZIP-like token in the address, which correctly resolves `77450` for normal US street addresses with street numbers.
+- The HasData adapter now accepts the current provider response shape, including `image`, `zestimate.zestimate`, `area.livingArea`, `homeType`, `geo.latitude`, `geo.longitude`, and `staticMapUrls`.
+- The property cache namespace moved to `property-intelligence-hasdata-zillow-v5` so stale negative cache results from the old parser are not reused.
+- Maps and Distance behavior was not changed. Maps continue to use the Job service address as the primary value, and Distance continues to use the Job service address with coordinates only as fallback.
+
+Customer address workflow notes:
+
+- `0068_customer_job_address_workflow_repair_apply_ready.sql`, `0069_customer_address_normalized_dedupe_finalize_apply_ready.sql`, and `0070_customer_address_state_uppercase_finalize_apply_ready.sql` were applied manually during the address workflow repair.
+- Address duplicate detection now treats common USPS-style variants such as Court/Ct, Boulevard/Blvd, Street/St, Apartment/Apt, punctuation, capitalization, spacing, and ZIP+4 as equivalent.
+- The original human-readable customer address is preserved when an equivalent variant is saved later.
+- New customer address state values persist as uppercase state abbreviations such as `TX`. Older `TE` or lowercase `tx` QA rows are legacy data and were not rewritten or deleted.

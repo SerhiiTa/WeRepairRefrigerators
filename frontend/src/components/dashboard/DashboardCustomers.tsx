@@ -194,6 +194,30 @@ function buildAddressPayload(form: CustomerFormState): Record<string, Json> {
   };
 }
 
+function formatCustomerCrmSaveError(message: string): string {
+  if (
+    message.includes("dashboard company context") ||
+    message.includes("COMPANY_CONTEXT_MISSING") ||
+    message.includes("current_dashboard_company_id")
+  ) {
+    return "Customer changes could not be saved because this dashboard account is missing active company access.";
+  }
+
+  if (message.includes("Customer is not accessible")) {
+    return "This customer is not available from the current dashboard account.";
+  }
+
+  if (message.includes("Address is not accessible")) {
+    return "This saved address is no longer available.";
+  }
+
+  if (message.includes("ZIP") || message.includes("zip")) {
+    return "Enter a valid 5-digit ZIP code before saving the customer address.";
+  }
+
+  return "Customer changes could not be saved. Please try again.";
+}
+
 function buildAppliancePayload(form: ApplianceFormState): Record<string, Json> {
   return {
     appliance_type: form.applianceType.trim() || null,
@@ -604,7 +628,7 @@ export function DashboardCustomersIndex() {
     });
 
     if (error) {
-      setCreateState({ status: "error", message: error.message });
+      setCreateState({ status: "error", message: formatCustomerCrmSaveError(error.message) });
       return;
     }
 
@@ -628,7 +652,7 @@ export function DashboardCustomersIndex() {
       if (addressResult.error) {
         setCreateState({
           status: "error",
-          message: `Customer created, but address could not be saved: ${addressResult.error.message}`,
+          message: `Customer created, but address could not be saved: ${formatCustomerCrmSaveError(addressResult.error.message)}`,
         });
         return;
       }
@@ -981,7 +1005,10 @@ export function DashboardCustomerDetail({ customerId }: { customerId: string }) 
     });
 
     if (customerResult.error) {
-      setProfileAction({ status: "error", message: customerResult.error.message });
+      setProfileAction({
+        status: "error",
+        message: formatCustomerCrmSaveError(customerResult.error.message),
+      });
       return;
     }
 
@@ -998,7 +1025,10 @@ export function DashboardCustomerDetail({ customerId }: { customerId: string }) 
       });
 
       if (addressResult.error) {
-        setProfileAction({ status: "error", message: addressResult.error.message });
+        setProfileAction({
+          status: "error",
+          message: formatCustomerCrmSaveError(addressResult.error.message),
+        });
         return;
       }
     }

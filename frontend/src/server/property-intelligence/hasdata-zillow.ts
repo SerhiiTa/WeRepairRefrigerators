@@ -112,8 +112,10 @@ function buildZillowHomesUrl(normalizedAddress: string): string {
 }
 
 function parseAddressForValidation(normalizedAddress: string): ParsedAddress {
+  const zipMatches = normalizedAddress.match(/\b\d{5}(?:-\d{4})?\b/g);
+
   return {
-    zipCode: normalizedAddress.match(/\b\d{5}(?:-\d{4})?\b/)?.[0]?.slice(0, 5) ?? null,
+    zipCode: zipMatches?.[zipMatches.length - 1]?.slice(0, 5) ?? null,
   };
 }
 
@@ -143,13 +145,19 @@ function looksLikePropertyPayload(value: unknown): boolean {
   return Boolean(
     readFirst(value, [
       "zestimate",
+      "zestimate.zestimate",
+      "image",
       "imgSrc",
       "photo",
       "livingArea",
+      "area.livingArea",
       "yearBuilt",
       "propertyType",
+      "homeType",
       "latitude",
+      "geo.latitude",
       "latLong.latitude",
+      "staticMapUrls.0",
     ]),
   );
 }
@@ -324,7 +332,7 @@ async function fetchHasDataProperty(
 
 const getCachedPropertyIntelligence = unstable_cache(
   async (normalizedAddress: string) => fetchHasDataProperty(normalizedAddress),
-  ["property-intelligence-hasdata-zillow-v2"],
+  ["property-intelligence-hasdata-zillow-v5"],
   {
     revalidate: PROPERTY_INTELLIGENCE_CACHE_SECONDS,
   },

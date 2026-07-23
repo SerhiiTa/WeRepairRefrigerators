@@ -11,6 +11,8 @@ import {
   normalizeApplianceCategory,
   type RepairPlan,
 } from "@/lib/repair-intelligence";
+import { generateRepairProposalDraft } from "@/server/finance/repair-proposal-providers";
+import { repairProposalDraftToEstimateDraftAgentResult } from "@/server/finance/repair-proposal-schema";
 import { createUserScopedServerClient } from "@/server/onboarding/supabase";
 
 type EstimateAgentDraftPayload = {
@@ -306,7 +308,15 @@ function buildAuthorizedScopeItems(diagnosis: string): AuthorizedScopeItem[] {
   const hasDispenserWaterLine = hasAnyTerm(normalized, [
     "water line",
     "water tube",
+    "water tubing",
+    "supply tube",
+    "supply tubing",
+    "water supply tube",
+    "water supply tubing",
     "dispenser water line",
+    "dispenser supply line",
+    "dispenser supply tube",
+    "dispenser supply tubing",
     "трубочка",
     "трубка",
     "подачи воды",
@@ -377,7 +387,7 @@ function buildAuthorizedScopeItems(diagnosis: string): AuthorizedScopeItem[] {
       id: "frozen_dispenser_water_line_thaw",
       label: "Frozen dispenser water line thawing",
       lineType: "material",
-      keywords: ["water", "line", "tube", "thaw", "defrost"],
+      keywords: ["water", "line", "tube", "tubing", "supply", "thaw", "defrost", "frozen"],
       requiredPlaceholders: ["[LABOR PRICE REQUIRED]"],
     });
   }
@@ -1315,6 +1325,142 @@ export async function POST(request: Request) {
     diagnosisLength: agentInput.technicianDiagnosis.length,
     authorizedScopeItems: authorizedScopeItems.map((item) => item.id),
   });
+
+  try {
+    const proposalResult = await generateRepairProposalDraft({
+      serviceRequestId: agentInput.jobId,
+      applianceType: agentInput.applianceType,
+      brand: agentInput.brand,
+      modelNumber: agentInput.modelNumber,
+      customerComplaint: agentInput.customerComplaint,
+      confirmedRepairScope: agentInput.technicianDiagnosis,
+      language:
+        agentInput.languageHint === "english" ||
+        agentInput.languageHint === "russian" ||
+        agentInput.languageHint === "ukrainian" ||
+        agentInput.languageHint === "spanish" ||
+        agentInput.languageHint === "mixed"
+          ? agentInput.languageHint
+          : null,
+    });
+    const draft = repairProposalDraftToEstimateDraftAgentResult(
+      proposalResult.proposalDraft,
+    );
+    const repairPlan: RepairPlan = {
+      applianceCategory: normalizeApplianceCategory(agentInput.applianceType),
+      brand: agentInput.brand,
+      modelNumber: agentInput.modelNumber,
+      problemSummary: proposalResult.proposalDraft.confirmed_problem_summary,
+      detectedRepairType: "technician_confirmed_repair_proposal",
+      requiredOperations: proposalResult.proposalDraft.repair_solutions.flatMap(
+        (solution) =>
+          solution.items
+            .filter((item) => item.line_type !== "part" && item.customer_visible)
+            .map((item) => ({
+              id: item.id,
+              title: item.customer_title,
+              description: item.customer_description,
+              estimateLineType:
+                item.line_type === "service" || item.line_type === "fee"
+                  ? "custom"
+                  : item.line_type,
+              customerVisible: item.customer_visible,
+            })),
+      ),
+      likelyParts: proposalResult.proposalDraft.repair_solutions.flatMap(
+        (solution) =>
+          solution.items
+            .filter((item) => item.line_type === "part" && item.customer_visible)
+            .map((item) => ({
+              id: item.id,
+              customerName: item.customer_title,
+              internalName: item.internal_name,
+              reason: item.customer_description,
+              quantity: item.quantity,
+              required: true,
+            })),
+      ),
+      materials: proposalResult.proposalDraft.repair_solutions.flatMap(
+        (solution) =>
+          solution.items
+            .filter((item) => item.line_type === "material" && item.customer_visible)
+            .map((item) => ({
+              id: item.id,
+              customerName: item.customer_title,
+              internalName: item.internal_name,
+              reason: item.customer_description,
+              quantity: item.quantity,
+              required: true,
+            })),
+      ),
+      laborConsiderations: proposalResult.proposalDraft.warnings.map(
+        (warning) => warning.message,
+      ),
+      riskNotes: proposalResult.proposalDraft.warnings.map((warning) => ({
+        id: warning.code,
+        severity: warning.blocking_before_send ? "caution" : "info",
+        note: warning.message,
+        customerVisible: false,
+      })),
+      customerFacingExplanation: proposalResult.proposalDraft.customer_summary,
+      estimateStrategy: {
+        strategy: "detailed",
+        customerSummary: proposalResult.proposalDraft.customer_summary,
+        pricingWarning:
+          proposalResult.proposalDraft.warnings.length > 0
+            ? "Some proposal information requires technician confirmation before sending."
+            : undefined,
+      },
+      warrantyRecommendation: {
+        text: proposalResult.proposalDraft.warranty,
+        days: 90,
+        scope: "labor_and_installed_parts",
+      },
+      confidence: draft.confidence,
+      repairIntents: [],
+      matchedKnowledgeKeys: ["repair_proposal.technician_authority_contract"],
+    };
+    const source = proposalResult.provider === "openai" ? "openai" : "fallback";
+
+    logEstimateAgentDev("request_complete", {
+      finalSource: source,
+      provider: proposalResult.provider,
+      fallbackReasons: proposalResult.fallbackReasons,
+      extractedExplicitScope: proposalResult.explicitScope.explicitItems.map(
+        (item) => item.title,
+      ),
+      lineCount: draft.lines.length,
+      finalLineTitles: draft.lines.map((line) => line.customerName),
+    });
+
+    return jsonResponse({
+      ok: true,
+      source,
+      provider: proposalResult.provider,
+      proposal_draft: proposalResult.proposalDraft,
+      repair_plan: repairPlan,
+      estimate_lines: draft.lines,
+      customer_summary: draft.customerDescription,
+      warranty_text: draft.warrantyText,
+      pricing_warnings: proposalResult.proposalDraft.warnings.map(
+        (warning) => warning.message,
+      ),
+      confidence: draft.confidence,
+      draft,
+      fallbackReason: proposalResult.fallbackReasons.join("; ") || undefined,
+      message:
+        source === "openai"
+          ? "Generated with AI. Please review before sending."
+          : "Generated locally. Please review before sending.",
+    });
+  } catch (proposalError) {
+    logEstimateAgentDev("proposal_contract_failed", {
+      message:
+        proposalError instanceof Error
+          ? proposalError.message
+          : String(proposalError),
+    });
+  }
 
   try {
     const aiDraft = await openAiEstimateAgentProvider.generateDraft(

@@ -37,6 +37,16 @@ type EstimateCustomItemInput = {
 type EstimatePayload = {
   catalogItems: EstimateCatalogItemInput[];
   customItems: EstimateCustomItemInput[];
+  adjustments?: {
+    discountType: "flat" | "percent";
+    discountValue: number;
+    taxRate: number;
+  };
+  metadata?: {
+    customerPreviewNotes: string | null;
+    warrantyText: string | null;
+    disclaimerText: string | null;
+  };
   estimateDecisionContext?: Json | null;
 };
 
@@ -103,6 +113,50 @@ function cleanJsonObject(value: unknown): Json | null {
   return value as Json;
 }
 
+function cleanNullableText(value: unknown, maxLength = 1000): string | null {
+  const cleaned = cleanText(value, maxLength);
+
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+function cleanEstimateMetadata(value: unknown): EstimatePayload["metadata"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const rawValue = value as Record<string, unknown>;
+
+  return {
+    customerPreviewNotes: cleanNullableText(rawValue.customerPreviewNotes, 1500),
+    warrantyText: cleanNullableText(rawValue.warrantyText, 1500),
+    disclaimerText: cleanNullableText(rawValue.disclaimerText, 1500),
+  };
+}
+
+function cleanEstimateAdjustments(value: unknown): EstimatePayload["adjustments"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {
+      discountType: "flat",
+      discountValue: 0,
+      taxRate: 0,
+    };
+  }
+
+  const rawValue = value as Record<string, unknown>;
+  const discountType = rawValue.discountType === "percent" ? "percent" : "flat";
+  const discountValue = cleanMoney(rawValue.discountValue);
+  const taxRateValue = Number(rawValue.taxRate);
+  const taxRate = Number.isFinite(taxRateValue)
+    ? Math.max(0, Math.min(20, Math.round(taxRateValue * 10000) / 10000))
+    : 0;
+
+  return {
+    discountType,
+    discountValue,
+    taxRate,
+  };
+}
+
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
     value,
@@ -110,15 +164,12 @@ function isUuid(value: string): boolean {
 }
 
 function formatEstimateError(message: string): string {
-  const devSuffix =
-    process.env.NODE_ENV === "production" ? "" : ` Dev detail: ${message}`;
-
   if (
     message.includes("service_requests.company_id") ||
     message.includes('column "company_id"') ||
     message.includes("user_can_access_company")
   ) {
-    return `Estimate company-scoping SQL is not fully applied. Apply the latest estimate persistence/company scope migration in Supabase, then try again.${devSuffix}`;
+    return "Estimate company-scoping SQL is not fully applied. Apply the latest estimate persistence/company scope migration in Supabase, then try again.";
   }
 
   if (
@@ -149,7 +200,7 @@ function formatEstimateError(message: string): string {
     return "This account is not allowed to create an estimate for that service request.";
   }
 
-  return `We could not create this estimate yet.${devSuffix}`;
+  return "We could not create this estimate yet.";
 }
 
 async function readEstimatePayload(request: Request): Promise<
@@ -252,6 +303,8 @@ async function readEstimatePayload(request: Request): Promise<
     payload: {
       catalogItems,
       customItems,
+      adjustments: cleanEstimateAdjustments(payload.adjustments),
+      metadata: cleanEstimateMetadata(payload.metadata),
       estimateDecisionContext: cleanJsonObject(payload.estimateDecisionContext),
     },
     rawPayload: payload,
@@ -318,6 +371,45 @@ async function recordEstimateDecisionEvent({
   });
 }
 
+async function persistEstimateMetadata({
+  supabase,
+  estimateId,
+  metadata,
+}: {
+  supabase: EstimateSupabaseClient;
+  estimateId: string | null;
+  metadata: EstimatePayload["metadata"];
+}) {
+  if (!estimateId || !metadata) {
+    return { ok: true as const };
+  }
+
+  const { error } = await supabase.rpc(
+    "update_service_request_estimate_editor_metadata_rpc",
+    {
+      p_estimate_id: estimateId,
+      p_metadata: metadata as Json,
+    },
+  );
+
+  if (error) {
+    console.error("Manual estimate metadata persistence failed", {
+      message: error.message,
+      code: error.code,
+      details: error.details,
+      hint: error.hint,
+      operation: "update_estimate_editor_metadata",
+    });
+
+    return {
+      ok: false as const,
+      message: error.message,
+    };
+  }
+
+  return { ok: true as const };
+}
+
 export async function POST(
   request: Request,
   { params }: ServiceRequestEstimatesRouteProps,
@@ -342,6 +434,7 @@ export async function POST(
       p_request_id: id,
       p_catalog_items: parsed.payload.catalogItems,
       p_custom_items: parsed.payload.customItems,
+      p_adjustments: parsed.payload.adjustments,
     },
   );
 
@@ -349,13 +442,22 @@ export async function POST(
     return fail(formatEstimateError(error.message), 403);
   }
 
+  const estimateId =
+    data && typeof data === "object" && "id" in data ? String(data.id) : null;
+  const metadataResult = await persistEstimateMetadata({
+    supabase: auth.supabase,
+    estimateId,
+    metadata: parsed.payload.metadata,
+  });
+
+  if (!metadataResult.ok) {
+    return fail("Estimate could not be fully saved. Please try again.", 500);
+  }
+
   await recordEstimateDecisionEvent({
     supabase: auth.supabase,
     requestId: id,
-    estimateId:
-      data && typeof data === "object" && "id" in data
-        ? String(data.id)
-        : null,
+    estimateId,
     eventType: "draft_saved",
     decisionContext: parsed.payload.estimateDecisionContext,
   }).catch(() => null);
@@ -391,11 +493,22 @@ export async function PATCH(request: Request) {
       p_estimate_id: estimateId,
       p_catalog_items: parsed.payload.catalogItems,
       p_custom_items: parsed.payload.customItems,
+      p_adjustments: parsed.payload.adjustments,
     },
   );
 
   if (error) {
     return fail(formatEstimateError(error.message), 403);
+  }
+
+  const metadataResult = await persistEstimateMetadata({
+    supabase: auth.supabase,
+    estimateId,
+    metadata: parsed.payload.metadata,
+  });
+
+  if (!metadataResult.ok) {
+    return fail("Estimate could not be fully saved. Please try again.", 500);
   }
 
   await recordEstimateDecisionEvent({

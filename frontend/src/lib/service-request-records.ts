@@ -174,8 +174,17 @@ export type DashboardServiceRequestEstimate = {
   serviceRequestId: string;
   createdByProfileId: string | null;
   subtotal: number;
+  discountType: "flat" | "percent";
+  discountValue: number;
+  discountAmount: number;
+  taxRate: number;
+  taxableAmount: number;
+  nonTaxableAmount: number;
   tax: number | null;
   total: number;
+  internalCostTotal: number;
+  grossProfit: number;
+  marginPercent: number;
   estimateStatus: DatabaseEstimateStatus;
   estimateNumber: string;
   customerPreviewNotes: string | null;
@@ -184,6 +193,8 @@ export type DashboardServiceRequestEstimate = {
   publicApprovalTokenHash: string | null;
   sentAt: string | null;
   customerRespondedAt: string | null;
+  approvalSource: "customer" | "technician_manual";
+  approvedByProfileId: string | null;
   archivedAt: string | null;
   archivedByProfileId: string | null;
   archiveReason: string | null;
@@ -412,15 +423,27 @@ export const SERVICE_REQUEST_ESTIMATE_SELECT_COLUMNS = [
   "service_request_id",
   "created_by_profile_id",
   "subtotal",
+  "discount_type",
+  "discount_value",
+  "discount_amount",
+  "tax_rate",
+  "taxable_amount",
+  "non_taxable_amount",
   "tax",
   "total",
+  "internal_cost_total",
+  "gross_profit",
+  "margin_percent",
   "estimate_status",
   "estimate_number",
   "customer_preview_notes",
   "warranty_text",
   "disclaimer_text",
+  "public_approval_token_hash",
   "sent_at",
   "customer_responded_at",
+  "approval_source",
+  "approved_by_profile_id",
   "created_at",
   "updated_at",
   "service_request_estimate_items(id,estimate_id,pricing_catalog_item_id,item_title,quantity,unit_price,line_total,technician_cost,taxable,warranty_text,line_type,internal_name,customer_name,public_description,internal_cost,sell_price,service_catalog_repair_item_id,estimate_template_line_id,notes,created_at)",
@@ -636,8 +659,20 @@ export function mapServiceRequestEstimateRow(
     serviceRequestId: row.service_request_id,
     createdByProfileId: row.created_by_profile_id,
     subtotal: Number(row.subtotal),
+    discountType: row.discount_type === "percent" ? "percent" : "flat",
+    discountValue: Number(row.discount_value ?? 0),
+    discountAmount: Number(row.discount_amount ?? 0),
+    taxRate: Number(row.tax_rate ?? 0),
+    taxableAmount: Number(row.taxable_amount ?? 0),
+    nonTaxableAmount: Number(
+      row.non_taxable_amount ??
+        Math.max(Number(row.subtotal ?? 0) - Number(row.discount_amount ?? 0), 0),
+    ),
     tax: row.tax === null ? null : Number(row.tax),
     total: Number(row.total),
+    internalCostTotal: Number(row.internal_cost_total ?? 0),
+    grossProfit: Number(row.gross_profit ?? Number(row.total) - Number(row.internal_cost_total ?? 0)),
+    marginPercent: Number(row.margin_percent ?? 0),
     estimateStatus: row.estimate_status,
     estimateNumber:
       row.estimate_number ??
@@ -648,6 +683,11 @@ export function mapServiceRequestEstimateRow(
     publicApprovalTokenHash: row.public_approval_token_hash ?? null,
     sentAt: row.sent_at ?? null,
     customerRespondedAt: row.customer_responded_at ?? null,
+    approvalSource:
+      row.approval_source === "technician_manual"
+        ? "technician_manual"
+        : "customer",
+    approvedByProfileId: row.approved_by_profile_id ?? null,
     archivedAt: row.archived_at ?? null,
     archivedByProfileId: row.archived_by_profile_id ?? null,
     archiveReason: row.archive_reason ?? null,

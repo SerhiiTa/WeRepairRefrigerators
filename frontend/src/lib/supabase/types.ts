@@ -671,8 +671,17 @@ export type Database = {
           service_request_id: string;
           created_by_profile_id: string | null;
           subtotal: number;
+          discount_type: "flat" | "percent" | null;
+          discount_value: number | null;
+          discount_amount: number | null;
+          tax_rate: number | null;
+          taxable_amount: number | null;
+          non_taxable_amount: number | null;
           tax: number | null;
           total: number;
+          internal_cost_total: number | null;
+          gross_profit: number | null;
+          margin_percent: number | null;
           estimate_status: DatabaseEstimateStatus;
           estimate_number: string | null;
           customer_preview_notes: string | null;
@@ -681,6 +690,8 @@ export type Database = {
           public_approval_token_hash: string | null;
           sent_at: string | null;
           customer_responded_at: string | null;
+          approval_source: "customer" | "technician_manual";
+          approved_by_profile_id: string | null;
           archived_at: string | null;
           archived_by_profile_id: string | null;
           archive_reason: string | null;
@@ -1074,6 +1085,7 @@ export type Database = {
           p_request_id: string;
           p_catalog_items?: Json;
           p_custom_items?: Json;
+          p_adjustments?: Json;
         };
         Returns: Json;
       };
@@ -1190,6 +1202,12 @@ export type Database = {
         };
         Returns: Json;
       };
+      approve_service_request_estimate_for_customer_rpc: {
+        Args: {
+          p_estimate_id: string;
+        };
+        Returns: Json;
+      };
       send_service_request_estimate_to_customer_rpc: {
         Args: {
           p_estimate_id: string;
@@ -1264,6 +1282,14 @@ export type Database = {
           p_estimate_id: string;
           p_catalog_items?: Json;
           p_custom_items?: Json;
+          p_adjustments?: Json;
+        };
+        Returns: Json;
+      };
+      update_service_request_estimate_editor_metadata_rpc: {
+        Args: {
+          p_estimate_id: string;
+          p_metadata?: Json;
         };
         Returns: Json;
       };

@@ -331,3 +331,24 @@ These are product labels for humans, not database or backend renames.
 The dashboard header should act like an operating-system launcher: one compact row of actions that routes the user into the correct work center. The body remains Today's Jobs only.
 
 Do not add separate dashboard widgets for calls, messages, parts, vendors, manuals, community, or revenue while the Workiz Exit workflow is still being stabilized.
+
+## 15. Finance Workflow Direction
+
+Task 166 locks the Finance roadmap in `docs/FINANCE_WORKIZ_EXIT_ROADMAP.md`.
+
+For Workiz Exit, Finance must become a reliable daily workflow before advanced intelligence:
+
+1. Price Book Foundation.
+2. Bundles.
+3. Manual Estimate Builder.
+4. AI Estimate from Price Book.
+5. Estimate Approval and Verbal Approval Sync.
+6. Deposits.
+7. Invoice.
+8. Payments.
+9. Finance Timeline.
+10. Price Learning and Analytics.
+
+Daily Finance success means a technician can open a job, choose work from Price Book, create/send an estimate, get approval, collect deposit, invoice, accept payment, send receipt, and close the job without opening Workiz.
+
+AI should assist Price Book search and estimate drafting later, but it must not block or replace the manual finance workflow.

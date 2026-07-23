@@ -161,6 +161,8 @@ Status:
 - No backend, Supabase, HasData integration, database schema, Retell, phone workflow, Finance, Timeline, status, estimate, invoice, payment, or appointment logic changed.
 - Task 164.1 full-address QA is complete. The HasData provider path was verified with `301 E 79th St, APT 23S, New York, NY 10075, US`; the card displayed map, photo, Zestimate, and year built, and showed `Sqft unavailable` for provider living area `0`. The server adapter now sends a derived Zillow homes URL and maps the real HasData response shape.
 - Task 164.2 reliability/mobile hardening is complete. Address-to-Zillow lookup is documented as best-effort because the provider requires a Zillow URL. Provider failures and ZIP-mismatched results return `property: null`, and the mobile preview now shows one large photo or map instead of two tiny thumbnails.
+- The address/property workflow repair after Task 164 is complete. Property Intelligence now uses the current Job service address directly and no longer depends on `customer_addresses` for the Job card. The accepted root-cause fix: ZIP validation now chooses the last ZIP-like token, so street numbers such as `20406` are not mistaken for the service ZIP; valid HasData/Zillow responses for ZIP `77450` are accepted; the current HasData response shape is supported; and the cache namespace is `property-intelligence-hasdata-zillow-v5`. Maps and Distance remain unchanged.
+- Address dedupe repair migrations `0068`, `0069`, and `0070` were applied manually. Future address work must preserve the rule that the Job service address is the source of truth for Property Details, Maps, and Distance, while customer address synchronization is secondary and must not block the Job Workspace.
 - Task 165 Details redesign is complete locally. The first Job Workspace tab now follows the Task 162 recommended order: compact header, Property Preview, one primary Next Action, customer/contact/navigation, schedule, appliance/problem, technician findings, and quick media. Secondary workflow/status/address controls are collapsed instead of permanently consuming the mobile field screen.
 - Task 165.14 completes the Client-card photo/base-address foundation. Apply `0058` for private client-avatar storage and `0059` for Company Base Address plus Technician Base Address override fields/RPCs. Driving distance must use saved base addresses and server-side Google Distance Matrix only; never browser geolocation or Zillow coordinates.
 - Task 165.15 adds the missing runtime grant fix for the same Client-card foundation. Apply `0060_client_avatar_distance_service_role_grants_apply_ready.sql` after `0058` and `0059`; runtime verification proved the bucket exists but service-role DB grants were missing for the avatar/client-card routes. The distance resolver now uses active `company_members` for company lookup and formatted base address is sufficient even without coordinates.
@@ -756,3 +758,125 @@ Onboarding backend progress:
 - Large duplicated mobile sections are hidden from the default surface: Appliance/Problem, Technician Findings, More job controls, and Service address details.
 - Desktop keeps the existing broader layout for now.
 - Attachments uses the existing service-request photo flow and should not grow into a new media system without an explicit future task.
+
+## Task 166 - Price Book Foundation And Finance Roadmap Lock
+
+- Finance roadmap is now locked in `docs/FINANCE_WORKIZ_EXIT_ROADMAP.md`.
+- Locked order: Price Book Foundation, Bundles, Manual Estimate Builder, AI Estimate from Price Book, Estimate Approval and Verbal Approval Sync, Deposits, Invoice, Payments, Finance Timeline, Price Learning and Analytics.
+- Task 166 implements Phase 1 schema/API/UI foundation and part of Phase 2 bundle schema. It does not start Estimate UI, Invoice, Payments, or Deposits.
+- Apply `supabase/migrations/0066_price_book_foundation_apply_ready.sql` before expecting live Price Book persistence.
+- Settings now has `Price Book`, backed by `/api/settings/price-book`, for search/filter, item creation/editing, bundle review, duplicate suggestions, and pending review.
+- Current estimate/invoice foundations remain the active document engines. Future Manual Estimate Builder must use the existing estimate persistence/approval flow and select from Price Book instead of creating another estimate engine.
+
+## Task 167 - Price Book UX And Selection Foundation
+
+- Settings -> Price Book should now feel like company configuration, not a repair-time technician screen.
+- First-level Price Book UX is intentionally sparse: category navigation, repair name, total price, compact badges, and overflow actions.
+- Advanced data is available only inside the repair editor through progressive disclosure.
+- Future Job Workspace -> Finance should use the new rule-based `POST /api/price-book/repair-solutions` endpoint/helper to show a short list of relevant repair solutions.
+- The selection foundation must remain rule-based until an explicit future AI-estimate task. Do not auto-run paid AI at job creation.
+- The next finance task should build a Manual Estimate Builder from selected Price Book items. Do not start invoice, payments, deposits, or a new estimate engine first.
+
+## Task 167.9 - Finance System Master Plan
+
+- `docs/FINANCE_SYSTEM_MASTER_PLAN.md` is now the master product document for Finance.
+- Future Price Book, Estimate Builder, AI Estimate, Repair Proposal, Customer Approval, Invoice, Deposit, and Payment work must follow it.
+- The roadmap principle is: Repair Solution first, Proposal to customer, internal Estimate/Bundle/Price Book complexity hidden until needed.
+- AI must not diagnose from complaint, invent repair scope, invent prices, or override technician decisions. It should draft and organize customer-facing Proposal language from technician-confirmed scope and approved Price Book data.
+- Finance should remain minimal: no CRM inside Finance, no huge default tables, no long visible item lists, no permanent tax/discount/deposit controls on the normal job screen.
+- Task 168 has not started.
+
+## Task 168 - Repair Proposal Builder Design
+
+- `docs/TASK168_REPAIR_PROPOSAL_BUILDER_PLAN.md` defines the next Finance implementation sequence.
+- The new user-facing workflow is Repair Proposal Builder, not Estimate Builder.
+- Estimate remains the internal financial entity for calculations, totals, token approval compatibility, audit, and invoice conversion.
+- Future implementation should adapt/evolve `service_request_estimates` and related item/invoice contracts rather than creating a second finance engine.
+- Required next implementation order starts with additive data/calculation foundations, then solution-first mobile Builder, then immutable customer Proposal versioning, then approval/invoice compatibility QA.
+- Do not start Task 169, payments, Stripe, Invoice Builder redesign, tax reporting, inventory, vendor ordering, or autonomous AI diagnosis from this design.
+
+## Task 168.1 - Finance Data Contract Audit And Migration Plan
+
+- `docs/TASK168_1_FINANCE_DATA_CONTRACT_AND_MIGRATION_PLAN.md` is the contract source before writing the next Finance migration.
+- Decision: V1 Repair Proposal versions should be represented by additive fields on `service_request_estimates`; financial lines and future Repair Solution grouping should remain on `service_request_estimate_items`.
+- Do not create `repair_proposal_versions` in V1.
+- The next migration task should be additive only: proposal snapshots, calculation snapshots, version/supersede metadata, Repair Solution grouping columns, Price Book source snapshot/reference fields, checks, indexes, and public/internal exposure rules.
+- Existing public estimate links, approval token ownership, invoice conversion from approved estimates, job status sync, and legacy rows must remain compatible.
+- Task 168.2, Task 169, the shared calculation engine, Builder UI, Price Book integration into proposals, Proposal send, and the customer Proposal page are still not started.
+
+## Task 168.2 - Repair Proposal Builder Vertical Slice
+
+- `docs/TASK168_2_REPAIR_PROPOSAL_VERTICAL_SLICE.md` documents the first production slice.
+- Job Workspace Finance now speaks in Repair Proposal Builder language while reusing existing estimate persistence, approval tokens, public link route, job status sync, and invoice compatibility.
+- The technician can describe confirmed repair scope, generate a draft, edit important proposal fields and lines, save a draft, preview the customer view, and send only after blocking validation passes.
+- The public customer route now shows a simple Repair Proposal first and hides detailed line items behind `View Itemized Estimate`.
+- This slice intentionally does not implement the shared calculation engine, additive proposal schema migration, Price Book-to-Proposal integration, partial approval, multiple alternatives, Invoice Builder redesign, payments, Stripe, Finance Settings, inventory, vendor ordering, or Task 169.
+
+## Task 168.2B - Repair Proposal QA Completion
+
+- QA completed the first full Repair Proposal workflow on a QA-only service request.
+- Fixed explicit technician scope preservation for dispenser water supply tubing thawing so the proposal includes water valve replacement, frozen dispenser water line thawing, and labor/testing as separate technician-authorized lines.
+- Verified Save Draft -> leave job -> reopen job -> Send -> public Proposal -> approval -> timeline sync -> invoice conversion.
+- Verified a separate QA decline proposal and corresponding timeline/status behavior.
+- Verified invoice creation from an approved Repair Proposal and idempotent duplicate invoice behavior.
+- Current remaining Finance roadmap need: authoritative shared calculation/persistence for tax, discount, deposit, and future pricing policy. Do not treat the current builder preview tax/discount controls as the final calculation engine.
+- Task 168.3 and Task 169 have not started.
+
+## Task 168.2C - Authoritative Tax/Discount Persistence
+
+- Implementation added apply-ready migration `supabase/migrations/0067_repair_proposal_authoritative_totals_apply_ready.sql`.
+- The next required owner action is to apply 0067 in Supabase SQL Editor.
+- Job Workspace preview now uses a shared calculation helper, and the estimate API sends discount/tax adjustments to new 4-argument create/update RPC overloads.
+- The public Proposal read model now includes persisted discount/tax fields for Itemized Estimate display.
+- Local checks passed, but final end-to-end browser QA cannot be marked complete until 0067 is applied and totals are verified through save, reload, public Proposal, approval, and invoice conversion.
+- Do not start Task 168.3 or Task 169 until Task 168.2C final QA is complete.
+
+## Task 168.2D - Final QA After Migration 0067
+
+- Owner applied `0067_repair_proposal_authoritative_totals_apply_ready.sql`.
+- Functional end-to-end QA passed on QA job `33a16f94-0176-4378-8c56-1344ddee9dc3` using only `qa-booking-tech@example.test`.
+- New proposal `EST-2026-490987A9` preserved the same authoritative values through Builder Preview, Save Draft, reload/edit, saved card, Preview, Send, public Proposal, Itemized Estimate, approval, and invoice creation: subtotal `$595.00`, flat discount `$10.00`, tax rate `8.25%`, tax `$23.12`, total `$608.12`, internal cost `$200.00`, margin `$408.12 · 67.11%`.
+- Invoice `INV-2026-1EC31CFD` was created from the approved proposal and displayed total `$608.12`.
+- Decline regression passed with separate QA proposal `EST-2026-7DE52D2A`; public decline updated immediately, job status returned to `Waiting Customer`, and timeline events were written.
+- Legacy rows remained readable (`EST-2026-B13AF2AB`, `EST-2026-D3DE3ADB`, `INV-2026-05BD2E90`), but no pre-Task-168 raw historical token was available to claim historical-token QA.
+- Responsive visual QA is now complete after macOS Screen Recording permission was granted. Codex verified true `375px`, `390px`, `430px`, and desktop `1280px` widths for the Technician Repair Proposal Builder, sent public Repair Proposal, Itemized Estimate, approved public state, and approved Itemized Estimate. QA-only visual proposal `EST-2026-E3837895` was used to verify reachable `Approve Proposal` / `Decline` controls before response. No horizontal overflow, unreadable totals, wrapping failures, customer internal-data leaks, or discount/tax layout breaks were found.
+- Task 168.2D is complete. Do not start Task 168.3 or Task 169 unless explicitly requested.
+
+## Task 168.3 - Repair Proposal Generation Contract
+
+- `docs/TASK168_3_REPAIR_PROPOSAL_GENERATION_CONTRACT.md` defines the server-side generation contract for future Repair Proposal work.
+- The strict Repair Proposal schema, prompt, provider abstraction, scope enforcement, deterministic fallback, manual draft factory, and template draft factory are implemented server-side.
+- `POST /api/repair-proposals/generate` is the new generation endpoint. It fetches service request context server-side and uses existing Price Book selection candidates when company context is available.
+- `POST /api/estimate-agent/draft` remains compatible with the current Job Workspace Finance UI by returning the existing `draft` shape from the new contract.
+- AI provider order is OpenAI, then Anthropic only if OpenAI is unavailable/fails, then deterministic fallback. AI must preserve technician-confirmed scope and must not invent repairs, parts, quantities, warranties, or prices.
+- Next Finance work should build on this contract rather than adding another estimate/AI generation path.
+- Task 169 has not started.
+
+## Task 168.4 - Repair Proposal Builder UX Redesign
+
+- `docs/TASK168_4_REPAIR_PROPOSAL_BUILDER_UX.md` documents the technician-facing Builder redesign.
+- Finance -> Repair Proposal Builder should now feel like a proposal document workflow, not a CRM estimate table.
+- The first screen offers only Generate with AI, Create Manually, and Use Template, plus compact draft status/last updated/warnings.
+- The active builder is organized into editable cards: findings, solution, work checklist, included items, warranty, estimated completion, totals, and warnings.
+- Included item editing happens in a bottom sheet and continues to write through existing estimate line state and APIs.
+- Future Finance work should keep this solution-first builder surface and avoid reintroducing permanent tables, CRM widgets, or customer-visible internal pricing concepts.
+- Task 169 has not started.
+
+## Task 168.4A - Repair Proposal Builder Final QA
+
+- Final QA passed on QA job `33a16f94-0176-4378-8c56-1344ddee9dc3` using only `qa-booking-tech@example.test`.
+- Active Builder fixes completed: Preview modal is wired to the new Builder, Send is blocked by warnings/blockers, Included Items have explicit readable labels, item bottom sheets include customer visibility, and checklist rows support add/edit/delete.
+- Saved QA draft `EST-2026-BB50EAE4` persisted after leave/reopen with 7 lines and total `$1,921.83`.
+- Responsive checks passed at 375px, 390px, 430px, and desktop with no horizontal overflow.
+- Task 168.4A intentionally did not change the AI prompt, Repair Proposal generation contract, customer Proposal route, approval flow, invoice flow, backend schema, or Supabase migrations.
+- Task 168.5 and Task 169 have not started.
+
+## Task 168.5 - Manual Estimate Production Review
+
+- The current accumulated Finance/Estimate state is ready for production review after migrations `0068` through `0072` were applied manually in Supabase.
+- Migrations `0068`, `0069`, and `0070` finalize the customer/job address workflow: equivalent address variants dedupe safely, original human-readable customer addresses are preserved, state persists uppercase, and Job service address remains primary for Property Details, Maps, and Distance.
+- Migration `0071` adds the narrow authorized Manual Estimate metadata persistence RPC so editor details, warranty, estimated completion, line items, totals, and estimate number persist without raw database errors.
+- Migration `0072` adds technician manual approval without pretending the customer clicked the public approval link. Manual approval records `approval_source = technician_manual`, stores the approving dashboard profile, moves the job to `Estimate Approved`, and writes technician-on-behalf timeline/notes.
+- Manual Estimate editor is now the compact mobile-first path for field technicians: Items and Totals first, no duplicate Job number in the estimate context block, dense item rows, collapsed secondary sections, and one sticky action bar.
+- Sending and approval are independent: approve only, send only, send then approve, and approve then send remain valid workflows.
+- Do not start autosave, Sync to Job, payments, Stripe, or Task 169 until production review feedback is complete.
