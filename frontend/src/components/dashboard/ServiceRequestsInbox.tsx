@@ -24,6 +24,7 @@ import {
 } from "@/lib/service-request-records";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import type {
+  CustomerApplianceRow,
   CustomerAddressRow,
   CustomerRow,
   ServiceRequestRow,
@@ -85,6 +86,7 @@ type NewJobForm = {
   modelNumber: string;
   problemDescription: string;
   scheduleMode: "later" | "now";
+  selectedAssetId: string;
   selectedCustomerId: string;
   serialNumber: string;
   serviceAddress: string;
@@ -100,6 +102,21 @@ type NewJobState =
   | { status: "saving"; message: string }
   | { status: "success"; message: string }
   | { status: "error"; message: string };
+
+type AssetJobPrefill = Pick<
+  CustomerApplianceRow,
+  | "appliance_type"
+  | "brand"
+  | "customer_address_id"
+  | "id"
+  | "model_number"
+  | "serial_number"
+>;
+
+type AssetAddressPrefill = Pick<
+  CustomerAddressRow,
+  "city" | "state" | "street_address" | "unit" | "zip_code"
+>;
 
 const STATUS_FILTER_LABELS: Partial<Record<DashboardServiceRequestStatus, string>> = {
   canceled: "Cancelled",
@@ -121,6 +138,7 @@ const emptyNewJobForm: NewJobForm = {
   modelNumber: "",
   problemDescription: "",
   scheduleMode: "later",
+  selectedAssetId: "",
   selectedCustomerId: "",
   serialNumber: "",
   serviceAddress: "",
@@ -762,11 +780,13 @@ export function ServiceRequestsInbox() {
     const params = new URLSearchParams(window.location.search);
     const shouldOpenNewJob = params.get("newJob") === "1";
     const customerId = params.get("customerId");
+    const assetId = params.get("assetId");
+    const prefillKey = [customerId, assetId ?? ""].join(":");
 
     if (
       !shouldOpenNewJob ||
       !customerId ||
-      customerPrefillHandledRef.current === customerId
+      customerPrefillHandledRef.current === prefillKey
     ) {
       return;
     }
@@ -777,33 +797,66 @@ export function ServiceRequestsInbox() {
       return;
     }
 
-    customerPrefillHandledRef.current = customerId;
+    customerPrefillHandledRef.current = prefillKey;
 
     const timeoutId = window.setTimeout(() => {
-      const nameParts = splitCustomerName(matchingCustomer.fullName);
+      const supabase = getSupabaseBrowserClient();
 
-      setNewJobForm({
-        ...emptyNewJobForm,
-        city: matchingCustomer.city ?? "",
-        customerEmail: matchingCustomer.email ?? "",
-        customerFirstName: nameParts.firstName,
-        customerLastName: nameParts.lastName,
-        customerPhone: formatUSPhone(matchingCustomer.phone),
-        customerSearch: [
-          matchingCustomer.fullName,
-          matchingCustomer.phone,
-          matchingCustomer.email,
-        ]
-          .filter(Boolean)
-          .join(" · "),
-        selectedCustomerId: customerId,
-        serviceAddress: matchingCustomer.streetAddress ?? "",
-        state: matchingCustomer.state ?? "TX",
-        unit: matchingCustomer.unit ?? "",
-        zipCode: cleanZip(matchingCustomer.zipCode ?? ""),
-      });
-      setShowNewJobWizard(true);
-      setNewJobState({ status: "idle", message: null });
+      void (async () => {
+        const nameParts = splitCustomerName(matchingCustomer.fullName);
+        let asset: AssetJobPrefill | null = null;
+        let assetAddress: AssetAddressPrefill | null = null;
+
+        if (assetId && supabase) {
+          const { data: assetData } = await supabase
+            .from("customer_appliances")
+            .select("id,customer_id,customer_address_id,appliance_type,brand,model_number,serial_number")
+            .eq("id", assetId)
+            .eq("customer_id", customerId)
+            .maybeSingle();
+
+          asset = (assetData ?? null) as AssetJobPrefill | null;
+
+          if (asset?.customer_address_id) {
+            const { data: addressData } = await supabase
+              .from("customer_addresses")
+              .select("street_address,unit,city,state,zip_code")
+              .eq("id", asset.customer_address_id)
+              .eq("customer_id", customerId)
+              .maybeSingle();
+
+            assetAddress = (addressData ?? null) as AssetAddressPrefill | null;
+          }
+        }
+
+        setNewJobForm({
+          ...emptyNewJobForm,
+          applianceType: asset?.appliance_type || emptyNewJobForm.applianceType,
+          brand: asset?.brand ?? "",
+          city: assetAddress?.city ?? matchingCustomer.city ?? "",
+          customerEmail: matchingCustomer.email ?? "",
+          customerFirstName: nameParts.firstName,
+          customerLastName: nameParts.lastName,
+          customerPhone: formatUSPhone(matchingCustomer.phone),
+          customerSearch: [
+            matchingCustomer.fullName,
+            matchingCustomer.phone,
+            matchingCustomer.email,
+          ]
+            .filter(Boolean)
+            .join(" · "),
+          modelNumber: asset?.model_number ?? "",
+          selectedAssetId: asset?.id ?? "",
+          selectedCustomerId: customerId,
+          serialNumber: asset?.serial_number ?? "",
+          serviceAddress: assetAddress?.street_address ?? matchingCustomer.streetAddress ?? "",
+          state: assetAddress?.state ?? matchingCustomer.state ?? "TX",
+          unit: assetAddress?.unit ?? matchingCustomer.unit ?? "",
+          zipCode: cleanZip(assetAddress?.zip_code ?? matchingCustomer.zipCode ?? ""),
+        });
+        setShowNewJobWizard(true);
+        setNewJobState({ status: "idle", message: null });
+      })();
     }, 0);
 
     return () => window.clearTimeout(timeoutId);
@@ -965,6 +1018,7 @@ export function ServiceRequestsInbox() {
           customerName: fullName,
           customerPhone: normalizeUSPhone(newJobForm.customerPhone),
           duplicateConfirmed: true,
+          customerApplianceId: newJobForm.selectedAssetId || null,
           modelNumber: newJobForm.modelNumber,
           problemDescription: newJobForm.problemDescription,
           preferredAppointmentWindow: appointmentWindow,
@@ -1021,6 +1075,20 @@ export function ServiceRequestsInbox() {
         !conversionPayload.conversion?.serviceRequestId
       ) {
         throw new Error(conversionPayload?.message ?? "Could not create this job.");
+      }
+
+      if (newJobForm.selectedAssetId) {
+        const supabase = getSupabaseBrowserClient();
+        const { error: linkError } = supabase
+          ? await supabase
+              .from("service_requests")
+              .update({ customer_appliance_id: newJobForm.selectedAssetId })
+              .eq("id", conversionPayload.conversion.serviceRequestId)
+          : { error: null };
+
+        if (linkError) {
+          throw new Error("Job was created, but the asset link could not be saved.");
+        }
       }
 
       setNewJobState({ status: "success", message: "Job created. Opening it now..." });

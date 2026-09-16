@@ -126,13 +126,69 @@ type CustomerSortOption =
 type ApplianceFormState = {
   id: string | null;
   applianceType: string;
+  applianceTypeMode: "preset" | "custom";
   brand: string;
   modelNumber: string;
   serialNumber: string;
   purchaseYear: string;
+  customerAddressId: string;
   locationLabel: string;
+  locationLabelMode: "preset" | "custom";
   notes: string;
+  coverPhotoId: string | null;
 };
+
+type AssetLocationOption = {
+  key: string;
+  label: string;
+  sourceLabel: "Primary" | "Saved Address" | "Previous Job";
+  addressId: string | null;
+  requestId: string | null;
+  payload: Record<string, Json> | null;
+};
+
+const CUSTOM_ASSET_TYPE_VALUE = "__custom_asset_type__";
+const CUSTOM_ASSET_AREA_VALUE = "__custom_asset_area__";
+
+const ADD_ASSET_TYPE_OPTIONS = [
+  ...WRA_ASSET_PLACEHOLDER_TYPES.filter((type) => type !== "unknown_appliance").map(
+    (type) => ({ label: getAssetPlaceholderLabel(type), value: type }),
+  ),
+  { label: "HVAC", value: "HVAC" },
+  { label: "Air Conditioner", value: "Air Conditioner" },
+  { label: "Furnace", value: "Furnace" },
+  { label: "Heat Pump", value: "Heat Pump" },
+  { label: "Water Heater", value: "Water Heater" },
+  { label: "Tankless Water Heater", value: "Tankless Water Heater" },
+  { label: "Generator", value: "Generator" },
+  { label: "Water Softener", value: "Water Softener" },
+  { label: "Pool Equipment", value: "Pool Equipment" },
+  { label: "Pool Heater", value: "Pool Heater" },
+  { label: "Garage Door Opener", value: "Garage Door Opener" },
+  { label: "Electrical Panel", value: "Electrical Panel" },
+  { label: "EV Charger", value: "EV Charger" },
+  { label: "Solar / Inverter", value: "Solar / Inverter" },
+  { label: "Pump", value: "Pump" },
+].filter((option, index, options) =>
+  options.findIndex((candidate) => candidate.value === option.value) === index,
+);
+
+const ADD_ASSET_AREA_OPTIONS = [
+  "Kitchen",
+  "Laundry Room",
+  "Garage",
+  "Attic",
+  "Basement",
+  "Utility Room",
+  "Mechanical Room",
+  "Living Room",
+  "Bedroom",
+  "Bathroom",
+  "Outdoor",
+  "Backyard",
+  "Roof",
+  "Pool Area",
+];
 
 const emptyCustomerForm: CustomerFormState = {
   firstName: "",
@@ -155,12 +211,16 @@ const emptyCustomerForm: CustomerFormState = {
 const emptyApplianceForm: ApplianceFormState = {
   id: null,
   applianceType: "",
+  applianceTypeMode: "preset",
   brand: "",
   modelNumber: "",
   serialNumber: "",
   purchaseYear: "",
+  customerAddressId: "",
   locationLabel: "",
+  locationLabelMode: "preset",
   notes: "",
+  coverPhotoId: null,
 };
 
 function cleanPhone(value: string): string {
@@ -243,8 +303,10 @@ function buildAppliancePayload(form: ApplianceFormState): Record<string, Json> {
     model_number: form.modelNumber.trim() || null,
     serial_number: form.serialNumber.trim() || null,
     purchase_year: form.purchaseYear.trim() || null,
+    customer_address_id: form.customerAddressId || null,
     location_label: form.locationLabel.trim() || null,
     notes: form.notes.trim() || null,
+    cover_photo_id: form.coverPhotoId,
   };
 }
 
@@ -360,6 +422,118 @@ function getAddressLabel(address: CustomerAddressRow | undefined): string {
     .join(", ");
 }
 
+function normalizeAssetLocationPart(value: string | null | undefined): string {
+  return (value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getAssetLocationDedupeKey(source: {
+  city?: string | null;
+  place_id?: string | null;
+  state?: string | null;
+  street_address?: string | null;
+  unit?: string | null;
+  zip_code?: string | null;
+}) {
+  const placeId = source.place_id?.trim();
+
+  if (placeId) {
+    return `place:${placeId}`;
+  }
+
+  return [
+    source.street_address,
+    source.unit,
+    source.city,
+    source.state,
+    source.zip_code,
+  ]
+    .map(normalizeAssetLocationPart)
+    .join("|");
+}
+
+function buildAssetLocationOptions({
+  addresses,
+  requests,
+}: {
+  addresses: CustomerAddressRow[];
+  requests: ServiceRequestRow[];
+}): AssetLocationOption[] {
+  const options: AssetLocationOption[] = [];
+  const seen = new Set<string>();
+
+  addresses.forEach((address) => {
+    const key = getAssetLocationDedupeKey(address);
+
+    if (!key || seen.has(key)) {
+      return;
+    }
+
+    seen.add(key);
+    options.push({
+      key: address.id,
+      label: getAddressLabel(address),
+      sourceLabel: address.is_primary ? "Primary" : "Saved Address",
+      addressId: address.id,
+      requestId: null,
+      payload: null,
+    });
+  });
+
+  requests.forEach((request) => {
+    const hasServiceAddress = Boolean(
+      request.street_address || request.city || request.zip_code || request.full_address,
+    );
+
+    if (!hasServiceAddress) {
+      return;
+    }
+
+    const key = getAssetLocationDedupeKey(request);
+
+    if (!key || seen.has(key)) {
+      return;
+    }
+
+    seen.add(key);
+    options.push({
+      key: `job:${request.id}`,
+      label: getJobAddress(request),
+      sourceLabel: "Previous Job",
+      addressId: null,
+      requestId: request.id,
+      payload: {
+        label: "Previous Job Address",
+        street_address: request.street_address ?? null,
+        unit: request.unit ?? null,
+        city: request.city ?? null,
+        state: request.state ?? null,
+        zip_code: request.zip_code ?? null,
+        country: request.country ?? "US",
+        latitude: request.latitude ?? null,
+        longitude: request.longitude ?? null,
+        place_id: request.place_id ?? null,
+        is_primary: false,
+      },
+    });
+  });
+
+  return options;
+}
+
+function getAssetAddressLabel(
+  asset: Pick<CustomerApplianceRow, "customer_address_id">,
+  addresses: CustomerAddressRow[],
+): string {
+  const address = addresses.find((item) => item.id === asset.customer_address_id);
+
+  return address ? getAddressLabel(address) : "Location not saved";
+}
+
 function getCustomerPrimaryAddress(addresses: CustomerAddressRow[]): CustomerAddressRow | undefined {
   const primary = addresses.find((address) => address.is_primary) ?? addresses[0];
 
@@ -409,15 +583,29 @@ function buildApplianceForm(appliance?: CustomerApplianceRow): ApplianceFormStat
     return emptyApplianceForm;
   }
 
+  const applianceTypeMode = ADD_ASSET_TYPE_OPTIONS.some(
+    (option) => option.value === appliance.appliance_type,
+  )
+    ? "preset"
+    : "custom";
+  const locationLabelMode =
+    appliance.location_label && !ADD_ASSET_AREA_OPTIONS.includes(appliance.location_label)
+      ? "custom"
+      : "preset";
+
   return {
     id: appliance.id,
     applianceType: appliance.appliance_type,
+    applianceTypeMode,
     brand: appliance.brand ?? "",
     modelNumber: appliance.model_number ?? "",
     serialNumber: appliance.serial_number ?? "",
     purchaseYear: appliance.purchase_year?.toString() ?? "",
+    customerAddressId: appliance.customer_address_id ?? "",
     locationLabel: appliance.location_label ?? "",
+    locationLabelMode,
     notes: appliance.notes ?? "",
+    coverPhotoId: appliance.cover_photo_id ?? null,
   };
 }
 
@@ -1562,6 +1750,18 @@ export function DashboardCustomerDetail({
     setReloadKey((value) => value + 1);
   }
 
+  function getDefaultAssetAddressId() {
+    if (state.status !== "ready") {
+      return "";
+    }
+
+    return (
+      state.addresses.find((address) => address.is_primary)?.id ??
+      state.addresses[0]?.id ??
+      ""
+    );
+  }
+
   function toggleSection(section: CustomerSectionKey) {
     setExpandedSections((current) => ({
       ...current,
@@ -1667,6 +1867,10 @@ export function DashboardCustomerDetail({
       setApplianceAction({ status: "error", message: "Brand is required." });
       return;
     }
+    if (!applianceForm.customerAddressId) {
+      setApplianceAction({ status: "error", message: "Choose the asset's physical address." });
+      return;
+    }
 
     const supabase = getSupabaseBrowserClient();
     if (!supabase) {
@@ -1676,10 +1880,64 @@ export function DashboardCustomerDetail({
 
     setApplianceAction({ status: "saving", message: "Saving appliance..." });
 
+    let appliancePayload = buildAppliancePayload(applianceForm);
+
+    if (applianceForm.customerAddressId.startsWith("job:")) {
+      const locationOption = state.status === "ready"
+        ? buildAssetLocationOptions({
+            addresses: state.addresses,
+            requests: state.serviceRequests,
+          }).find((option) => option.key === applianceForm.customerAddressId)
+        : null;
+
+      if (!locationOption?.payload) {
+        setApplianceAction({
+          status: "error",
+          message: "That previous job address is no longer available.",
+        });
+        return;
+      }
+
+      const addressResult = await supabase.rpc("upsert_customer_address_rpc", {
+        p_customer_id: customerId,
+        p_address_id: null,
+        p_payload: locationOption.payload,
+      });
+
+      if (addressResult.error) {
+        setApplianceAction({
+          status: "error",
+          message: formatCustomerCrmSaveError(addressResult.error.message),
+        });
+        return;
+      }
+
+      const returnedAddressId =
+        addressResult.data &&
+        typeof addressResult.data === "object" &&
+        "address_id" in addressResult.data &&
+        typeof addressResult.data.address_id === "string"
+          ? addressResult.data.address_id
+          : null;
+
+      if (!returnedAddressId) {
+        setApplianceAction({
+          status: "error",
+          message: "Previous job address could not be saved for this asset.",
+        });
+        return;
+      }
+
+      appliancePayload = {
+        ...appliancePayload,
+        customer_address_id: returnedAddressId,
+      };
+    }
+
     const { error } = await supabase.rpc("upsert_customer_appliance_rpc", {
       p_customer_id: customerId,
       p_appliance_id: applianceForm.id,
-      p_payload: buildAppliancePayload(applianceForm),
+      p_payload: appliancePayload,
     });
 
     if (error) {
@@ -1935,12 +2193,22 @@ export function DashboardCustomerDetail({
         selectedAsset ? (
           <CustomerAssetDetailWorkspace
             asset={selectedAsset}
+            addresses={state.addresses}
             coverUrl={
               selectedAsset.cover_photo_id
                 ? state.assetCoverUrls[selectedAsset.cover_photo_id] ?? null
                 : null
             }
             customerId={customer.id}
+            onNewJob={(asset) => {
+              const params = new URLSearchParams({
+                newJob: "1",
+                customerId: customer.id,
+                assetId: asset.id,
+              });
+
+              router.push(`/dashboard/leads?${params.toString()}`);
+            }}
             onBack={closeAssetDetail}
             onEdit={(asset) => {
               setApplianceForm(buildApplianceForm(asset));
@@ -1962,12 +2230,16 @@ export function DashboardCustomerDetail({
         ) : (
           <CustomerAssetsWorkspace
             actionState={applianceAction}
+            addresses={state.addresses}
             appliances={state.appliances}
             coverUrls={state.assetCoverUrls}
             form={applianceForm}
             isFormOpen={isAssetFormOpen}
             onAdd={() => {
-              setApplianceForm(emptyApplianceForm);
+              setApplianceForm({
+                ...emptyApplianceForm,
+                customerAddressId: getDefaultAssetAddressId(),
+              });
               setApplianceAction({ status: "idle", message: null });
               setIsAssetFormOpen(true);
             }}
@@ -2199,10 +2471,12 @@ export function DashboardCustomerDetail({
               </h3>
               <ApplianceEditForm
                 actionState={applianceAction}
+                addresses={state.addresses}
                 form={applianceForm}
                 onCancel={() => setApplianceForm(emptyApplianceForm)}
                 onChange={setApplianceForm}
                 onSubmit={() => void saveAppliance()}
+                requests={state.serviceRequests}
               />
             </div>
           </CollapsibleSection>
@@ -2347,10 +2621,10 @@ function TextInput({
   type?: string;
 }) {
   return (
-    <label className="grid gap-2 text-sm font-bold text-slate-700">
+    <label className="grid min-w-0 gap-2 text-sm font-bold text-slate-700">
       {label}
       <input
-        className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-950 outline-none transition focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
+        className="h-11 min-w-0 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-950 outline-none transition focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
         maxLength={maxLength}
         onChange={(event) => onChange(event.target.value)}
         type={type}
@@ -2911,6 +3185,7 @@ function getAssetServiceHistory(
 }
 
 function CustomerAssetsWorkspace({
+  addresses,
   appliances,
   requests,
   coverUrls,
@@ -2923,6 +3198,7 @@ function CustomerAssetsWorkspace({
   onOpenAsset,
   onSave,
 }: {
+  addresses: CustomerAddressRow[];
   appliances: CustomerApplianceRow[];
   requests: ServiceRequestRow[];
   coverUrls: Record<string, string>;
@@ -2936,8 +3212,8 @@ function CustomerAssetsWorkspace({
   onSave: () => void;
 }) {
   return (
-    <main className="mt-3 grid gap-3">
-      <section className="rounded-[18px] border border-slate-200 bg-white p-3 shadow-[0_8px_24px_rgba(15,23,42,0.045)]">
+    <main className="mt-3 grid min-w-0 gap-3">
+      <section className="min-w-0 overflow-hidden rounded-[18px] border border-slate-200 bg-white p-3 shadow-[0_8px_24px_rgba(15,23,42,0.045)]">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-base font-semibold text-slate-950">
             Assets ({appliances.length})
@@ -2956,10 +3232,12 @@ function CustomerAssetsWorkspace({
             <p className="text-sm font-semibold text-slate-950">Add Asset</p>
             <ApplianceEditForm
               actionState={actionState}
+              addresses={addresses}
               form={form}
               onCancel={onCancelForm}
               onChange={onFormChange}
               onSubmit={onSave}
+              requests={requests}
             />
           </div>
         ) : null}
@@ -3008,7 +3286,9 @@ function CustomerAssetsWorkspace({
                     </span>
                     <span className="mt-0.5 block truncate text-xs font-medium text-slate-500">
                       {getAssetPlaceholderLabel(asset.appliance_type)}
-                      {asset.location_label ? ` · ${asset.location_label}` : ""}
+                      {asset.customer_address_id
+                        ? ` · ${getAssetAddressLabel(asset, addresses)}`
+                        : ""}
                     </span>
                     <span className="mt-1 block truncate text-xs text-slate-500">
                       {asset.model_number ? `Model: ${asset.model_number}` : ""}
@@ -3037,6 +3317,7 @@ function CustomerAssetsWorkspace({
 }
 
 function CustomerAssetDetailWorkspace({
+  addresses,
   asset,
   coverUrl,
   customerId,
@@ -3048,8 +3329,10 @@ function CustomerAssetDetailWorkspace({
   onCancelEdit,
   onEdit,
   onFormChange,
+  onNewJob,
   onSave,
 }: {
+  addresses: CustomerAddressRow[];
   asset: CustomerApplianceRow;
   coverUrl: string | null;
   customerId: string;
@@ -3061,14 +3344,15 @@ function CustomerAssetDetailWorkspace({
   onCancelEdit: () => void;
   onEdit: (asset: CustomerApplianceRow) => void;
   onFormChange: (form: ApplianceFormState) => void;
+  onNewJob: (asset: CustomerApplianceRow) => void;
   onSave: () => void;
 }) {
   const history = getAssetServiceHistory(asset, requests);
   const returnTo = `/dashboard/customers/${customerId}?tab=assets&asset=${asset.id}`;
 
   return (
-    <main className="mt-3 grid gap-3">
-      <section className="rounded-[18px] border border-slate-200 bg-white p-3 shadow-[0_8px_24px_rgba(15,23,42,0.045)]">
+    <main className="mt-3 grid min-w-0 gap-3">
+      <section className="min-w-0 overflow-hidden rounded-[18px] border border-slate-200 bg-white p-3 shadow-[0_8px_24px_rgba(15,23,42,0.045)]">
         <div className="flex items-center justify-between gap-3">
           <button
             className="flex items-center gap-1 text-sm font-semibold text-[#0F6BFF]"
@@ -3077,6 +3361,13 @@ function CustomerAssetDetailWorkspace({
           >
             <CustomerOverviewIcon className="h-4 w-4" name="back" />
             Assets
+          </button>
+          <button
+            className="rounded-full bg-[#0F6BFF] px-3 py-1.5 text-xs font-semibold text-white"
+            onClick={() => onNewJob(asset)}
+            type="button"
+          >
+            + New Job
           </button>
           <button
             className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700"
@@ -3110,27 +3401,72 @@ function CustomerAssetDetailWorkspace({
       </section>
 
       {isEditing ? (
-        <section className="rounded-[18px] border border-slate-200 bg-white p-3">
+        <section className="min-w-0 overflow-hidden rounded-[18px] border border-slate-200 bg-white p-3">
           <p className="text-sm font-semibold text-slate-950">Edit Asset</p>
           <ApplianceEditForm
             actionState={actionState}
+            addresses={addresses}
             form={form}
             onCancel={onCancelEdit}
             onChange={onFormChange}
             onSubmit={onSave}
+            requests={requests}
           />
         </section>
       ) : null}
 
       <section className="rounded-[18px] border border-slate-200 bg-white p-3">
         <h3 className="text-sm font-semibold text-slate-950">Identity</h3>
-        <div className="mt-2 divide-y divide-slate-100 text-sm">
-          <ProfileRow label="Brand" value={asset.brand || "Not saved"} />
-          <ProfileRow label="Type" value={getAssetPlaceholderLabel(asset.appliance_type)} />
-          <ProfileRow label="Model" value={asset.model_number || "Not saved"} />
-          <ProfileRow label="Serial" value={asset.serial_number || "Not saved"} />
-          <ProfileRow label="Location" value={asset.location_label || "Not saved"} />
-          <ProfileRow label="Status" value={getAssetStatusLabel(asset)} />
+        <div className="mt-2 divide-y divide-slate-200 border-t border-slate-200 text-sm">
+          <AssetDetailInfoRow
+            icon="status"
+            label="Brand"
+            value={asset.brand || "Not saved"}
+          />
+          <AssetDetailInfoRow
+            icon="tool"
+            label="Type"
+            value={getAssetPlaceholderLabel(asset.appliance_type)}
+          />
+          <AssetDetailInfoRow
+            icon="briefcase"
+            label="Model"
+            value={asset.model_number || "Not saved"}
+          />
+          <AssetDetailInfoRow
+            icon="calendar"
+            label="Serial"
+            value={asset.serial_number || "Not saved"}
+          />
+        </div>
+
+        <h3 className="mt-4 text-sm font-semibold text-slate-950">Location</h3>
+        <div className="mt-2 divide-y divide-slate-200 border-t border-slate-200 text-sm">
+          <AssetDetailInfoRow
+            icon="pin"
+            label="Address"
+            value={getAssetAddressLabel(asset, addresses)}
+          />
+          {asset.location_label ? (
+            <AssetDetailInfoRow
+              icon="map"
+              label="Area / Room"
+              value={asset.location_label}
+            />
+          ) : null}
+        </div>
+
+        <h3 className="mt-4 text-sm font-semibold text-slate-950">Status</h3>
+        <div className="mt-2 border-y border-slate-200 text-sm">
+          <AssetDetailInfoRow
+            icon="status"
+            label="Status"
+            value={
+              <span className="inline-flex rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold capitalize text-emerald-800">
+                {getAssetStatusLabel(asset)}
+              </span>
+            }
+          />
         </div>
       </section>
 
@@ -3176,6 +3512,24 @@ function CustomerAssetDetailWorkspace({
         )}
       </section>
     </main>
+  );
+}
+
+function AssetDetailInfoRow({
+  icon,
+  label,
+  value,
+}: {
+  icon: CustomerOverviewIconName;
+  label: string;
+  value: ReactNode;
+}) {
+  return (
+    <div className="grid grid-cols-[32px_110px_minmax(0,1fr)] items-center gap-2 py-3">
+      <CustomerOverviewIcon className="h-5 w-5 text-slate-500" name={icon} />
+      <span className="text-sm font-medium text-slate-500">{label}</span>
+      <span className="min-w-0 text-sm font-medium text-slate-950">{value}</span>
+    </div>
   );
 }
 
@@ -3269,47 +3623,154 @@ function ApplianceList({
 }
 
 function ApplianceEditForm({
+  addresses,
   form,
   onChange,
   onSubmit,
   onCancel,
   actionState,
+  requests,
 }: {
+  addresses: CustomerAddressRow[];
   form: ApplianceFormState;
   onChange: (form: ApplianceFormState) => void;
   onSubmit: () => void;
   onCancel: () => void;
   actionState: ActionState;
+  requests: ServiceRequestRow[];
 }) {
   const update = <Key extends keyof ApplianceFormState>(
     key: Key,
     value: ApplianceFormState[Key],
   ) => onChange({ ...form, [key]: value });
+  const locationOptions = buildAssetLocationOptions({ addresses, requests });
+  const isCustomAssetType = form.applianceTypeMode === "custom";
+  const assetTypeSelectValue = isCustomAssetType
+    ? CUSTOM_ASSET_TYPE_VALUE
+    : form.applianceType;
+  const isCustomArea = form.locationLabelMode === "custom";
+  const areaSelectValue = isCustomArea
+    ? CUSTOM_ASSET_AREA_VALUE
+    : form.locationLabel;
 
   return (
-    <div className="mt-3 grid gap-3">
-      <div className="grid gap-3 md:grid-cols-2">
-        <label className="grid gap-2 text-sm font-medium text-slate-700">
-          Appliance type
+    <div className="mt-3 grid min-w-0 gap-3">
+      {!form.id ? (
+        <div className="grid gap-2 rounded-xl border border-blue-100 bg-blue-50 p-3">
+          <p className="text-xs font-black uppercase tracking-[0.12em] text-[#0F6BFF]">
+            Add Asset
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            <span className="rounded-xl bg-white px-3 py-2 text-center text-xs font-semibold text-slate-700 ring-1 ring-blue-100">
+              Scan / Photo Assisted
+            </span>
+            <span className="rounded-xl bg-white px-3 py-2 text-center text-xs font-semibold text-slate-700 ring-1 ring-blue-100">
+              Enter Manually
+            </span>
+          </div>
+          <p className="text-xs leading-5 text-slate-600">
+            Job label photos still use the existing Asset Intelligence pipeline. Manual
+            assets can be saved here now, then linked jobs and cover photos remain reused.
+          </p>
+        </div>
+      ) : null}
+      <div className="grid min-w-0 gap-3 md:grid-cols-2">
+        <label className="grid min-w-0 gap-2 text-sm font-medium text-slate-700">
+          Asset type
           <select
-            className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-medium text-slate-950 outline-none transition focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
-            onChange={(event) => update("applianceType", event.target.value)}
-            value={form.applianceType}
+            className="min-w-0 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-medium text-slate-950 outline-none transition focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
+            onChange={(event) => {
+              const nextValue = event.target.value;
+
+              if (nextValue === CUSTOM_ASSET_TYPE_VALUE) {
+                onChange({
+                  ...form,
+                  applianceTypeMode: "custom",
+                });
+                return;
+              }
+
+              onChange({
+                ...form,
+                applianceType: nextValue,
+                applianceTypeMode: "preset",
+              });
+            }}
+            value={assetTypeSelectValue}
           >
-            <option value="">Select type</option>
-            {WRA_ASSET_PLACEHOLDER_TYPES.filter(
-              (type) => type !== "unknown_appliance",
-            ).map((type) => (
-              <option key={type} value={type}>
-                {getAssetPlaceholderLabel(type)}
+            <option value="">Select asset type</option>
+            {ADD_ASSET_TYPE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+            <option value={CUSTOM_ASSET_TYPE_VALUE}>Other / Custom</option>
+          </select>
+        </label>
+        {assetTypeSelectValue === CUSTOM_ASSET_TYPE_VALUE ? (
+          <TextInput
+            label="Custom asset type"
+            value={form.applianceType}
+            onChange={(value) => update("applianceType", value)}
+          />
+        ) : null}
+        <TextInput label="Brand" value={form.brand} onChange={(value) => update("brand", value)} />
+        <TextInput label="Model" value={form.modelNumber} onChange={(value) => update("modelNumber", value)} />
+        <TextInput label="Serial" value={form.serialNumber} onChange={(value) => update("serialNumber", value)} />
+        <label className="grid min-w-0 gap-2 text-sm font-medium text-slate-700">
+          Physical location
+          <select
+            className="min-w-0 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-medium text-slate-950 outline-none transition focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
+            onChange={(event) => update("customerAddressId", event.target.value)}
+            value={form.customerAddressId}
+          >
+            <option value="">Select customer address</option>
+            {locationOptions.map((option) => (
+              <option key={option.key} value={option.key}>
+                {option.label} — {option.sourceLabel}
               </option>
             ))}
           </select>
         </label>
-        <TextInput label="Brand" value={form.brand} onChange={(value) => update("brand", value)} />
-        <TextInput label="Model" value={form.modelNumber} onChange={(value) => update("modelNumber", value)} />
-        <TextInput label="Serial" value={form.serialNumber} onChange={(value) => update("serialNumber", value)} />
-        <TextInput label="Location" value={form.locationLabel} onChange={(value) => update("locationLabel", value)} />
+        <label className="grid min-w-0 gap-2 text-sm font-medium text-slate-700">
+          Area / placement
+          <select
+            className="min-w-0 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-medium text-slate-950 outline-none transition focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
+            onChange={(event) => {
+              const nextValue = event.target.value;
+
+              if (nextValue === CUSTOM_ASSET_AREA_VALUE) {
+                onChange({
+                  ...form,
+                  locationLabelMode: "custom",
+                });
+                return;
+              }
+
+              onChange({
+                ...form,
+                locationLabel: nextValue,
+                locationLabelMode: "preset",
+              });
+            }}
+            value={areaSelectValue}
+          >
+            <option value="">Select area</option>
+            {ADD_ASSET_AREA_OPTIONS.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+            <option value={CUSTOM_ASSET_AREA_VALUE}>Other / Custom</option>
+          </select>
+        </label>
+        {areaSelectValue === CUSTOM_ASSET_AREA_VALUE ? (
+          <TextInput
+            label="Custom area / placement"
+            value={form.locationLabel}
+            onChange={(value) => update("locationLabel", value)}
+          />
+        ) : null}
       </div>
       <ActionMessage actionState={actionState} />
       <div className="flex flex-col gap-2 sm:flex-row">
