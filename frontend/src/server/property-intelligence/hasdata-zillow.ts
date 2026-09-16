@@ -6,7 +6,7 @@ const HASDATA_ZILLOW_PROPERTY_ENDPOINT =
   process.env.HASDATA_ZILLOW_PROPERTY_ENDPOINT ??
   "https://api.hasdata.com/scrape/zillow/property";
 
-const PROPERTY_INTELLIGENCE_CACHE_SECONDS = 60 * 60 * 24 * 14;
+const PROPERTY_INTELLIGENCE_CACHE_SECONDS = 60 * 60 * 24 * 365;
 const HASDATA_TIMEOUT_MS = 45_000;
 
 type JsonObject = Record<string, unknown>;
