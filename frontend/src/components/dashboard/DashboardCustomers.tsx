@@ -8,6 +8,12 @@ import {
   getAddressAutocompleteAdapter,
   type AddressSuggestion,
 } from "@/lib/address-autocomplete";
+import {
+  AssetImage,
+  WRA_ASSET_PLACEHOLDER_TYPES,
+  getAssetPlaceholderLabel,
+} from "@/lib/asset-placeholders";
+import { SERVICE_REQUEST_PHOTO_BUCKET } from "@/lib/service-request-photos";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import type {
   CustomerApplianceRow,
@@ -54,6 +60,7 @@ type CustomerDetailState =
       customerNotes: CustomerInternalNoteRow[];
       conversations: CommunicationConversationRow[];
       communicationEvents: CommunicationTimelineEventRow[];
+      assetCoverUrls: Record<string, string>;
       currentRole: DatabaseAppRole | null;
     }
   | { status: "unavailable"; message: string };
@@ -104,6 +111,17 @@ type CustomerSectionKey =
   | "notes"
   | "timeline"
   | "repairHistory";
+
+type CustomerStatusFilter = "all" | "active" | "inactive";
+type CustomerExtraFilter = "all" | "hasOpenJobs" | "hasAssets" | "hasAddress" | "noAddress";
+type CustomerWorkspaceTab = "overview" | "jobs" | "assets" | "more";
+type CustomerJobsFilter = "all" | "open" | "completed";
+type CustomerSortOption =
+  | "lastJobNewest"
+  | "lastJobOldest"
+  | "nameAsc"
+  | "nameDesc"
+  | "customerSinceNewest";
 
 type ApplianceFormState = {
   id: string | null;
@@ -255,6 +273,17 @@ function formatDateTime(value: string | null | undefined): string {
   }).format(new Date(value));
 }
 
+function formatActivityDate(value: string | null | undefined): string {
+  if (!value) {
+    return "Now";
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+  }).format(new Date(value));
+}
+
 function formatShortMoney(value: number | null | undefined): string {
   const amount = Number(value ?? 0);
 
@@ -285,6 +314,16 @@ function getCustomerName(customer: CustomerRow): string {
   return customer.full_name || customer.email || customer.phone || "Customer";
 }
 
+function getCustomerInitials(customer: CustomerRow): string {
+  const nameParts = getCustomerName(customer).split(/\s+/).filter(Boolean);
+  const initials = nameParts
+    .slice(0, 2)
+    .map((part) => part.charAt(0).toUpperCase())
+    .join("");
+
+  return initials || "C";
+}
+
 function getJobAddress(request: ServiceRequestRow | undefined): string {
   if (!request) {
     return "No address saved";
@@ -297,6 +336,12 @@ function getJobAddress(request: ServiceRequestRow | undefined): string {
   return [request.street_address, request.unit, request.city, request.state, request.zip_code]
     .filter(Boolean)
     .join(", ");
+}
+
+function getCustomerJobHref(customerId: string, requestId: string): string {
+  const returnTo = `/dashboard/customers/${customerId}?tab=jobs`;
+
+  return `/dashboard/leads/${requestId}?returnTo=${encodeURIComponent(returnTo)}`;
 }
 
 function getAddressLabel(address: CustomerAddressRow | undefined): string {
@@ -321,10 +366,19 @@ function getCustomerPrimaryAddress(addresses: CustomerAddressRow[]): CustomerAdd
   return primary;
 }
 
-function getCustomerPrimaryAddressLabel(addresses: CustomerAddressRow[]): string {
+function getCustomerCityLabel(addresses: CustomerAddressRow[]): string {
   const primary = getCustomerPrimaryAddress(addresses);
 
-  return primary ? getAddressLabel(primary) : "No customer primary address saved yet.";
+  if (!primary) {
+    return "No address yet";
+  }
+
+  return [primary.city, primary.state, primary.zip_code].filter(Boolean).join(", ") ||
+    "No address yet";
+}
+
+function getCustomerLastJobDate(requests: ServiceRequestRow[]): string | null {
+  return requests[0]?.created_at ?? null;
 }
 
 function buildCustomerForm(
@@ -378,6 +432,32 @@ function getAppointmentLabel(request: ServiceRequestRow): string {
     .join(" - ");
 
   return window ? `${date}, ${window}` : date;
+}
+
+function getCustomerJobScheduleLabel(request: ServiceRequestRow): string {
+  if (!request.scheduled_date) {
+    return "Not scheduled";
+  }
+
+  const date = formatDate(request.scheduled_date);
+  const window = [request.scheduled_window_start_time, request.scheduled_window_end_time]
+    .filter(Boolean)
+    .join(" - ");
+
+  return window ? `${date} · ${window}` : date;
+}
+
+function getCustomerJobTitle(request: ServiceRequestRow): string {
+  return (
+    request.job_name ||
+    [request.appliance_brand, request.appliance_type].filter(Boolean).join(" ") ||
+    request.appliance_type ||
+    "Service job"
+  );
+}
+
+function getShortJobNumber(request: ServiceRequestRow): string {
+  return request.id.slice(0, 8).toUpperCase();
 }
 
 function normalizeSearch(value: string | null | undefined): string {
@@ -437,11 +517,255 @@ function statusBadgeClass(status: string): string {
 function StatusPill({ value }: { value: string }) {
   return (
     <span
-      className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-black uppercase tracking-[0.08em] ${statusBadgeClass(
+      className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] ${statusBadgeClass(
         value,
       )}`}
     >
       {value.replaceAll("_", " ")}
+    </span>
+  );
+}
+
+type CustomerOverviewIconName =
+  | "back"
+  | "briefcase"
+  | "calendar"
+  | "chevron"
+  | "close"
+  | "edit"
+  | "mail"
+  | "map"
+  | "message"
+  | "more"
+  | "payment"
+  | "phone"
+  | "pin"
+  | "search"
+  | "status"
+  | "tool"
+  | "user";
+
+function CustomerOverviewIcon({
+  className = "h-4 w-4",
+  name,
+}: {
+  className?: string;
+  name: CustomerOverviewIconName;
+}) {
+  if (name === "back") {
+    return (
+      <svg className={className} fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M15 18 9 12l6-6" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.2" />
+      </svg>
+    );
+  }
+
+  if (name === "edit") {
+    return (
+      <svg className={className} fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m14.5 5.5 4 4M4 20h4.2L19 9.2a2.8 2.8 0 0 0-4-4L4 16.2V20Z" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+      </svg>
+    );
+  }
+
+  if (name === "close") {
+    return (
+      <svg className={className} fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m6 6 12 12M18 6 6 18" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
+      </svg>
+    );
+  }
+
+  if (name === "more") {
+    return (
+      <svg className={className} fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 12h.01M12 12h.01M19 12h.01" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" />
+      </svg>
+    );
+  }
+
+  if (name === "phone") {
+    return (
+      <svg className={className} fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M7.2 4.8 9 8.9l-1.5 1.2c1 2.1 2.5 3.7 4.6 4.6L13.4 13l4.2 1.9-.4 3.3c-.1.8-.8 1.4-1.6 1.3C9.4 19 5 14.6 4.5 8.4c-.1-.8.5-1.5 1.3-1.6l1.4-.2Z" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+      </svg>
+    );
+  }
+
+  if (name === "message") {
+    return (
+      <svg className={className} fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 6.8A3 3 0 0 1 8 4h8a3 3 0 0 1 3 2.8v5.6a3 3 0 0 1-3 2.8h-4.3L7 19v-3.8a3 3 0 0 1-2-2.8V6.8Z" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+        <path d="M8.8 9.5h6.4M8.8 12.2h3.7" stroke="currentColor" strokeLinecap="round" strokeWidth="1.9" />
+      </svg>
+    );
+  }
+
+  if (name === "mail") {
+    return (
+      <svg className={className} fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 7h14v10H5V7Z" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+        <path d="m5.5 7.5 6.5 5 6.5-5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+      </svg>
+    );
+  }
+
+  if (name === "pin") {
+    return (
+      <svg className={className} fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 21s6-5.4 6-11a6 6 0 0 0-12 0c0 5.6 6 11 6 11Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.9" />
+        <path d="M12 12.2a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4Z" stroke="currentColor" strokeWidth="1.9" />
+      </svg>
+    );
+  }
+
+  if (name === "search") {
+    return (
+      <svg className={className} fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m20 20-4.2-4.2M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4Z" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+      </svg>
+    );
+  }
+
+  if (name === "map") {
+    return (
+      <svg className={className} fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M9 18 4 20V6l5-2 6 2 5-2v14l-5 2-6-2Z" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+        <path d="M9 4v14M15 6v14" stroke="currentColor" strokeLinecap="round" strokeWidth="1.9" />
+      </svg>
+    );
+  }
+
+  if (name === "calendar") {
+    return (
+      <svg className={className} fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M6 5h12a2 2 0 0 1 2 2v11H4V7a2 2 0 0 1 2-2Z" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+        <path d="M8 3v4M16 3v4M4 10h16" stroke="currentColor" strokeLinecap="round" strokeWidth="1.9" />
+      </svg>
+    );
+  }
+
+  if (name === "tool") {
+    return (
+      <svg className={className} fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m14.7 6.3 3-3a5 5 0 0 1-6.4 6.4L5.6 15.4a2 2 0 0 0 3 3l5.7-5.7a5 5 0 0 1 6.4-6.4l-3 3-3-3Z" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
+      </svg>
+    );
+  }
+
+  if (name === "briefcase") {
+    return (
+      <svg className={className} fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M9 7V5h6v2M5 8h14v10H5V8Z" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+        <path d="M5 12h14" stroke="currentColor" strokeLinecap="round" strokeWidth="1.9" />
+      </svg>
+    );
+  }
+
+  if (name === "payment") {
+    return (
+      <svg className={className} fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 7h16v10H4V7Z" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+        <path d="M4 10h16M15 14h2" stroke="currentColor" strokeLinecap="round" strokeWidth="1.9" />
+      </svg>
+    );
+  }
+
+  if (name === "status") {
+    return (
+      <svg className={className} fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 12.5 9.2 17 19 7" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.1" />
+      </svg>
+    );
+  }
+
+  if (name === "chevron") {
+    return (
+      <svg className={className} fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m9 6 6 6-6 6" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4.8 20a7.2 7.2 0 0 1 14.4 0" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+    </svg>
+  );
+}
+
+function CustomerQuickAction({
+  href,
+  label,
+}: {
+  href?: string;
+  label: "Call" | "Text" | "Email" | "More";
+}) {
+  const iconName: Record<typeof label, CustomerOverviewIconName> = {
+    Call: "phone",
+    Text: "message",
+    Email: "mail",
+    More: "more",
+  };
+  const content = (
+    <>
+      <span className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white text-[#0F6BFF] shadow-[0_8px_20px_rgba(15,23,42,0.06)]">
+        <CustomerOverviewIcon className="h-[18px] w-[18px]" name={iconName[label]} />
+      </span>
+      <span className="text-xs font-black text-slate-700">{label}</span>
+    </>
+  );
+  const className =
+    "flex flex-col items-center justify-center gap-1.5 transition hover:text-[#0F6BFF]";
+
+  if (href) {
+    return (
+      <a className={className} href={href}>
+        {content}
+      </a>
+    );
+  }
+
+  return (
+    <button className={className} type="button">
+      {content}
+    </button>
+  );
+}
+
+function CustomerActivityContent({ item }: { item: TimelineItem }) {
+  const iconName: CustomerOverviewIconName =
+    item.category === "estimate"
+      ? "briefcase"
+      : item.category === "invoice" || item.category === "payment"
+        ? "payment"
+        : item.category === "call"
+          ? "message"
+          : item.category === "note"
+            ? "mail"
+            : item.category === "repair"
+              ? "tool"
+              : "briefcase";
+
+  return (
+    <span className="grid grid-cols-[34px_76px_minmax(0,1fr)_16px] items-center gap-2">
+      <span className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-50 text-[#0F6BFF]">
+        <CustomerOverviewIcon className="h-4 w-4" name={iconName} />
+      </span>
+      <span className="text-xs font-bold text-slate-500">{formatActivityDate(item.at)}</span>
+      <span className="min-w-0">
+        <span className="block truncate text-sm font-black text-slate-950">
+          {item.title}
+        </span>
+        {item.body ? (
+          <span className="block truncate text-xs font-semibold text-slate-500">
+            {item.body}
+          </span>
+        ) : null}
+      </span>
+      {item.href ? (
+        <CustomerOverviewIcon className="h-4 w-4 text-slate-400" name="chevron" />
+      ) : null}
     </span>
   );
 }
@@ -480,6 +804,11 @@ export function DashboardCustomersIndex() {
   const [state, setState] = useState<CustomerListState>({ status: "loading" });
   const [query, setQuery] = useState("");
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<CustomerStatusFilter>("all");
+  const [extraFilter, setExtraFilter] = useState<CustomerExtraFilter>("all");
+  const [sortOption, setSortOption] =
+    useState<CustomerSortOption>("lastJobNewest");
+  const [showFilterPanel, setShowFilterPanel] = useState(false);
   const [createForm, setCreateForm] = useState<CustomerFormState>(emptyCustomerForm);
   const [createState, setCreateState] = useState<ActionState>({
     status: "idle",
@@ -557,48 +886,156 @@ export function DashboardCustomersIndex() {
     };
   }, []);
 
+  useEffect(() => {
+    function openCreateCustomer() {
+      setShowCreateForm(true);
+    }
+
+    window.addEventListener("wra:create-customer", openCreateCustomer);
+
+    return () => {
+      window.removeEventListener("wra:create-customer", openCreateCustomer);
+    };
+  }, []);
+
+  const customerCounts = useMemo(() => {
+    if (state.status !== "ready") {
+      return { active: 0, all: 0, inactive: 0 };
+    }
+
+    return state.customers.reduce(
+      (counts, customer) => {
+        const status = customer.customer_status?.toLowerCase();
+        counts.all += 1;
+        if (status === "inactive") {
+          counts.inactive += 1;
+        } else if (status === "active") {
+          counts.active += 1;
+        }
+        return counts;
+      },
+      { active: 0, all: 0, inactive: 0 },
+    );
+  }, [state]);
+
   const customers = useMemo(() => {
     if (state.status !== "ready") {
       return [];
     }
 
     const normalized = normalizeSearch(query);
-    if (!normalized) {
-      return state.customers;
-    }
-
-    return state.customers.filter((customer) => {
+    const filteredCustomers = state.customers.filter((customer) => {
       const requests = state.serviceRequests.filter(
         (request) => request.customer_id === customer.id,
       );
       const addresses = state.addresses.filter(
         (address) => address.customer_id === customer.id,
       );
+      const appliances = state.appliances.filter(
+        (appliance) => appliance.customer_id === customer.id,
+      );
+      const matchesQuery =
+        !normalized ||
+        [
+          customer.full_name,
+          customer.first_name,
+          customer.last_name,
+          customer.email,
+          customer.phone,
+          ...addresses.flatMap((address) => [
+            address.street_address,
+            address.unit,
+            address.city,
+            address.state,
+            address.zip_code,
+          ]),
+          ...requests.flatMap((request) => [
+            request.full_address,
+            request.street_address,
+            request.unit,
+            request.city,
+            request.state,
+            request.zip_code,
+          ]),
+        ].some((value) => normalizeSearch(value).includes(normalized));
 
-      return [
-        customer.full_name,
-        customer.first_name,
-        customer.last_name,
-        customer.email,
-        customer.phone,
-        ...addresses.flatMap((address) => [
-          address.street_address,
-          address.unit,
-          address.city,
-          address.state,
-          address.zip_code,
-        ]),
-        ...requests.flatMap((request) => [
-          request.full_address,
-          request.street_address,
-          request.unit,
-          request.city,
-          request.state,
-          request.zip_code,
-        ]),
-      ].some((value) => normalizeSearch(value).includes(normalized));
+      if (!matchesQuery) {
+        return false;
+      }
+
+      if (statusFilter !== "all" && customer.customer_status !== statusFilter) {
+        return false;
+      }
+
+      if (extraFilter === "hasOpenJobs") {
+        return requests.some((request) => !CLOSED_JOB_STATUSES.has(request.status));
+      }
+
+      if (extraFilter === "hasAssets") {
+        return appliances.length > 0;
+      }
+
+      if (extraFilter === "hasAddress") {
+        return addresses.length > 0;
+      }
+
+      if (extraFilter === "noAddress") {
+        return addresses.length === 0;
+      }
+
+      return true;
     });
-  }, [query, state]);
+
+    return filteredCustomers.sort((left, right) => {
+      const leftRequests = state.serviceRequests.filter(
+        (request) => request.customer_id === left.id,
+      );
+      const rightRequests = state.serviceRequests.filter(
+        (request) => request.customer_id === right.id,
+      );
+      const leftName = getCustomerName(left);
+      const rightName = getCustomerName(right);
+      const leftLastJob = getCustomerLastJobDate(leftRequests);
+      const rightLastJob = getCustomerLastJobDate(rightRequests);
+
+      if (sortOption === "nameAsc") {
+        return leftName.localeCompare(rightName);
+      }
+
+      if (sortOption === "nameDesc") {
+        return rightName.localeCompare(leftName);
+      }
+
+      if (sortOption === "customerSinceNewest") {
+        return Date.parse(right.created_at) - Date.parse(left.created_at);
+      }
+
+      if (sortOption === "lastJobOldest") {
+        if (!leftLastJob && !rightLastJob) {
+          return leftName.localeCompare(rightName);
+        }
+        if (!leftLastJob) {
+          return 1;
+        }
+        if (!rightLastJob) {
+          return -1;
+        }
+        return Date.parse(leftLastJob) - Date.parse(rightLastJob);
+      }
+
+      if (!leftLastJob && !rightLastJob) {
+        return leftName.localeCompare(rightName);
+      }
+      if (!leftLastJob) {
+        return 1;
+      }
+      if (!rightLastJob) {
+        return -1;
+      }
+
+      return Date.parse(rightLastJob) - Date.parse(leftLastJob);
+    });
+  }, [extraFilter, query, sortOption, state, statusFilter]);
 
   async function createCustomer() {
     if (
@@ -683,41 +1120,122 @@ export function DashboardCustomersIndex() {
   }
 
   return (
-    <div className="mx-auto grid max-w-7xl gap-5">
-      <header className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-[0_12px_32px_rgba(15,23,42,0.06)]">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <p className="text-sm font-bold uppercase tracking-[0.16em] text-[#0F6BFF]">
-              Customer CRM
-            </p>
-            <h1 className="mt-2 text-3xl font-black text-slate-950">Customers</h1>
-            <p className="mt-2 text-sm text-slate-600">
-              Search by name, phone, or email and open a complete customer workspace.
-            </p>
-          </div>
-          <div className="grid gap-3 lg:w-[28rem]">
-            <label className="grid gap-2 text-sm font-semibold text-slate-700">
-              Search customers
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Name, phone, email, address, ZIP"
-                className="h-11 rounded-xl border border-slate-200 px-3 text-slate-950 outline-none focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
-              />
-            </label>
+    <div className="mx-auto w-full max-w-[540px] bg-[#F8FAFC] px-0 pb-8 pt-3 lg:max-w-7xl lg:px-6 lg:pt-4">
+      <header className="grid gap-3 px-3 lg:px-0">
+        <label className="relative block">
+          <span className="sr-only">Search customers</span>
+          <CustomerOverviewIcon
+            className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-500"
+            name="search"
+          />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search by name, phone, email, or address"
+            className="h-12 w-full rounded-2xl border border-slate-200 bg-white pl-12 pr-4 text-base font-medium text-slate-950 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-slate-500 focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100 lg:text-sm"
+          />
+        </label>
+
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {[
+            { count: customerCounts.all, label: "All", value: "all" },
+            { count: customerCounts.active, label: "Active", value: "active" },
+            { count: customerCounts.inactive, label: "Inactive", value: "inactive" },
+          ].map((filter) => (
             <button
-              className="rounded-xl bg-[#0F6BFF] px-4 py-3 text-sm font-black text-white transition hover:bg-[#0057D9]"
-              onClick={() => setShowCreateForm((current) => !current)}
+              className={`shrink-0 rounded-xl px-4 py-2.5 text-sm font-semibold transition ${
+                statusFilter === filter.value
+                  ? "bg-[#0F6BFF] text-white shadow-[0_10px_22px_rgba(15,107,255,0.24)]"
+                  : "border border-slate-200 bg-white text-slate-700"
+              }`}
+              key={filter.value}
+              onClick={() => setStatusFilter(filter.value as CustomerStatusFilter)}
               type="button"
             >
-              {showCreateForm ? "Close Create Customer" : "Create Customer"}
+              {filter.label} ({filter.count})
             </button>
+          ))}
+          <button
+            className={`flex shrink-0 items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition ${
+              extraFilter !== "all" || showFilterPanel
+                ? "bg-slate-900 text-white"
+                : "border border-slate-200 bg-white text-slate-700"
+            }`}
+            onClick={() => setShowFilterPanel((current) => !current)}
+            type="button"
+          >
+            <CustomerOverviewIcon className="h-4 w-4" name="status" />
+            Filters
+          </button>
+        </div>
+
+        {showFilterPanel ? (
+          <div className="grid gap-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_10px_26px_rgba(15,23,42,0.06)]">
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+              Quick filters
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { label: "Any", value: "all" },
+                { label: "Has open jobs", value: "hasOpenJobs" },
+                { label: "Has assets", value: "hasAssets" },
+                { label: "Has address", value: "hasAddress" },
+                { label: "No address", value: "noAddress" },
+              ].map((filter) => (
+                <button
+                  className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
+                    extraFilter === filter.value
+                      ? "border-[#0F6BFF] bg-blue-50 text-[#0F6BFF]"
+                      : "border-slate-200 bg-white text-slate-600"
+                  }`}
+                  key={filter.value}
+                  onClick={() => setExtraFilter(filter.value as CustomerExtraFilter)}
+                  type="button"
+                >
+                  {filter.label}
+                </button>
+              ))}
+            </div>
           </div>
+        ) : null}
+
+        <div className="flex items-center justify-between gap-3 px-1">
+          <label className="flex items-center gap-2 text-sm font-medium text-slate-600">
+            Sort by
+            <select
+              className="max-w-[13rem] rounded-lg border-0 bg-transparent py-1 text-sm font-semibold text-slate-900 outline-none"
+              onChange={(event) =>
+                setSortOption(event.target.value as CustomerSortOption)
+              }
+              value={sortOption}
+            >
+              <option value="lastJobNewest">Last Job - newest</option>
+              <option value="lastJobOldest">Last Job - oldest</option>
+              <option value="nameAsc">Customer Name - A to Z</option>
+              <option value="nameDesc">Customer Name - Z to A</option>
+              <option value="customerSinceNewest">Customer Since - newest</option>
+            </select>
+          </label>
         </div>
       </header>
 
       {showCreateForm ? (
-        <SectionCard title="Create Customer" eyebrow="Manual CRM entry">
+        <section className="mx-3 mt-4 rounded-[20px] border border-slate-200 bg-white p-4 shadow-[0_10px_26px_rgba(15,23,42,0.06)] lg:mx-0">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.12em] text-[#0F6BFF]">
+                Manual CRM entry
+              </p>
+              <h2 className="text-lg font-black text-slate-950">Create Customer</h2>
+            </div>
+            <button
+              className="rounded-full px-2 py-1 text-sm font-black text-slate-500"
+              onClick={() => setShowCreateForm(false)}
+              type="button"
+            >
+              Close
+            </button>
+          </div>
           <CustomerEditForm
             form={createForm}
             onChange={setCreateForm}
@@ -725,11 +1243,11 @@ export function DashboardCustomersIndex() {
             submitLabel="Create Customer"
             actionState={createState}
           />
-        </SectionCard>
+        </section>
       ) : null}
 
       {customers.length > 0 ? (
-        <section className="grid gap-4">
+        <section className="mt-3 overflow-hidden border-y border-slate-200 bg-white shadow-[0_10px_26px_rgba(15,23,42,0.05)] sm:mx-3 sm:rounded-[22px] sm:border lg:mx-0">
           {customers.map((customer) => {
             const requests = state.serviceRequests.filter(
               (request) => request.customer_id === customer.id,
@@ -738,56 +1256,46 @@ export function DashboardCustomersIndex() {
               (address) => address.customer_id === customer.id,
             );
             const latestRequest = requests[0];
-            const primaryAddress = getCustomerPrimaryAddressLabel(addresses);
+            const cityLabel = getCustomerCityLabel(addresses);
 
             return (
               <Link
                 key={customer.id}
                 href={`/dashboard/customers/${customer.id}`}
-                className="block rounded-[24px] border border-slate-200 bg-white p-5 shadow-[0_12px_32px_rgba(15,23,42,0.06)] transition hover:border-[#0F6BFF] hover:bg-blue-50"
+                className="grid grid-cols-[54px_minmax(0,1fr)_96px_14px] items-center gap-2 border-b border-slate-100 px-3 py-2.5 transition last:border-b-0 hover:bg-blue-50"
               >
-                <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr_auto] lg:items-center">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="truncate text-xl font-black text-slate-950">
-                        {getCustomerName(customer)}
-                      </h2>
-                      <StatusPill value={customer.customer_status} />
-                    </div>
-                    <p className="mt-2 text-sm font-semibold text-slate-700">
-                      {customer.phone || "No phone"}
-                    </p>
-                    <p className="mt-1 line-clamp-1 text-sm text-slate-500">
-                      {primaryAddress}
-                    </p>
-                  </div>
-
-                  <div className="min-w-0">
-                    <p className="text-xs font-black uppercase tracking-[0.12em] text-slate-500">
-                      Last job
-                    </p>
-                    <p className="mt-1 font-bold text-slate-950">
-                      {latestRequest
-                        ? [latestRequest.appliance_brand, latestRequest.appliance_type]
-                            .filter(Boolean)
-                            .join(" ") || "Linked job"
-                        : "No jobs yet"}
-                    </p>
-                    <p className="mt-1 text-sm text-slate-500">
-                      {latestRequest ? formatDate(latestRequest.created_at) : ""}
-                    </p>
-                  </div>
-
-                  <span className="text-sm font-black text-[#0F6BFF]">
-                    View customer
+                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-blue-50 text-lg font-semibold text-[#0F6BFF]">
+                  {getCustomerInitials(customer)}
+                </div>
+                <div className="min-w-0">
+                  <h2 className="truncate text-base font-semibold leading-5 text-slate-950">
+                    {getCustomerName(customer)}
+                  </h2>
+                  <p className="mt-1 truncate text-sm font-medium leading-5 text-slate-700">
+                    {customer.phone || "No phone"}
+                  </p>
+                  <p className="truncate text-sm leading-5 text-slate-500">
+                    {cityLabel}
+                  </p>
+                </div>
+                <div className="min-w-0 text-right">
+                  <p className="text-xs font-medium leading-4 text-slate-500">
+                    Last job
+                  </p>
+                  <p className="mt-0.5 truncate text-sm font-semibold leading-5 text-slate-950">
+                    {latestRequest ? formatDate(latestRequest.created_at) : "No jobs yet"}
+                  </p>
+                  <span className="mt-1 inline-flex">
+                    <StatusPill value={customer.customer_status} />
                   </span>
                 </div>
+                <CustomerOverviewIcon className="h-4 w-4 text-slate-900" name="chevron" />
               </Link>
             );
           })}
         </section>
       ) : (
-        <section className="rounded-[24px] border border-dashed border-slate-300 bg-white p-6 text-center shadow-[0_12px_32px_rgba(15,23,42,0.06)]">
+        <section className="mx-3 mt-4 rounded-[24px] border border-dashed border-slate-300 bg-white p-6 text-center shadow-[0_12px_32px_rgba(15,23,42,0.06)] lg:mx-0">
           <h2 className="text-xl font-black text-slate-950">No customers found</h2>
           <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-600">
             Customer profiles appear after customer-linked service requests are saved.
@@ -798,8 +1306,34 @@ export function DashboardCustomersIndex() {
   );
 }
 
-export function DashboardCustomerDetail({ customerId }: { customerId: string }) {
+export function DashboardCustomerDetail({
+  customerId,
+  returnTo = "/dashboard/customers",
+}: {
+  customerId: string;
+  returnTo?: string;
+}) {
+  const router = useRouter();
   const [state, setState] = useState<CustomerDetailState>({ status: "loading" });
+  const [activeTab, setActiveTab] = useState<CustomerWorkspaceTab>(() => {
+    if (typeof window === "undefined") {
+      return "overview";
+    }
+
+    const tab = new URLSearchParams(window.location.search).get("tab");
+
+    return tab === "jobs" || tab === "assets" || tab === "more"
+      ? tab
+      : "overview";
+  });
+  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(() => {
+    if (typeof window === "undefined") {
+      return null;
+    }
+
+    return new URLSearchParams(window.location.search).get("asset");
+  });
+  const [jobsFilter, setJobsFilter] = useState<CustomerJobsFilter>("all");
   const [reloadKey, setReloadKey] = useState(0);
   const [profileForm, setProfileForm] = useState<CustomerFormState>(emptyCustomerForm);
   const [applianceForm, setApplianceForm] =
@@ -813,12 +1347,13 @@ export function DashboardCustomerDetail({ customerId }: { customerId: string }) 
     status: "idle",
     message: null,
   });
+  const [isAssetFormOpen, setIsAssetFormOpen] = useState(false);
   const [noteAction, setNoteAction] = useState<ActionState>({
     status: "idle",
     message: null,
   });
   const [expandedSections, setExpandedSections] = useState<Record<CustomerSectionKey, boolean>>({
-    profile: true,
+    profile: false,
     addresses: false,
     serviceAddresses: false,
     assets: false,
@@ -829,6 +1364,7 @@ export function DashboardCustomerDetail({ customerId }: { customerId: string }) 
     timeline: false,
     repairHistory: false,
   });
+  const [isProfileEditorOpen, setIsProfileEditorOpen] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -900,6 +1436,10 @@ export function DashboardCustomerDetail({ customerId }: { customerId: string }) 
       const serviceRequestIds = ((requestsResult.data ?? []) as ServiceRequestRow[]).map(
         (request) => request.id,
       );
+      const loadedAppliances = (appliancesResult.data ?? []) as CustomerApplianceRow[];
+      const coverPhotoIds = loadedAppliances
+        .map((appliance) => appliance.cover_photo_id)
+        .filter((id): id is string => Boolean(id));
       const conversationIds = (
         (conversationsResult.data ?? []) as CommunicationConversationRow[]
       ).map((conversation) => conversation.id);
@@ -942,13 +1482,33 @@ export function DashboardCustomerDetail({ customerId }: { customerId: string }) 
               { data: [], error: null },
               { data: [], error: null },
             ];
+      const coverPhotoUrls: Record<string, string> = {};
+
+      if (coverPhotoIds.length > 0) {
+        const { data: coverPhotos } = await supabase
+          .from("service_request_photos")
+          .select("id,storage_path")
+          .in("id", coverPhotoIds);
+
+        await Promise.all(
+          (coverPhotos ?? []).map(async (photo) => {
+            const { data: signedUrlData } = await supabase.storage
+              .from(SERVICE_REQUEST_PHOTO_BUCKET)
+              .createSignedUrl(photo.storage_path, 60 * 30);
+
+            if (signedUrlData?.signedUrl) {
+              coverPhotoUrls[photo.id] = signedUrlData.signedUrl;
+            }
+          }),
+        );
+      }
 
       if (isMounted) {
         setState({
           status: "ready",
           customer: (customerResult.data as CustomerRow | null) ?? null,
           serviceRequests: (requestsResult.data ?? []) as ServiceRequestRow[],
-          appliances: (appliancesResult.data ?? []) as CustomerApplianceRow[],
+          appliances: loadedAppliances,
           addresses: (addressesResult.data ?? []) as CustomerAddressRow[],
           estimates: (estimatesResult.data ?? []) as ServiceRequestEstimateRow[],
           invoices: (invoicesResult.data ?? []) as ServiceRequestInvoiceRow[],
@@ -956,6 +1516,7 @@ export function DashboardCustomerDetail({ customerId }: { customerId: string }) 
           customerNotes: (customerNotesResult.data ?? []) as CustomerInternalNoteRow[],
           conversations: (conversationsResult.data ?? []) as CommunicationConversationRow[],
           communicationEvents: (timelineResult.data ?? []) as CommunicationTimelineEventRow[],
+          assetCoverUrls: coverPhotoUrls,
           currentRole: (profileResult.data as DatabaseAppRole | null) ?? null,
         });
 
@@ -979,6 +1540,24 @@ export function DashboardCustomerDetail({ customerId }: { customerId: string }) 
     };
   }, [customerId, reloadKey]);
 
+  useEffect(() => {
+    function syncWorkspaceRoute() {
+      const params = new URLSearchParams(window.location.search);
+      const tab = params.get("tab");
+      const nextTab =
+        tab === "jobs" || tab === "assets" || tab === "more" ? tab : "overview";
+
+      setActiveTab(nextTab);
+      setSelectedAssetId(nextTab === "assets" ? params.get("asset") : null);
+    }
+
+    window.addEventListener("popstate", syncWorkspaceRoute);
+
+    return () => {
+      window.removeEventListener("popstate", syncWorkspaceRoute);
+    };
+  }, []);
+
   function refreshCustomer() {
     setReloadKey((value) => value + 1);
   }
@@ -988,6 +1567,48 @@ export function DashboardCustomerDetail({ customerId }: { customerId: string }) 
       ...current,
       [section]: !current[section],
     }));
+  }
+
+  function selectWorkspaceTab(tab: CustomerWorkspaceTab) {
+    setActiveTab(tab);
+    if (tab !== "assets") {
+      setSelectedAssetId(null);
+    }
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const nextUrl =
+      tab === "overview"
+        ? `/dashboard/customers/${customerId}`
+        : `/dashboard/customers/${customerId}?tab=${tab}`;
+
+    window.history.replaceState(null, "", nextUrl);
+  }
+
+  function openAssetDetail(assetId: string) {
+    setActiveTab("assets");
+    setSelectedAssetId(assetId);
+
+    if (typeof window !== "undefined") {
+      window.history.pushState(
+        null,
+        "",
+        `/dashboard/customers/${customerId}?tab=assets&asset=${encodeURIComponent(assetId)}`,
+      );
+    }
+  }
+
+  function closeAssetDetail() {
+    setSelectedAssetId(null);
+
+    if (typeof window !== "undefined") {
+      window.history.pushState(
+        null,
+        "",
+        `/dashboard/customers/${customerId}?tab=assets`,
+      );
+    }
   }
 
   async function saveProfile() {
@@ -1042,6 +1663,10 @@ export function DashboardCustomerDetail({ customerId }: { customerId: string }) 
       setApplianceAction({ status: "error", message: "Appliance type is required." });
       return;
     }
+    if (!applianceForm.brand.trim()) {
+      setApplianceAction({ status: "error", message: "Brand is required." });
+      return;
+    }
 
     const supabase = getSupabaseBrowserClient();
     if (!supabase) {
@@ -1058,7 +1683,16 @@ export function DashboardCustomerDetail({ customerId }: { customerId: string }) 
     });
 
     if (error) {
-      setApplianceAction({ status: "error", message: error.message });
+      setApplianceAction({
+        status: "error",
+        message:
+          error.message.includes("not accessible") ||
+          error.message.includes("permission denied")
+            ? "This account is not allowed to save assets for this customer."
+            : error.message.includes("Brand is required")
+              ? "Brand is required."
+              : "Asset could not be saved.",
+      });
       return;
     }
 
@@ -1067,6 +1701,7 @@ export function DashboardCustomerDetail({ customerId }: { customerId: string }) 
       message: applianceForm.id ? "Appliance saved." : "Appliance added.",
     });
     setApplianceForm(emptyApplianceForm);
+    setIsAssetFormOpen(false);
     refreshCustomer();
   }
 
@@ -1134,8 +1769,35 @@ export function DashboardCustomerDetail({ customerId }: { customerId: string }) 
   const pastJobs = state.serviceRequests.filter((request) =>
     CLOSED_JOB_STATUSES.has(request.status),
   );
-  const latestJob = state.serviceRequests[0];
-  const primaryAddress = getCustomerPrimaryAddressLabel(state.addresses);
+  const customerJobsForFilter =
+    jobsFilter === "open"
+      ? openJobs
+      : jobsFilter === "completed"
+        ? pastJobs
+        : state.serviceRequests;
+  const primaryAddressRecord = getCustomerPrimaryAddress(state.addresses);
+  const primaryAddressStreet = primaryAddressRecord
+    ? [primaryAddressRecord.street_address, primaryAddressRecord.unit]
+        .filter(Boolean)
+        .join(", ")
+    : "No customer primary address saved yet.";
+  const primaryAddressCityLine = primaryAddressRecord
+    ? [
+        primaryAddressRecord.city,
+        [primaryAddressRecord.state, primaryAddressRecord.zip_code]
+          .filter(Boolean)
+          .join(" "),
+        primaryAddressRecord.country,
+      ]
+        .filter(Boolean)
+        .join(", ")
+    : "";
+  const primaryAddressMapsUrl =
+    primaryAddressRecord && getAddressLabel(primaryAddressRecord) !== "No address saved"
+      ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+          getAddressLabel(primaryAddressRecord),
+        )}`
+      : null;
   const completedJobs = state.serviceRequests.filter((request) =>
     ["completed", "closed"].includes(request.status),
   );
@@ -1148,174 +1810,470 @@ export function DashboardCustomerDetail({ customerId }: { customerId: string }) 
   const averageTicket = completedJobs.length > 0 ? lifetimeRevenue / completedJobs.length : 0;
   const ownerCanViewMetrics = canViewOwnerMetrics(state.currentRole);
   const timeline = buildCustomerTimeline(state);
+  const recentActivity = [...timeline]
+    .sort((left, right) => Date.parse(right.at) - Date.parse(left.at))
+    .slice(0, 3);
+  const customerMetrics = [
+    { label: "Jobs", value: state.serviceRequests.length.toString() },
+    { label: "Assets", value: state.appliances.length.toString() },
+    { label: "Estimates", value: state.estimates.length.toString() },
+    { label: "Invoices", value: state.invoices.length.toString() },
+  ];
+  const selectedAsset =
+    selectedAssetId !== null
+      ? state.appliances.find((appliance) => appliance.id === selectedAssetId) ?? null
+      : null;
+  const customerPhoneHref = customer.phone ? `tel:${cleanPhone(customer.phone)}` : undefined;
+  const customerSmsHref = customer.phone ? `sms:${cleanPhone(customer.phone)}` : undefined;
+  const customerEmailHref = customer.email ? `mailto:${customer.email}` : undefined;
+  const shouldRenderLegacyDetails = false;
 
   return (
-    <div className="mx-auto grid max-w-7xl gap-5">
-      <header className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-[0_12px_32px_rgba(15,23,42,0.06)]">
-        <Link href="/dashboard/customers" className="text-sm font-bold text-[#0F6BFF]">
-          Back to customers
-        </Link>
-        <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_0.8fr] lg:items-end">
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-3xl font-black text-slate-950">{getCustomerName(customer)}</h1>
-              <StatusPill value={customer.customer_status} />
-            </div>
-            <p className="mt-2 text-sm text-slate-600">
-              {customer.phone || "No phone"} · {customer.email || "No email"}
-            </p>
-            <p className="mt-1 text-sm text-slate-500">{primaryAddress}</p>
+    <div className="mx-auto w-full max-w-[430px] bg-[#F8FAFC] px-3 pb-6 pt-3 sm:px-4 lg:max-w-3xl lg:rounded-[28px] lg:border lg:border-slate-200 lg:p-6 lg:shadow-[0_12px_32px_rgba(15,23,42,0.06)]">
+      <header className="rounded-[22px] bg-white px-3 pb-4 pt-3 shadow-[0_10px_30px_rgba(15,23,42,0.06)] ring-1 ring-slate-200/80">
+        <div className="flex items-center justify-between gap-3">
+          <Link
+            aria-label="Back to previous context"
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-slate-950 transition hover:bg-slate-100"
+            href={returnTo}
+          >
+            <CustomerOverviewIcon className="h-5 w-5" name="back" />
+          </Link>
+          <div className="flex items-center gap-2">
+            <button
+            className="flex h-9 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-sm font-black text-slate-700 transition hover:border-[#0F6BFF] hover:text-[#0F6BFF]"
+            onClick={() => {
+              setIsProfileEditorOpen(true);
+            }}
+            type="button"
+            >
+              <CustomerOverviewIcon className="h-3.5 w-3.5" name="edit" />
+              Edit
+            </button>
+            <button
+              aria-label="More customer actions"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 text-slate-500 transition hover:bg-slate-100"
+              type="button"
+            >
+              <CustomerOverviewIcon className="h-4 w-4" name="more" />
+            </button>
           </div>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-            <Metric label="Open jobs" value={openJobs.length.toString()} />
-            <Metric label="Assets" value={state.appliances.length.toString()} />
-            <Metric label="Last job" value={latestJob ? formatDate(latestJob.created_at) : "None"} />
-            <Metric label="Customer since" value={formatDate(customer.created_at)} />
-            {ownerCanViewMetrics ? (
-              <>
-                <Metric label="Lifetime revenue" value={formatShortMoney(lifetimeRevenue)} />
-                <Metric label="Outstanding" value={formatShortMoney(outstandingBalance)} />
-              </>
-            ) : null}
+        </div>
+
+        <div className="mt-4 flex items-center gap-3">
+          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-blue-100 text-xl font-black text-[#0F6BFF]">
+            {getCustomerInitials(customer)}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="min-w-0">
+              <h1 className="min-w-0 text-xl font-black leading-tight text-slate-950">
+                {getCustomerName(customer)}
+              </h1>
+              <div className="mt-1">
+              <StatusPill value={customer.customer_status} />
+              </div>
+            </div>
+            <p className="mt-2 flex items-center gap-2 truncate text-sm font-semibold text-slate-700">
+              <CustomerOverviewIcon className="h-3.5 w-3.5 shrink-0 text-slate-500" name="phone" />
+              <span className="truncate">{customer.phone || "No phone"}</span>
+            </p>
+            <p className="mt-1 flex items-center gap-2 truncate text-sm text-slate-500">
+              <CustomerOverviewIcon className="h-3.5 w-3.5 shrink-0 text-slate-500" name="mail" />
+              <span className="truncate">{customer.email || "No email"}</span>
+            </p>
           </div>
         </div>
       </header>
 
-      <section className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
-        <SectionCard title="Customer Summary" eyebrow="Operational context">
-          <CustomerSummary
-            customer={customer}
-            appliances={state.appliances}
-            serviceRequests={state.serviceRequests}
-            estimates={state.estimates}
-            conversations={state.conversations}
-            ownerCanViewMetrics={ownerCanViewMetrics}
-            lifetimeRevenue={lifetimeRevenue}
-            outstandingBalance={outstandingBalance}
-            averageTicket={averageTicket}
-            completedJobs={completedJobs.length}
-          />
-        </SectionCard>
-
-        <CollapsibleSection
-          title="Profile"
-          eyebrow="Contact"
-          expanded={expandedSections.profile}
-          onToggle={() => toggleSection("profile")}
-        >
-          <CustomerEditForm
-            actionState={profileAction}
-            form={profileForm}
-            onChange={setProfileForm}
-            onSubmit={() => void saveProfile()}
-            submitLabel="Save Customer"
-          />
-        </CollapsibleSection>
+      <section className="grid grid-cols-4 gap-2 px-2 py-3">
+        <CustomerQuickAction href={customerPhoneHref} label="Call" />
+        <CustomerQuickAction href={customerSmsHref} label="Text" />
+        <CustomerQuickAction href={customerEmailHref} label="Email" />
+        <CustomerQuickAction label="More" />
       </section>
 
-      <CollapsibleSection
-        title="Previous Service Addresses"
-        eyebrow="Job service locations"
-        expanded={expandedSections.serviceAddresses}
-        onToggle={() => toggleSection("serviceAddresses")}
-      >
-        <ServiceAddressList requests={state.serviceRequests} />
-      </CollapsibleSection>
+      <nav className="grid grid-cols-4 overflow-hidden rounded-xl border border-slate-200 bg-white p-1 text-center text-sm font-black text-slate-600">
+        {[
+          { id: "overview", label: "Overview" },
+          { id: "jobs", label: "Jobs" },
+          { id: "assets", label: "Assets" },
+          { id: "more", label: "More" },
+        ].map((tab) => (
+          <button
+            className={`rounded-lg py-2 transition ${
+              activeTab === tab.id
+                ? "bg-[#0F6BFF] text-white shadow-sm"
+                : "hover:bg-slate-50 hover:text-slate-950"
+            }`}
+            disabled={tab.id === "more"}
+            key={tab.id}
+            onClick={() => selectWorkspaceTab(tab.id as CustomerWorkspaceTab)}
+            type="button"
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
 
-      <SectionCard title="Open Jobs" eyebrow="Current work">
-        <JobList requests={openJobs} estimates={state.estimates} empty="No open jobs." />
-      </SectionCard>
-
-      <CollapsibleSection
-        title="Assets"
-        eyebrow="Appliances"
-        expanded={expandedSections.assets}
-        onToggle={() => toggleSection("assets")}
-      >
-        <ApplianceList
-          appliances={state.appliances}
-          requests={state.serviceRequests}
-          onEdit={(appliance) => setApplianceForm(buildApplianceForm(appliance))}
+      {activeTab === "jobs" ? (
+        <CustomerJobsWorkspace
+          customer={customer}
+          filter={jobsFilter}
+          onBack={() => selectWorkspaceTab("overview")}
+          onFilterChange={setJobsFilter}
+          onNewJob={() => {
+            router.push(`/dashboard/leads?newJob=1&customerId=${encodeURIComponent(customer.id)}`);
+          }}
+          openCount={openJobs.length}
+          requests={customerJobsForFilter}
+          totalCount={state.serviceRequests.length}
+          completedCount={pastJobs.length}
         />
-        <div className="mt-5 rounded-2xl border border-slate-200 bg-[#F7F9FC] p-4">
-          <h3 className="font-black text-slate-950">
-            {applianceForm.id ? "Edit appliance" : "Add appliance"}
-          </h3>
-          <ApplianceEditForm
+      ) : null}
+
+      {activeTab === "assets" ? (
+        selectedAsset ? (
+          <CustomerAssetDetailWorkspace
+            asset={selectedAsset}
+            coverUrl={
+              selectedAsset.cover_photo_id
+                ? state.assetCoverUrls[selectedAsset.cover_photo_id] ?? null
+                : null
+            }
+            customerId={customer.id}
+            onBack={closeAssetDetail}
+            onEdit={(asset) => {
+              setApplianceForm(buildApplianceForm(asset));
+              setApplianceAction({ status: "idle", message: null });
+              setIsAssetFormOpen(true);
+            }}
+            onSave={() => void saveAppliance()}
             actionState={applianceAction}
             form={applianceForm}
-            onCancel={() => setApplianceForm(emptyApplianceForm)}
-            onChange={setApplianceForm}
-            onSubmit={() => void saveAppliance()}
+            isEditing={isAssetFormOpen}
+            onCancelEdit={() => {
+              setApplianceForm(emptyApplianceForm);
+              setApplianceAction({ status: "idle", message: null });
+              setIsAssetFormOpen(false);
+            }}
+            onFormChange={setApplianceForm}
+            requests={state.serviceRequests}
           />
+        ) : (
+          <CustomerAssetsWorkspace
+            actionState={applianceAction}
+            appliances={state.appliances}
+            coverUrls={state.assetCoverUrls}
+            form={applianceForm}
+            isFormOpen={isAssetFormOpen}
+            onAdd={() => {
+              setApplianceForm(emptyApplianceForm);
+              setApplianceAction({ status: "idle", message: null });
+              setIsAssetFormOpen(true);
+            }}
+            onCancelForm={() => {
+              setApplianceForm(emptyApplianceForm);
+              setApplianceAction({ status: "idle", message: null });
+              setIsAssetFormOpen(false);
+            }}
+            onFormChange={setApplianceForm}
+            onOpenAsset={openAssetDetail}
+            onSave={() => void saveAppliance()}
+            requests={state.serviceRequests}
+          />
+        )
+      ) : null}
+
+      {activeTab === "overview" ? (
+      <main className="mt-3 grid gap-2.5">
+        <section className="grid grid-cols-4 overflow-hidden rounded-[18px] border border-slate-200 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.045)]">
+          {customerMetrics.map((metric, index) => (
+            <div
+              className={`px-2 py-2.5 text-center ${
+                index > 0 ? "border-l border-slate-100" : ""
+              }`}
+              key={metric.label}
+            >
+              <p className="text-lg font-black leading-none text-slate-950">
+                {metric.value}
+              </p>
+              <p className="mt-1 text-[0.68rem] font-bold leading-none text-slate-500">
+                {metric.label}
+              </p>
+            </div>
+          ))}
+        </section>
+
+        <section className="rounded-[18px] border border-slate-200 bg-white p-3 shadow-[0_8px_24px_rgba(15,23,42,0.045)]">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="flex items-center gap-2 text-sm font-black text-slate-950">
+                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-50 text-[#0F6BFF]">
+                  <CustomerOverviewIcon className="h-3.5 w-3.5" name="pin" />
+                </span>
+                Primary Address
+              </p>
+              <p className="mt-2 line-clamp-2 text-sm font-bold leading-5 text-slate-800">
+                {primaryAddressStreet}
+              </p>
+              {primaryAddressCityLine ? (
+                <p className="mt-0.5 truncate text-sm text-slate-500">
+                  {primaryAddressCityLine}
+                </p>
+              ) : null}
+            </div>
+            <button
+              aria-label="Edit primary address"
+              className="shrink-0 rounded-full px-2 py-1 text-sm font-black text-[#0F6BFF] transition hover:bg-blue-50"
+              onClick={() => {
+                setIsProfileEditorOpen(true);
+              }}
+              type="button"
+            >
+              Edit
+            </button>
+          </div>
+          {primaryAddressMapsUrl ? (
+            <a
+              className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-blue-50 px-3 py-2 text-xs font-black text-[#0F6BFF]"
+              href={primaryAddressMapsUrl}
+              rel="noreferrer"
+              target="_blank"
+            >
+              <CustomerOverviewIcon className="h-3.5 w-3.5" name="map" />
+              Open in Maps
+            </a>
+          ) : null}
+        </section>
+
+        <section className="rounded-[18px] border border-slate-200 bg-white p-3 shadow-[0_8px_24px_rgba(15,23,42,0.045)]">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="flex items-center gap-2 text-sm font-black text-slate-950">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-50 text-[#0F6BFF]">
+                <CustomerOverviewIcon className="h-3.5 w-3.5" name="status" />
+              </span>
+              Recent Activity
+            </h2>
+            <button
+              className="text-sm font-black text-[#0F6BFF]"
+              onClick={() => {
+                setIsProfileEditorOpen(false);
+                setExpandedSections((current) => ({ ...current, timeline: true }));
+              }}
+              type="button"
+            >
+              View all
+            </button>
+          </div>
+          {recentActivity.length > 0 ? (
+            <ol className="mt-2 divide-y divide-slate-100">
+              {recentActivity.map((item) => (
+                <li key={item.id}>
+                  {item.href ? (
+                    <Link
+                      className="block py-2 transition hover:text-[#0F6BFF]"
+                      href={item.href}
+                    >
+                      <CustomerActivityContent item={item} />
+                    </Link>
+                  ) : (
+                    <div className="py-2">
+                      <CustomerActivityContent item={item} />
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="mt-2 text-sm text-slate-500">No recent activity yet.</p>
+          )}
+        </section>
+
+        <section className="pt-1">
+          <Link
+            className="flex min-h-11 w-full items-center justify-center rounded-xl bg-[#0F6BFF] px-3 text-sm font-black text-white transition hover:bg-[#0057D9]"
+            href="/dashboard/leads"
+          >
+            + New Job
+          </Link>
+        </section>
+      </main>
+      ) : null}
+
+      {isProfileEditorOpen ? (
+        <div
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/45 px-3 pb-3 lg:items-center"
+          role="dialog"
+        >
+          <button
+            aria-label="Close customer editor"
+            className="absolute inset-0 cursor-default"
+            onClick={() => setIsProfileEditorOpen(false)}
+            type="button"
+          />
+          <div className="relative max-h-[88vh] w-full max-w-xl overflow-y-auto rounded-[22px] bg-white p-4 shadow-[0_24px_80px_rgba(15,23,42,0.22)]">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h2 className="text-lg font-black text-slate-950">Edit Customer</h2>
+              <button
+                aria-label="Close customer editor"
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-slate-500 transition hover:bg-slate-100"
+                onClick={() => setIsProfileEditorOpen(false)}
+                type="button"
+              >
+                <CustomerOverviewIcon className="h-4 w-4" name="close" />
+              </button>
+            </div>
+            <CustomerEditForm
+              actionState={profileAction}
+              form={profileForm}
+              onChange={setProfileForm}
+              onSubmit={() => void saveProfile()}
+              submitLabel="Save Customer"
+            />
+          </div>
         </div>
-      </CollapsibleSection>
+      ) : null}
 
-      <section className="grid gap-5 xl:grid-cols-[1fr_1fr]">
-        <CollapsibleSection
-          title="Estimates"
-          eyebrow="Quotes"
-          expanded={expandedSections.estimates}
-          onToggle={() => toggleSection("estimates")}
-        >
-          <EstimateList estimates={state.estimates} serviceRequests={state.serviceRequests} />
-        </CollapsibleSection>
+      {shouldRenderLegacyDetails ? (
+        <div className="mt-5 grid gap-5 border-t border-slate-200 pt-5">
+          <section className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
+            <SectionCard title="Customer Summary" eyebrow="Operational context">
+              <CustomerSummary
+                customer={customer}
+                appliances={state.appliances}
+                serviceRequests={state.serviceRequests}
+                estimates={state.estimates}
+                conversations={state.conversations}
+                ownerCanViewMetrics={ownerCanViewMetrics}
+                lifetimeRevenue={lifetimeRevenue}
+                outstandingBalance={outstandingBalance}
+                averageTicket={averageTicket}
+                completedJobs={completedJobs.length}
+              />
+            </SectionCard>
 
-        <CollapsibleSection
-          title="Invoices"
-          eyebrow="Billing"
-          expanded={expandedSections.invoices}
-          onToggle={() => toggleSection("invoices")}
-        >
-          <InvoiceList invoices={state.invoices} serviceRequests={state.serviceRequests} />
-        </CollapsibleSection>
-      </section>
+            <CollapsibleSection
+              title="Profile"
+              eyebrow="Contact"
+              expanded={expandedSections.profile}
+              onToggle={() => toggleSection("profile")}
+            >
+              <CustomerEditForm
+                actionState={profileAction}
+                form={profileForm}
+                onChange={setProfileForm}
+                onSubmit={() => void saveProfile()}
+                submitLabel="Save Customer"
+              />
+            </CollapsibleSection>
+          </section>
 
-      <section className="grid gap-5 xl:grid-cols-[1.05fr_0.95fr]">
-        <CollapsibleSection
-          title="Communication History"
-          eyebrow="Conversations"
-          expanded={expandedSections.communications}
-          onToggle={() => toggleSection("communications")}
-        >
-          <ConversationList conversations={state.conversations} />
-        </CollapsibleSection>
+          <CollapsibleSection
+            title="Previous Service Addresses"
+            eyebrow="Job service locations"
+            expanded={expandedSections.serviceAddresses}
+            onToggle={() => toggleSection("serviceAddresses")}
+          >
+            <ServiceAddressList requests={state.serviceRequests} />
+          </CollapsibleSection>
 
-        <CollapsibleSection
-          title="Internal Notes"
-          eyebrow="Team only"
-          expanded={expandedSections.notes}
-          onToggle={() => toggleSection("notes")}
-        >
-          <CustomerNotesPanel
-            actionState={noteAction}
-            customerNotes={state.customerNotes}
-            jobNotes={state.notes}
-            noteBody={noteBody}
-            onNoteBodyChange={setNoteBody}
-            onSubmit={() => void addCustomerNote()}
-            serviceRequests={state.serviceRequests}
-          />
-        </CollapsibleSection>
-      </section>
+          <SectionCard title="Open Jobs" eyebrow="Current work">
+            <JobList requests={openJobs} estimates={state.estimates} empty="No open jobs." />
+          </SectionCard>
 
-      <CollapsibleSection
-        title="Customer Timeline"
-        eyebrow="Chronological history"
-        expanded={expandedSections.timeline}
-        onToggle={() => toggleSection("timeline")}
-      >
-        <TimelineList items={timeline} />
-      </CollapsibleSection>
+          <CollapsibleSection
+            title="Assets"
+            eyebrow="Appliances"
+            expanded={expandedSections.assets}
+            onToggle={() => toggleSection("assets")}
+          >
+            <ApplianceList
+              appliances={state.appliances}
+              requests={state.serviceRequests}
+              onEdit={(appliance) => setApplianceForm(buildApplianceForm(appliance))}
+            />
+            <div className="mt-5 rounded-2xl border border-slate-200 bg-[#F7F9FC] p-4">
+              <h3 className="font-black text-slate-950">
+                {applianceForm.id ? "Edit appliance" : "Add appliance"}
+              </h3>
+              <ApplianceEditForm
+                actionState={applianceAction}
+                form={applianceForm}
+                onCancel={() => setApplianceForm(emptyApplianceForm)}
+                onChange={setApplianceForm}
+                onSubmit={() => void saveAppliance()}
+              />
+            </div>
+          </CollapsibleSection>
 
-      <CollapsibleSection
-        title="Repair History"
-        eyebrow="Past jobs"
-        expanded={expandedSections.repairHistory}
-        onToggle={() => toggleSection("repairHistory")}
-      >
-        <JobList requests={pastJobs} estimates={state.estimates} empty="No past jobs yet." />
-      </CollapsibleSection>
+          <section className="grid gap-5 xl:grid-cols-[1fr_1fr]">
+            <CollapsibleSection
+              title="Estimates"
+              eyebrow="Quotes"
+              expanded={expandedSections.estimates}
+              onToggle={() => toggleSection("estimates")}
+            >
+              <EstimateList estimates={state.estimates} serviceRequests={state.serviceRequests} />
+            </CollapsibleSection>
+
+            <CollapsibleSection
+              title="Invoices"
+              eyebrow="Billing"
+              expanded={expandedSections.invoices}
+              onToggle={() => toggleSection("invoices")}
+            >
+              <InvoiceList invoices={state.invoices} serviceRequests={state.serviceRequests} />
+            </CollapsibleSection>
+          </section>
+
+          <section className="grid gap-5 xl:grid-cols-[1.05fr_0.95fr]">
+            <CollapsibleSection
+              title="Communication History"
+              eyebrow="Conversations"
+              expanded={expandedSections.communications}
+              onToggle={() => toggleSection("communications")}
+            >
+              <ConversationList conversations={state.conversations} />
+            </CollapsibleSection>
+
+            <CollapsibleSection
+              title="Internal Notes"
+              eyebrow="Team only"
+              expanded={expandedSections.notes}
+              onToggle={() => toggleSection("notes")}
+            >
+              <CustomerNotesPanel
+                actionState={noteAction}
+                customerNotes={state.customerNotes}
+                jobNotes={state.notes}
+                noteBody={noteBody}
+                onNoteBodyChange={setNoteBody}
+                onSubmit={() => void addCustomerNote()}
+                serviceRequests={state.serviceRequests}
+              />
+            </CollapsibleSection>
+          </section>
+
+          <CollapsibleSection
+            title="Customer Timeline"
+            eyebrow="Chronological history"
+            expanded={expandedSections.timeline}
+            onToggle={() => toggleSection("timeline")}
+          >
+            <TimelineList items={timeline} />
+          </CollapsibleSection>
+
+          <CollapsibleSection
+            title="Repair History"
+            eyebrow="Past jobs"
+            expanded={expandedSections.repairHistory}
+            onToggle={() => toggleSection("repairHistory")}
+          >
+            <JobList requests={pastJobs} estimates={state.estimates} empty="No past jobs yet." />
+          </CollapsibleSection>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1743,6 +2701,146 @@ function CustomerSummary({
   );
 }
 
+function CustomerJobsWorkspace({
+  completedCount,
+  customer,
+  filter,
+  onBack,
+  onFilterChange,
+  onNewJob,
+  openCount,
+  requests,
+  totalCount,
+}: {
+  completedCount: number;
+  customer: CustomerRow;
+  filter: CustomerJobsFilter;
+  onBack: () => void;
+  onFilterChange: (filter: CustomerJobsFilter) => void;
+  onNewJob: () => void;
+  openCount: number;
+  requests: ServiceRequestRow[];
+  totalCount: number;
+}) {
+  const filters: { label: string; value: CustomerJobsFilter; count: number }[] = [
+    { label: "All", value: "all", count: totalCount },
+    { label: "Open", value: "open", count: openCount },
+    { label: "Completed", value: "completed", count: completedCount },
+  ];
+
+  return (
+    <main className="mt-3 grid gap-3">
+      <header className="flex items-center justify-between gap-3 rounded-[18px] bg-white px-3 py-3 shadow-[0_8px_24px_rgba(15,23,42,0.045)] ring-1 ring-slate-200/80">
+        <button
+          aria-label="Back to customer overview"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 text-slate-950 transition hover:bg-slate-100"
+          onClick={onBack}
+          type="button"
+        >
+          <CustomerOverviewIcon className="h-5 w-5" name="back" />
+        </button>
+        <h2 className="min-w-0 flex-1 truncate text-base font-black text-slate-950">
+          {getCustomerName(customer)}
+        </h2>
+        <button
+          className="flex h-9 shrink-0 items-center justify-center rounded-xl bg-[#0F6BFF] px-3 text-sm font-black text-white transition hover:bg-[#0057D9]"
+          onClick={onNewJob}
+          type="button"
+        >
+          + New Job
+        </button>
+      </header>
+
+      <div className="grid grid-cols-3 gap-1 rounded-xl border border-slate-200 bg-white p-1 text-center text-xs font-black text-slate-600">
+        {filters.map((option) => (
+          <button
+            className={`rounded-lg px-2 py-2 transition ${
+              filter === option.value
+                ? "bg-[#0F6BFF] text-white shadow-sm"
+                : "hover:bg-slate-50 hover:text-slate-950"
+            }`}
+            key={option.value}
+            onClick={() => onFilterChange(option.value)}
+            type="button"
+          >
+            {option.label} ({option.count})
+          </button>
+        ))}
+      </div>
+
+      {requests.length > 0 ? (
+        <div className="grid gap-2.5">
+          {requests.map((request) => (
+            <CustomerJobCard
+              customerId={customer.id}
+              key={request.id}
+              request={request}
+            />
+          ))}
+        </div>
+      ) : (
+        <EmptyMessage>
+          {filter === "completed"
+            ? "No completed jobs for this customer yet."
+            : filter === "open"
+              ? "No open jobs for this customer."
+              : "No jobs for this customer yet."}
+        </EmptyMessage>
+      )}
+    </main>
+  );
+}
+
+function CustomerJobCard({
+  customerId,
+  request,
+}: {
+  customerId: string;
+  request: ServiceRequestRow;
+}) {
+  return (
+    <Link
+      className="block rounded-[18px] border border-slate-200 bg-white p-3 shadow-[0_8px_24px_rgba(15,23,42,0.045)] transition hover:border-[#0F6BFF] hover:bg-blue-50"
+      href={getCustomerJobHref(customerId, request.id)}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-black text-[#0F6BFF]">
+            #{getShortJobNumber(request)}
+          </p>
+          <h3 className="mt-1 line-clamp-1 text-base font-black leading-tight text-slate-950">
+            {getCustomerJobTitle(request)}
+          </h3>
+          <p className="mt-1 line-clamp-1 text-sm font-semibold text-slate-500">
+            {request.issue_description || "No complaint entered"}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <StatusPill value={request.status} />
+          <CustomerOverviewIcon className="h-4 w-4 text-slate-400" name="chevron" />
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-1.5 text-xs font-bold leading-5 text-slate-600">
+        <p className="flex items-start gap-2">
+          <CustomerOverviewIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500" name="pin" />
+          <span className="line-clamp-2">{getJobAddress(request)}</span>
+        </p>
+        <p className="flex items-center gap-2">
+          <CustomerOverviewIcon className="h-3.5 w-3.5 shrink-0 text-slate-500" name="calendar" />
+          <span className="truncate">{getCustomerJobScheduleLabel(request)}</span>
+        </p>
+        <p className="flex items-center gap-2">
+          <CustomerOverviewIcon className="h-3.5 w-3.5 shrink-0 text-slate-500" name="user" />
+          <span className="truncate">
+            Technician: {request.selected_technician_business_name || "Unassigned"}
+          </span>
+        </p>
+      </div>
+    </Link>
+  );
+}
+
 function JobList({
   requests,
   estimates,
@@ -1795,6 +2893,292 @@ function JobList({
   );
 }
 
+function getAssetDisplayName(asset: CustomerApplianceRow): string {
+  return [asset.brand, asset.model_number].filter(Boolean).join(" ") ||
+    asset.brand ||
+    getAssetPlaceholderLabel(asset.appliance_type);
+}
+
+function getAssetStatusLabel(asset: CustomerApplianceRow): string {
+  return (asset.asset_status ?? "active").replaceAll("_", " ");
+}
+
+function getAssetServiceHistory(
+  asset: CustomerApplianceRow,
+  requests: ServiceRequestRow[],
+) {
+  return requests.filter((request) => request.customer_appliance_id === asset.id);
+}
+
+function CustomerAssetsWorkspace({
+  appliances,
+  requests,
+  coverUrls,
+  actionState,
+  form,
+  isFormOpen,
+  onAdd,
+  onCancelForm,
+  onFormChange,
+  onOpenAsset,
+  onSave,
+}: {
+  appliances: CustomerApplianceRow[];
+  requests: ServiceRequestRow[];
+  coverUrls: Record<string, string>;
+  actionState: ActionState;
+  form: ApplianceFormState;
+  isFormOpen: boolean;
+  onAdd: () => void;
+  onCancelForm: () => void;
+  onFormChange: (form: ApplianceFormState) => void;
+  onOpenAsset: (assetId: string) => void;
+  onSave: () => void;
+}) {
+  return (
+    <main className="mt-3 grid gap-3">
+      <section className="rounded-[18px] border border-slate-200 bg-white p-3 shadow-[0_8px_24px_rgba(15,23,42,0.045)]">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-base font-semibold text-slate-950">
+            Assets ({appliances.length})
+          </h2>
+          <button
+            className="rounded-full bg-[#0F6BFF] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[#0057D9]"
+            onClick={onAdd}
+            type="button"
+          >
+            + Add Asset
+          </button>
+        </div>
+
+        {isFormOpen ? (
+          <div className="mt-3 rounded-2xl border border-slate-200 bg-[#F8FAFC] p-3">
+            <p className="text-sm font-semibold text-slate-950">Add Asset</p>
+            <ApplianceEditForm
+              actionState={actionState}
+              form={form}
+              onCancel={onCancelForm}
+              onChange={onFormChange}
+              onSubmit={onSave}
+            />
+          </div>
+        ) : null}
+
+        {appliances.length === 0 && !isFormOpen ? (
+          <div className="mt-3 rounded-2xl border border-dashed border-slate-300 bg-[#F8FAFC] p-4 text-center">
+            <p className="text-sm font-semibold text-slate-950">No assets yet</p>
+            <p className="mt-1 text-sm leading-5 text-slate-500">
+              Assets can be added manually or identified automatically from
+              model/serial label photos in Jobs.
+            </p>
+            <button
+              className="mt-3 rounded-full bg-[#0F6BFF] px-4 py-2 text-sm font-semibold text-white"
+              onClick={onAdd}
+              type="button"
+            >
+              + Add Asset
+            </button>
+          </div>
+        ) : null}
+
+        {appliances.length > 0 ? (
+          <div className="mt-3 divide-y divide-slate-100">
+            {appliances.map((asset) => {
+              const history = getAssetServiceHistory(asset, requests);
+              const lastService = history[0]?.created_at ?? null;
+              const coverUrl = asset.cover_photo_id
+                ? coverUrls[asset.cover_photo_id] ?? null
+                : null;
+
+              return (
+                <button
+                  className="grid w-full grid-cols-[54px_minmax(0,1fr)_18px] gap-3 py-3 text-left transition hover:bg-slate-50"
+                  key={asset.id}
+                  onClick={() => onOpenAsset(asset.id)}
+                  type="button"
+                >
+                  <AssetImage
+                    applianceType={asset.appliance_type}
+                    className="h-12 w-12 rounded-xl"
+                    coverUrl={coverUrl}
+                  />
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-semibold text-slate-950">
+                      {getAssetDisplayName(asset)}
+                    </span>
+                    <span className="mt-0.5 block truncate text-xs font-medium text-slate-500">
+                      {getAssetPlaceholderLabel(asset.appliance_type)}
+                      {asset.location_label ? ` · ${asset.location_label}` : ""}
+                    </span>
+                    <span className="mt-1 block truncate text-xs text-slate-500">
+                      {asset.model_number ? `Model: ${asset.model_number}` : ""}
+                      {asset.model_number && asset.serial_number ? " · " : ""}
+                      {asset.serial_number ? `SN: ${asset.serial_number}` : ""}
+                    </span>
+                    <span className="mt-2 flex items-center gap-2 text-[11px] font-medium text-slate-500">
+                      <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700">
+                        {getAssetStatusLabel(asset)}
+                      </span>
+                      <span>
+                        {history.length} {history.length === 1 ? "Job" : "Jobs"}
+                      </span>
+                      {lastService ? <span>Last {formatDate(lastService)}</span> : null}
+                    </span>
+                  </span>
+                  <CustomerOverviewIcon className="mt-4 h-4 w-4 text-slate-400" name="chevron" />
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+      </section>
+    </main>
+  );
+}
+
+function CustomerAssetDetailWorkspace({
+  asset,
+  coverUrl,
+  customerId,
+  requests,
+  actionState,
+  form,
+  isEditing,
+  onBack,
+  onCancelEdit,
+  onEdit,
+  onFormChange,
+  onSave,
+}: {
+  asset: CustomerApplianceRow;
+  coverUrl: string | null;
+  customerId: string;
+  requests: ServiceRequestRow[];
+  actionState: ActionState;
+  form: ApplianceFormState;
+  isEditing: boolean;
+  onBack: () => void;
+  onCancelEdit: () => void;
+  onEdit: (asset: CustomerApplianceRow) => void;
+  onFormChange: (form: ApplianceFormState) => void;
+  onSave: () => void;
+}) {
+  const history = getAssetServiceHistory(asset, requests);
+  const returnTo = `/dashboard/customers/${customerId}?tab=assets&asset=${asset.id}`;
+
+  return (
+    <main className="mt-3 grid gap-3">
+      <section className="rounded-[18px] border border-slate-200 bg-white p-3 shadow-[0_8px_24px_rgba(15,23,42,0.045)]">
+        <div className="flex items-center justify-between gap-3">
+          <button
+            className="flex items-center gap-1 text-sm font-semibold text-[#0F6BFF]"
+            onClick={onBack}
+            type="button"
+          >
+            <CustomerOverviewIcon className="h-4 w-4" name="back" />
+            Assets
+          </button>
+          <button
+            className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700"
+            onClick={() => onEdit(asset)}
+            type="button"
+          >
+            Edit
+          </button>
+        </div>
+        <div className="mt-3 flex items-center gap-3">
+          <AssetImage
+            applianceType={asset.appliance_type}
+            className="h-16 w-16 shrink-0 rounded-2xl"
+            coverUrl={coverUrl}
+          />
+          <div className="min-w-0">
+            <h2 className="truncate text-lg font-semibold text-slate-950">
+              {getAssetDisplayName(asset)}
+            </h2>
+            <p className="mt-0.5 text-sm text-slate-500">
+              {getAssetPlaceholderLabel(asset.appliance_type)}
+            </p>
+            {asset.identity_review_status === "needs_review" ||
+            asset.identity_review_status === "unreviewed" ? (
+              <span className="mt-2 inline-flex rounded-full bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">
+                Needs review
+              </span>
+            ) : null}
+          </div>
+        </div>
+      </section>
+
+      {isEditing ? (
+        <section className="rounded-[18px] border border-slate-200 bg-white p-3">
+          <p className="text-sm font-semibold text-slate-950">Edit Asset</p>
+          <ApplianceEditForm
+            actionState={actionState}
+            form={form}
+            onCancel={onCancelEdit}
+            onChange={onFormChange}
+            onSubmit={onSave}
+          />
+        </section>
+      ) : null}
+
+      <section className="rounded-[18px] border border-slate-200 bg-white p-3">
+        <h3 className="text-sm font-semibold text-slate-950">Identity</h3>
+        <div className="mt-2 divide-y divide-slate-100 text-sm">
+          <ProfileRow label="Brand" value={asset.brand || "Not saved"} />
+          <ProfileRow label="Type" value={getAssetPlaceholderLabel(asset.appliance_type)} />
+          <ProfileRow label="Model" value={asset.model_number || "Not saved"} />
+          <ProfileRow label="Serial" value={asset.serial_number || "Not saved"} />
+          <ProfileRow label="Location" value={asset.location_label || "Not saved"} />
+          <ProfileRow label="Status" value={getAssetStatusLabel(asset)} />
+        </div>
+      </section>
+
+      <section className="rounded-[18px] border border-slate-200 bg-white p-3">
+        <h3 className="text-sm font-semibold text-slate-950">Photo</h3>
+        <AssetImage
+          applianceType={asset.appliance_type}
+          className="mt-3 aspect-[4/3] w-full rounded-2xl"
+          coverUrl={coverUrl}
+        />
+      </section>
+
+      <section className="rounded-[18px] border border-slate-200 bg-white p-3">
+        <h3 className="text-sm font-semibold text-slate-950">
+          Service History ({history.length})
+        </h3>
+        {history.length > 0 ? (
+          <div className="mt-2 divide-y divide-slate-100">
+            {history.map((request) => (
+              <Link
+                className="grid grid-cols-[minmax(0,1fr)_18px] gap-3 py-3 text-sm transition hover:text-[#0F6BFF]"
+                href={`/dashboard/leads/${request.id}?returnTo=${encodeURIComponent(returnTo)}`}
+                key={request.id}
+              >
+                <span className="min-w-0">
+                  <span className="block font-semibold text-slate-950">
+                    Job #{getShortJobNumber(request)}
+                  </span>
+                  <span className="mt-0.5 block truncate text-slate-500">
+                    {getCustomerJobTitle(request)}
+                    {request.issue_description ? ` · ${request.issue_description}` : ""}
+                  </span>
+                  <span className="mt-1 block text-xs text-slate-500">
+                    {formatDate(request.created_at)} · {request.status.replaceAll("_", " ")}
+                  </span>
+                </span>
+                <CustomerOverviewIcon className="mt-4 h-4 w-4 text-slate-400" name="chevron" />
+              </Link>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-2 text-sm text-slate-500">No linked jobs yet.</p>
+        )}
+      </section>
+    </main>
+  );
+}
+
 function ApplianceList({
   appliances,
   requests,
@@ -1822,13 +3206,19 @@ function ApplianceList({
           >
             <summary className="cursor-pointer list-none">
               <div className="flex items-start justify-between gap-3">
-                <div>
+                <div className="flex min-w-0 items-start gap-3">
+                  <AssetImage
+                    applianceType={appliance.appliance_type}
+                    className="h-12 w-12 shrink-0 rounded-xl"
+                  />
+                  <div className="min-w-0">
                   <p className="font-black text-slate-950">
                     {appliance.brand || "Brand not saved"} {appliance.appliance_type}
                   </p>
                   <p className="mt-1 text-sm text-slate-600">
                     {appliance.location_label || "Location not saved"}
                   </p>
+                  </div>
                 </div>
                 <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-slate-600">
                   Open details
@@ -1899,21 +3289,28 @@ function ApplianceEditForm({
   return (
     <div className="mt-3 grid gap-3">
       <div className="grid gap-3 md:grid-cols-2">
-        <TextInput label="Appliance type" value={form.applianceType} onChange={(value) => update("applianceType", value)} />
+        <label className="grid gap-2 text-sm font-medium text-slate-700">
+          Appliance type
+          <select
+            className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-medium text-slate-950 outline-none transition focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
+            onChange={(event) => update("applianceType", event.target.value)}
+            value={form.applianceType}
+          >
+            <option value="">Select type</option>
+            {WRA_ASSET_PLACEHOLDER_TYPES.filter(
+              (type) => type !== "unknown_appliance",
+            ).map((type) => (
+              <option key={type} value={type}>
+                {getAssetPlaceholderLabel(type)}
+              </option>
+            ))}
+          </select>
+        </label>
         <TextInput label="Brand" value={form.brand} onChange={(value) => update("brand", value)} />
         <TextInput label="Model" value={form.modelNumber} onChange={(value) => update("modelNumber", value)} />
         <TextInput label="Serial" value={form.serialNumber} onChange={(value) => update("serialNumber", value)} />
-        <TextInput label="Purchase year" maxLength={4} value={form.purchaseYear} onChange={(value) => update("purchaseYear", value.replace(/[^0-9]/g, "").slice(0, 4))} />
         <TextInput label="Location" value={form.locationLabel} onChange={(value) => update("locationLabel", value)} />
       </div>
-      <label className="grid gap-2 text-sm font-bold text-slate-700">
-        Notes
-        <textarea
-          className="min-h-24 rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-bold text-slate-950 outline-none transition focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
-          onChange={(event) => update("notes", event.target.value)}
-          value={form.notes}
-        />
-      </label>
       <ActionMessage actionState={actionState} />
       <div className="flex flex-col gap-2 sm:flex-row">
         <button

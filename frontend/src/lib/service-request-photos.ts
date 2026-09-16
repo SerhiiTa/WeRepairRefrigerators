@@ -22,7 +22,7 @@ export type CustomerPhotoUploadResult =
   | { ok: false; uploadedCount: number; message: string };
 
 export type TechnicianPhotoUploadResult =
-  | { ok: true }
+  | { ok: true; photoId: string | null }
   | { ok: false; message: string };
 
 type SafeIdCryptoSource = {
@@ -185,7 +185,7 @@ export async function uploadTechnicianServiceRequestPhoto({
     return { ok: false, message: formatPhotoUploadError(uploadError.message) };
   }
 
-  const { error: metadataError } = await supabase.rpc(
+  const { data: metadataResult, error: metadataError } = await supabase.rpc(
     "add_service_request_photo_rpc",
     {
       p_request_id: requestId,
@@ -199,7 +199,15 @@ export async function uploadTechnicianServiceRequestPhoto({
     return { ok: false, message: formatPhotoUploadError(metadataError.message) };
   }
 
-  return { ok: true };
+  const photoId =
+    metadataResult &&
+    typeof metadataResult === "object" &&
+    "id" in metadataResult &&
+    typeof metadataResult.id === "string"
+      ? metadataResult.id
+      : null;
+
+  return { ok: true, photoId };
 }
 
 function buildServiceRequestPhotoPath({

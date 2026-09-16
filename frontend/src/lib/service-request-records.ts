@@ -124,6 +124,17 @@ export type DashboardServiceRequestPhoto = {
   storagePath: string;
   originalFilename: string | null;
   photoType: DatabaseServiceRequestPhotoType;
+  assetProcessingStatus:
+    | "not_started"
+    | "pending"
+    | "processed"
+    | "needs_review"
+    | "no_asset"
+    | "failed";
+  assetProcessingResult: unknown;
+  assetProcessingError: string | null;
+  linkedCustomerApplianceId: string | null;
+  processedAt: string | null;
   createdAt: string;
   signedUrl: string | null;
 };
@@ -275,7 +286,9 @@ export function isServiceRequestCrmStatus(
 
 export type DashboardServiceRequest = {
   id: string;
+  companyId: string | null;
   customerId: string | null;
+  customerApplianceId: string | null;
   customerName: string;
   customerEmail: string | null;
   customerPhone: string | null;
@@ -314,7 +327,9 @@ export type DashboardServiceRequest = {
 
 export const SERVICE_REQUEST_SELECT_COLUMNS = [
   "id",
+  "company_id",
   "customer_id",
+  "customer_appliance_id",
   "customer_name",
   "customer_email",
   "customer_phone",
@@ -474,6 +489,11 @@ export const SERVICE_REQUEST_PHOTO_SELECT_COLUMNS = [
   "storage_path",
   "original_filename",
   "photo_type",
+  "asset_processing_status",
+  "asset_processing_result",
+  "asset_processing_error",
+  "linked_customer_appliance_id",
+  "processed_at",
   "created_at",
 ].join(",");
 
@@ -482,7 +502,9 @@ export function mapServiceRequestRow(
 ): DashboardServiceRequest {
   return {
     id: row.id,
+    companyId: row.company_id ?? null,
     customerId: row.customer_id ?? null,
+    customerApplianceId: row.customer_appliance_id ?? null,
     customerName: row.customer_name,
     customerEmail: row.customer_email,
     customerPhone: row.customer_phone,
@@ -587,6 +609,22 @@ export function mapServiceRequestPhotoRow(
     storagePath: row.storage_path,
     originalFilename: row.original_filename,
     photoType: row.photo_type,
+    assetProcessingStatus:
+      "asset_processing_status" in row
+        ? (row.asset_processing_status ?? "not_started")
+        : "not_started",
+    assetProcessingResult:
+      "asset_processing_result" in row ? row.asset_processing_result : {},
+    assetProcessingError:
+      "asset_processing_error" in row
+        ? (row.asset_processing_error ?? null)
+        : null,
+    linkedCustomerApplianceId:
+      "linked_customer_appliance_id" in row
+        ? (row.linked_customer_appliance_id ?? null)
+        : null,
+    processedAt:
+      "processed_at" in row ? (row.processed_at ?? null) : null,
     createdAt: row.created_at,
     signedUrl: null,
   };

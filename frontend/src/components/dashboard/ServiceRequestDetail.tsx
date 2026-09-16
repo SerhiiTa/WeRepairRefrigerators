@@ -14,6 +14,10 @@ import {
   type AddressSuggestion,
 } from "@/lib/address-autocomplete";
 import {
+  processServiceRequestPhotoForAssetIntelligence,
+  setServiceRequestPhotoAsAssetCover,
+} from "@/lib/asset-intelligence";
+import {
   formatServiceRequestMoney,
   formatServiceRequestDate,
   formatServiceRequestSource,
@@ -79,6 +83,7 @@ import { calculateRepairProposalTotals } from "@/server/finance/repair-proposal-
 
 type ServiceRequestDetailProps = {
   requestId: string;
+  returnTo?: string;
 };
 
 type DetailState =
@@ -91,6 +96,12 @@ type StatusUpdateState =
   | { status: "idle"; message: null }
   | { status: "saving"; message: null }
   | { status: "success"; message: string }
+  | { status: "error"; message: string };
+
+type JobDeleteState =
+  | { status: "idle"; message: null }
+  | { status: "confirming"; message: null }
+  | { status: "deleting"; message: null }
   | { status: "error"; message: string };
 
 type AddressSaveState =
@@ -459,6 +470,12 @@ type PhotoSaveState =
   | { status: "success"; message: string }
   | { status: "error"; message: string };
 
+type AssetAttachmentActionState =
+  | { status: "idle"; message: null }
+  | { status: "saving"; message: string | null }
+  | { status: "success"; message: string }
+  | { status: "error"; message: string };
+
 type EstimateSaveState =
   | { status: "idle"; message: null }
   | { status: "saving"; message: string | null }
@@ -669,6 +686,27 @@ const technicianPhotoTypes = [
   DatabaseServiceRequestPhotoType,
   "customer_upload"
 >[];
+
+function readAssetProcessingIdentityField(
+  result: unknown,
+  field: "brand" | "modelNumber" | "serialNumber",
+): string | null {
+  if (!result || typeof result !== "object" || !("identity" in result)) {
+    return null;
+  }
+
+  const identity = (result as { identity?: unknown }).identity;
+
+  if (!identity || typeof identity !== "object" || !(field in identity)) {
+    return null;
+  }
+
+  const value = (identity as Record<string, unknown>)[field];
+
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
+}
 
 const DASHBOARD_ACTION_SESSION_TIMEOUT_MS = 6000;
 
@@ -1295,24 +1333,6 @@ function stripUsCountry(value: string): string {
     .trim();
 }
 
-function buildClientAddressFromDraft(
-  draft: ClientDraftState,
-  country: string,
-): string | null {
-  const streetLine = [draft.streetAddress.trim(), draft.unit.trim()]
-    .filter(Boolean)
-    .join(", ");
-  const stateZip = [draft.state.trim(), draft.zipCode.trim()]
-    .filter(Boolean)
-    .join(" ");
-  const cityLine = [draft.city.trim(), stateZip].filter(Boolean).join(", ");
-  const address = [streetLine, cityLine, country && country !== "US" ? country : null]
-    .filter(Boolean)
-    .join(", ");
-
-  return address.trim() || null;
-}
-
 const fallbackJobTypes: JobDetailsCatalogItem[] = [
   { id: "fallback-refrigerator", name: "Refrigerator Repair", applianceCategory: "Refrigerator" },
   { id: "fallback-freezer", name: "Freezer Repair", applianceCategory: "Freezer" },
@@ -1535,7 +1555,10 @@ function AttachmentGalleryIcon() {
   );
 }
 
-export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
+export function ServiceRequestDetail({
+  requestId,
+  returnTo = "/dashboard/leads",
+}: ServiceRequestDetailProps) {
   const [state, setState] = useState<DetailState>({
     status: "loading",
     request: null,
@@ -1549,6 +1572,10 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     useState(false);
   const [statusUpdateState, setStatusUpdateState] =
     useState<StatusUpdateState>({ status: "idle", message: null });
+  const [jobDeleteState, setJobDeleteState] = useState<JobDeleteState>({
+    status: "idle",
+    message: null,
+  });
   const [isEditingAddress, setIsEditingAddress] = useState(false);
   const [addressForm, setAddressForm] = useState<AddressFormState>({
     streetAddress: "",
@@ -1738,6 +1765,11 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     status: "idle",
     message: null,
   });
+  const [assetAttachmentActionState, setAssetAttachmentActionState] =
+    useState<AssetAttachmentActionState>({
+      status: "idle",
+      message: null,
+    });
   const attachmentCameraInputRef = useRef<HTMLInputElement | null>(null);
   const attachmentGalleryInputRef = useRef<HTMLInputElement | null>(null);
   const [isAttachmentGalleryOpen, setIsAttachmentGalleryOpen] = useState(false);
@@ -1790,7 +1822,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
   const [editingEstimateId, setEditingEstimateId] = useState<string | null>(
     null,
   );
-  const [viewingEstimateId, setViewingEstimateId] = useState<string | null>(
+  const [, setViewingEstimateId] = useState<string | null>(
     null,
   );
   const [allowNewDraftWithActiveDraft, setAllowNewDraftWithActiveDraft] =
@@ -1844,6 +1876,99 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
   const readyRequestId = state.status === "ready" ? state.request.id : null;
   const propertyLookupAddress =
     state.status === "ready" ? getPropertyLookupAddress(state.request) : null;
+
+  function getFinanceWorkspaceUrl() {
+    return `/dashboard/leads/${requestId}?tab=finance`;
+  }
+
+  function getEstimateWorkspaceUrl(estimateId: string) {
+    return `${getFinanceWorkspaceUrl()}&estimateId=${encodeURIComponent(
+      estimateId,
+    )}`;
+  }
+
+  function syncEstimateWorkspaceHistory(
+    estimateId: string,
+    mode: "push" | "replace" | "none",
+  ) {
+    if (mode === "none" || typeof window === "undefined") {
+      return;
+    }
+
+    const nextUrl = getEstimateWorkspaceUrl(estimateId);
+    const statePayload = { wraEstimateWorkspace: true, estimateId };
+
+    if (mode === "replace") {
+      window.history.replaceState(statePayload, "", nextUrl);
+      return;
+    }
+
+    window.history.pushState(statePayload, "", nextUrl);
+  }
+
+  function closeEstimateWorkspaceToFinance() {
+    if (typeof window !== "undefined") {
+      window.history.replaceState(
+        { wraFinanceWorkspace: true },
+        "",
+        getFinanceWorkspaceUrl(),
+      );
+    }
+
+    setActiveJobTab("estimate");
+    setIsFinanceEstimatesOpen(true);
+    setManualEstimateId(null);
+    setFinanceEstimateMode("home");
+  }
+
+  useEffect(() => {
+    if (estimatesState.status !== "ready" || typeof window === "undefined") {
+      return;
+    }
+
+    function applyEstimateRouteState() {
+      const params = new URLSearchParams(window.location.search);
+      const estimateId = params.get("estimateId");
+      const tab = params.get("tab");
+
+      if (estimateId) {
+        const matchingEstimate = estimatesState.estimates.find(
+          (estimate) => estimate.id === estimateId,
+        );
+
+        if (!matchingEstimate) {
+          return;
+        }
+
+        setActiveJobTab("estimate");
+        setIsFinanceEstimatesOpen(true);
+        setManualEstimateId(matchingEstimate.id);
+        setFinanceEstimateMode("saved");
+        setIsFinanceEstimateWorkflowOpen(false);
+        setIsRepairProposalBuilderOpen(false);
+        setViewingInvoiceId(null);
+        return;
+      }
+
+      if (tab === "finance") {
+        setActiveJobTab("estimate");
+        setIsFinanceEstimatesOpen(true);
+        setManualEstimateId(null);
+        setFinanceEstimateMode("home");
+        return;
+      }
+
+      setManualEstimateId(null);
+      setFinanceEstimateMode("home");
+    }
+
+    applyEstimateRouteState();
+    window.addEventListener("popstate", applyEstimateRouteState);
+
+    return () => {
+      window.removeEventListener("popstate", applyEstimateRouteState);
+    };
+  }, [estimatesState.estimates, estimatesState.status]);
 
   const loadCustomerPrimaryAddress = useCallback(async (customerId: string | null) => {
     if (!customerId) {
@@ -2003,7 +2128,11 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
       const adapter = getAddressAutocompleteAdapter();
       const query = addressSearchQuery.trim();
 
-      if (!isEditingAddress || !adapter.isConfigured || query.length < 3) {
+      if (
+        (!isEditingAddress && !isEditingClient) ||
+        !adapter.isConfigured ||
+        query.length < 3
+      ) {
         setAddressSuggestions([]);
         setAddressSuggestionState({ status: "idle", message: null });
         return;
@@ -2051,7 +2180,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
       isActive = false;
       clearTimeout(timeoutId);
     };
-  }, [addressSearchQuery, isEditingAddress]);
+  }, [addressSearchQuery, isEditingAddress, isEditingClient]);
 
   useEffect(() => {
     let isActive = true;
@@ -2201,7 +2330,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     return () => {
       isActive = false;
     };
-  }, [readyRequestId]);
+  }, [readyRequestId, propertyLookupAddress]);
 
   useEffect(() => {
     let isActive = true;
@@ -2503,6 +2632,76 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     });
   }
 
+  async function deleteCurrentJob() {
+    if (jobDeleteState.status === "deleting") {
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setJobDeleteState({
+        status: "error",
+        message: "Job deletion is not available for this workspace.",
+      });
+      return;
+    }
+
+    const sessionResult = await getDashboardActionSession(supabase);
+
+    if (!sessionResult.ok) {
+      setJobDeleteState({
+        status: "error",
+        message: sessionResult.message,
+      });
+      return;
+    }
+
+    const { data: sessionData, error: sessionError } = sessionResult.response;
+    const accessToken = sessionData.session?.access_token;
+
+    if (sessionError || !accessToken) {
+      setJobDeleteState({
+        status: "error",
+        message: "Log in again before deleting this job.",
+      });
+      return;
+    }
+
+    setJobDeleteState({ status: "deleting", message: null });
+
+    let response: Response;
+    let payload: { ok?: boolean; message?: string } | null;
+
+    try {
+      response = await fetch(`/api/service-requests/${requestId}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+      payload = (await response.json().catch(() => null)) as typeof payload;
+    } catch {
+      setJobDeleteState({
+        status: "error",
+        message: "Job could not be deleted. Please try again.",
+      });
+      return;
+    }
+
+    if (!response.ok || !payload?.ok) {
+      setJobDeleteState({
+        status: "error",
+        message:
+          payload?.message ??
+          "This job can't be deleted because it already contains financial or customer history.",
+      });
+      return;
+    }
+
+    window.location.assign(returnTo);
+  }
+
   async function loadTechnicianProfilesForMatching() {
     const supabase = getSupabaseBrowserClient();
 
@@ -2749,6 +2948,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
       ...current,
       [key]: value,
       ...(key === "streetAddress" ||
+      key === "unit" ||
       key === "city" ||
       key === "state" ||
       key === "zipCode" ||
@@ -2875,9 +3075,9 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     });
   }
 
-  async function saveAddress() {
+  async function saveAddress(options?: { closeAddressEditor?: boolean }) {
     if (state.status !== "ready") {
-      return;
+      return false;
     }
 
     const supabase = getSupabaseBrowserClient();
@@ -2887,7 +3087,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
         status: "error",
         message: "Address updates are not available for this workspace.",
       });
-      return;
+      return false;
     }
 
     const { data: sessionData, error: sessionError } =
@@ -2899,7 +3099,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
         status: "error",
         message: "Log in again before updating the service address.",
       });
-      return;
+      return false;
     }
 
     setAddressSaveState({ status: "saving", message: null });
@@ -2941,7 +3141,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
           payload?.message ??
           "We could not update the service address yet.",
       });
-      return;
+      return false;
     }
 
     setState((current) => {
@@ -2974,7 +3174,10 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
       status: "success",
       message: "Service address updated.",
     });
-    setIsEditingAddress(false);
+    if (options?.closeAddressEditor !== false) {
+      setIsEditingAddress(false);
+    }
+    return true;
   }
 
   function handleTechnicianPhotoChange(files: File[]) {
@@ -3096,6 +3299,16 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
         });
         return;
       }
+
+      if (result.photoId) {
+        void processServiceRequestPhotoForAssetIntelligence({
+          photoId: result.photoId,
+          requestId: state.request.id,
+        }).then(() => {
+          void loadPhotos();
+          void refreshServiceRequest();
+        });
+      }
     } catch (error) {
       setPhotoFile(null);
       setPhotoFileError(null);
@@ -3151,6 +3364,68 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     setActiveAttachmentIndex(
       (activeAttachmentIndex + 1) % photosState.photos.length,
     );
+  }
+
+  async function handleSetActiveAttachmentAsAssetCover() {
+    if (!activeAttachment || assetAttachmentActionState.status === "saving") {
+      return;
+    }
+
+    setAssetAttachmentActionState({
+      status: "saving",
+      message: "Setting asset cover...",
+    });
+
+    const result = await setServiceRequestPhotoAsAssetCover({
+      photoId: activeAttachment.id,
+    });
+
+    if (!result.ok) {
+      setAssetAttachmentActionState({
+        status: "error",
+        message: result.message,
+      });
+      return;
+    }
+
+    setAssetAttachmentActionState({
+      status: "success",
+      message: "Asset cover updated.",
+    });
+    void loadPhotos();
+  }
+
+  async function handleRetryActiveAttachmentAssetIdentification() {
+    if (!activeAttachment || state.status !== "ready") {
+      return;
+    }
+
+    setAssetAttachmentActionState({
+      status: "saving",
+      message: "Retrying identification...",
+    });
+
+    const result = await processServiceRequestPhotoForAssetIntelligence({
+      photoId: activeAttachment.id,
+      requestId: state.request.id,
+      retry: true,
+    });
+
+    if (!result.ok) {
+      setAssetAttachmentActionState({
+        status: "error",
+        message: result.message,
+      });
+      void loadPhotos();
+      return;
+    }
+
+    setAssetAttachmentActionState({
+      status: "success",
+      message: "Asset identification updated.",
+    });
+    void loadPhotos();
+    void refreshServiceRequest();
   }
 
   function toggleCatalogItem(itemId: string) {
@@ -3923,7 +4198,32 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     });
   }
 
-  function openManualEstimateEditor() {
+  function openSavedManualEstimateEditor(
+    estimate: DashboardServiceRequestEstimate,
+    options: { history?: "push" | "replace" | "none" } = {},
+  ) {
+    setManualEstimateId(estimate.id);
+    setFinanceEstimateMode("saved");
+    setActiveJobTab("estimate");
+    setIsFinanceEstimatesOpen(true);
+    setIsFinanceEstimateWorkflowOpen(false);
+    setIsRepairProposalBuilderOpen(false);
+    setEstimateDraftAgentResult(null);
+    setEstimateRepairPlanSummary(null);
+    setEditingEstimateId(null);
+    setViewingEstimateId(null);
+    setViewingInvoiceId(null);
+    setCreatedEstimateSummary(null);
+    setEstimateApprovalLink(null);
+    setEstimateSaveState({ status: "idle", message: null });
+    syncEstimateWorkspaceHistory(estimate.id, options.history ?? "push");
+  }
+
+  function closeManualEstimateEditor() {
+    closeEstimateWorkspaceToFinance();
+  }
+
+  function openNewManualEstimateEditor() {
     setManualEstimateId(null);
     setFinanceEstimateMode("manual");
     setIsFinanceEstimateWorkflowOpen(false);
@@ -3936,28 +4236,6 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     setCreatedEstimateSummary(null);
     setEstimateApprovalLink(null);
     setEstimateSaveState({ status: "idle", message: null });
-  }
-
-  function openSavedManualEstimateEditor(
-    estimate: DashboardServiceRequestEstimate,
-  ) {
-    setManualEstimateId(estimate.id);
-    setFinanceEstimateMode("saved");
-    setIsFinanceEstimateWorkflowOpen(false);
-    setIsRepairProposalBuilderOpen(false);
-    setEstimateDraftAgentResult(null);
-    setEstimateRepairPlanSummary(null);
-    setEditingEstimateId(null);
-    setViewingEstimateId(null);
-    setViewingInvoiceId(null);
-    setCreatedEstimateSummary(null);
-    setEstimateApprovalLink(null);
-    setEstimateSaveState({ status: "idle", message: null });
-  }
-
-  function closeManualEstimateEditor() {
-    setManualEstimateId(null);
-    setFinanceEstimateMode("home");
   }
 
   async function createEstimate(options?: { sendAfterSave?: boolean }) {
@@ -4231,71 +4509,6 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     return savedEstimate;
   }
 
-  async function archiveEstimateDraft(estimate: DashboardServiceRequestEstimate) {
-    const supabase = getSupabaseBrowserClient();
-
-    if (!supabase) {
-      setEstimateSaveState({
-        status: "error",
-        message: "Estimates are not available for this workspace.",
-      });
-      return;
-    }
-
-    const { data: sessionData, error: sessionError } =
-      await supabase.auth.getSession();
-    const accessToken = sessionData.session?.access_token;
-
-    if (sessionError || !accessToken) {
-      setEstimateSaveState({
-        status: "error",
-        message: "Log in again before archiving an estimate.",
-      });
-      return;
-    }
-
-    setEstimateSaveState({ status: "saving", message: null });
-
-    const response = await fetch(
-      `/api/service-requests/${estimate.serviceRequestId}/estimates`,
-      {
-        method: "DELETE",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({ estimateId: estimate.id }),
-      },
-    );
-
-    const payload = (await response.json().catch(() => null)) as {
-      ok?: boolean;
-      message?: string;
-    } | null;
-
-    if (!response.ok || !payload?.ok) {
-      setEstimateSaveState({
-        status: "error",
-        message: payload?.message ?? "We could not archive this draft estimate yet.",
-      });
-      return;
-    }
-
-    if (editingEstimateId === estimate.id) {
-      resetEstimateBuilder();
-    }
-
-    setViewingEstimateId(estimate.id);
-    setViewingInvoiceId(null);
-    setEstimateSaveState({
-      status: "success",
-      message: `${estimate.estimateNumber} was archived and remains in estimate history.`,
-    });
-    setEstimateApprovalLink(null);
-    void loadEstimates();
-    void loadNotes();
-  }
-
   async function sendEstimateById(estimateId: string, estimateNumber: string) {
     if (process.env.NODE_ENV === "development") {
       console.debug("[Estimate Approval] Send To Customer clicked", {
@@ -4463,10 +4676,6 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     return true;
   }
 
-  async function sendEstimateToCustomer(estimate: DashboardServiceRequestEstimate) {
-    await sendEstimateById(estimate.id, estimate.estimateNumber);
-  }
-
   async function approveEstimateForCustomer(
     estimateId: string,
     estimateNumber: string,
@@ -4590,6 +4799,87 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     });
     void loadEstimates();
     void loadNotes();
+    return true;
+  }
+
+  async function deleteDraftEstimateById(
+    estimateId: string,
+    estimateNumber: string,
+  ) {
+    setEstimateSaveState({
+      status: "saving",
+      message: `Deleting ${estimateNumber}...`,
+    });
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setEstimateSaveState({
+        status: "error",
+        message: "Draft estimate deletion is not available for this workspace.",
+      });
+      return false;
+    }
+
+    const sessionResult = await getDashboardActionSession(supabase);
+
+    if (!sessionResult.ok) {
+      setEstimateSaveState({
+        status: "error",
+        message: sessionResult.message,
+      });
+      return false;
+    }
+
+    const { data: sessionData, error: sessionError } = sessionResult.response;
+    const accessToken = sessionData.session?.access_token;
+
+    if (sessionError || !accessToken) {
+      setEstimateSaveState({
+        status: "error",
+        message: "Log in again before deleting this estimate.",
+      });
+      return false;
+    }
+
+    let response: Response;
+    let payload: { ok?: boolean; message?: string } | null;
+
+    try {
+      response = await fetch(`/api/estimates/${estimateId}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+      payload = (await response.json().catch(() => null)) as typeof payload;
+    } catch {
+      setEstimateSaveState({
+        status: "error",
+        message: "Estimate could not be deleted. Please try again.",
+      });
+      return false;
+    }
+
+    if (!response.ok || !payload?.ok) {
+      setEstimateSaveState({
+        status: "error",
+        message: payload?.message ?? "Estimate could not be deleted.",
+      });
+      return false;
+    }
+
+    setManualEstimateId(null);
+    setFinanceEstimateMode("home");
+    setActiveJobTab("estimate");
+    setIsFinanceEstimatesOpen(true);
+    setViewingEstimateId(null);
+    setViewingInvoiceId(null);
+    setEstimateSaveState({
+      status: "success",
+      message: "Draft estimate deleted.",
+    });
+    await loadEstimates();
     return true;
   }
 
@@ -5029,18 +5319,24 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     }
 
     const { firstName, lastName } = splitClientName(state.request.customerName);
+    const requestAddressForm = buildAddressFormState(state.request);
 
     setClientDraft({
       firstName,
       lastName,
       phone: state.request.customerPhone ?? "",
       email: state.request.customerEmail ?? "",
-      streetAddress: state.request.streetAddress ?? "",
-      unit: state.request.unit ?? "",
-      city: state.request.city ?? "",
-      state: state.request.state ?? "TX",
-      zipCode: state.request.zipCode ?? "",
+      streetAddress: requestAddressForm.streetAddress,
+      unit: requestAddressForm.unit,
+      city: requestAddressForm.city,
+      state: requestAddressForm.state,
+      zipCode: requestAddressForm.zipCode,
     });
+    setAddressForm(requestAddressForm);
+    setAddressSearchQuery("");
+    setAddressSuggestions([]);
+    setAddressSuggestionState({ status: "idle", message: null });
+    setAddressSaveState({ status: "idle", message: null });
     setIsClosingClientEditor(false);
     setIsEditingClient(true);
     setIsClientEditorVisible(false);
@@ -5056,10 +5352,13 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
       setIsEditingClient(false);
       setIsClosingClientEditor(false);
       setIsClientEditorVisible(false);
+      setAddressSearchQuery("");
+      setAddressSuggestions([]);
+      setAddressSuggestionState({ status: "idle", message: null });
     }, 220);
   }
 
-  function saveClientDraft() {
+  async function saveClientDraft() {
     if (state.status !== "ready") {
       return;
     }
@@ -5068,10 +5367,6 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
       [clientDraft.firstName.trim(), clientDraft.lastName.trim()]
         .filter(Boolean)
         .join(" ") || state.request.customerName;
-    const nextFullAddress = buildClientAddressFromDraft(
-      clientDraft,
-      state.request.country,
-    );
 
     setState((current) => {
       if (current.status !== "ready") {
@@ -5085,30 +5380,15 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
           customerName: nextCustomerName,
           customerPhone: clientDraft.phone.trim() || null,
           customerEmail: clientDraft.email.trim() || null,
-          streetAddress: clientDraft.streetAddress.trim() || null,
-          unit: clientDraft.unit.trim() || null,
-          city: clientDraft.city.trim() || null,
-          state: clientDraft.state.trim() || current.request.state,
-          zipCode: clientDraft.zipCode.trim() || current.request.zipCode,
-          fullAddress: nextFullAddress,
-          latitude: null,
-          longitude: null,
-          placeId: null,
         },
       };
     });
-    setAddressForm((current) => ({
-      ...current,
-      streetAddress: clientDraft.streetAddress.trim(),
-      unit: clientDraft.unit.trim(),
-      city: clientDraft.city.trim(),
-      state: clientDraft.state.trim() || current.state,
-      zipCode: clientDraft.zipCode.trim(),
-      latitude: null,
-      longitude: null,
-      placeId: null,
-    }));
-    closeClientEditor();
+
+    const didSaveAddress = await saveAddress({ closeAddressEditor: false });
+
+    if (didSaveAddress) {
+      closeClientEditor();
+    }
   }
 
   function openAvatarFilePicker(capture: boolean) {
@@ -5934,7 +6214,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
         </p>
         <h1 className="mt-3 text-2xl font-bold text-[#0F172A]">Unable to load this job.</h1>
         <p className="mt-3 leading-7 text-amber-800">{state.error}</p>
-        <Link className="mt-5 inline-flex text-sm font-bold text-[#0F6BFF]" href="/dashboard/leads">
+        <Link className="mt-5 inline-flex text-sm font-bold text-[#0F6BFF]" href={returnTo}>
           Back to jobs
         </Link>
       </section>
@@ -5948,7 +6228,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
           Job detail
         </p>
         <h1 className="mt-3 text-2xl font-bold text-[#0F172A]">Job not found.</h1>
-        <Link className="mt-5 inline-flex text-sm font-bold text-[#0F6BFF]" href="/dashboard/leads">
+        <Link className="mt-5 inline-flex text-sm font-bold text-[#0F6BFF]" href={returnTo}>
           Back to jobs
         </Link>
       </section>
@@ -5984,9 +6264,6 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     ) ?? null;
   const editingEstimate =
     estimatesState.estimates.find((estimate) => estimate.id === editingEstimateId) ??
-    null;
-  const viewingEstimate =
-    estimatesState.estimates.find((estimate) => estimate.id === viewingEstimateId) ??
     null;
   const manualEstimate =
     manualEstimateId === null
@@ -6384,7 +6661,16 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
   const callCustomerHref = getPhoneHref(request.customerPhone, "tel");
   const textCustomerHref = getPhoneHref(request.customerPhone, "sms");
   const customerProfileHref = request.customerId
-    ? `/dashboard/customers/${request.customerId}`
+    ? `/dashboard/customers/${request.customerId}?returnTo=${encodeURIComponent(
+        `/dashboard/leads/${request.id}`,
+      )}`
+    : null;
+  const estimateCustomerProfileHref = request.customerId
+    ? `/dashboard/customers/${request.customerId}?returnTo=${encodeURIComponent(
+        manualEstimateId
+          ? getEstimateWorkspaceUrl(manualEstimateId)
+          : getFinanceWorkspaceUrl(),
+      )}`
     : null;
   const clientInitials = getClientInitials(request.customerName);
   const clientPhoneDisplay = formatClientPhoneDisplay(request.customerPhone);
@@ -6434,6 +6720,32 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     activeAttachmentIndex === null
       ? null
       : photosState.photos[activeAttachmentIndex] ?? null;
+  const activeAttachmentAssetBrand = readAssetProcessingIdentityField(
+    activeAttachment?.assetProcessingResult,
+    "brand",
+  );
+  const activeAttachmentAssetModel = readAssetProcessingIdentityField(
+    activeAttachment?.assetProcessingResult,
+    "modelNumber",
+  );
+  const activeAttachmentAssetSerial = readAssetProcessingIdentityField(
+    activeAttachment?.assetProcessingResult,
+    "serialNumber",
+  );
+  const activeAttachmentIdentifiedAssetId =
+    activeAttachment?.linkedCustomerApplianceId ??
+    (activeAttachment?.assetProcessingStatus === "processed"
+      ? request.customerApplianceId
+      : null);
+  const activeAttachmentIsIdentifiedLabel =
+    activeAttachment?.assetProcessingStatus === "processed" &&
+    Boolean(activeAttachmentIdentifiedAssetId);
+  const activeAttachmentAssetHref =
+    request.customerId && activeAttachmentIdentifiedAssetId
+      ? `/dashboard/customers/${request.customerId}?tab=assets&asset=${activeAttachmentIdentifiedAssetId}&returnTo=${encodeURIComponent(
+          `/dashboard/leads/${request.id}?tab=overview`,
+        )}`
+      : null;
   const jobDetailsSnapshot =
     jobDetailsState.details?.job ?? {
       jobTypeId: request.jobTypeId,
@@ -7104,211 +7416,59 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
     });
   }
 
-  function toggleEstimateView(estimateId: string, isExpanded: boolean) {
-    setViewingEstimateId(isExpanded ? null : estimateId);
-    setViewingInvoiceId(null);
-  }
-
   function toggleInvoiceView(invoiceId: string, isExpanded: boolean) {
     setViewingInvoiceId(isExpanded ? null : invoiceId);
     setViewingEstimateId(null);
   }
 
+  function openEstimateFromList(estimate: DashboardServiceRequestEstimate) {
+    openSavedManualEstimateEditor(estimate);
+  }
+
   function renderEstimateCard(estimate: DashboardServiceRequestEstimate) {
-    const isExpanded = viewingEstimate?.id === estimate.id;
     const linkedInvoice = invoicesByEstimateId.get(estimate.id) ?? null;
 
     return (
       <article
-        className={`rounded-md border p-4 transition ${
-          isExpanded
-            ? "border-[#0F6BFF] bg-blue-50"
-            : "border-[#E5E7EB] bg-[#F8FAFC]"
-        }`}
+        className="cursor-pointer border-b border-[#E5E7EB] bg-white px-0 py-2.5 transition last:border-b-0 hover:bg-blue-50/40 sm:py-3"
         key={estimate.id}
+        onClick={() => openEstimateFromList(estimate)}
       >
-        <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-start">
-          <div className="flex min-w-0 w-full flex-col">
-            {isExpanded ? (
-              <p className="mb-2 text-xs font-black uppercase tracking-[0.16em] text-[#0F6BFF]">
-                Viewing estimate
-              </p>
-            ) : null}
-            <p className="truncate text-sm font-bold text-[#0F172A]">
+        <div className="px-1.5 sm:px-2">
+          <div className="flex items-start justify-between gap-3">
+            <p className="min-w-0 truncate text-sm font-black leading-5 text-[#0F172A]">
               {estimate.estimateNumber}
             </p>
-            <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-black uppercase tracking-[0.12em]">
-              <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-[#0F6BFF]">
-                {formatServiceRequestSource(estimate.estimateStatus)}
-              </span>
-              <span className="rounded-full border border-[#E5E7EB] px-2 py-1 text-[#64748B]">
-                {estimate.items.length} line{estimate.items.length === 1 ? "" : "s"}
-              </span>
-            </div>
-            <p className="mt-2 text-xs font-semibold text-[#64748B]">
-              Created {formatServiceRequestDate(estimate.createdAt)}
-            </p>
-            {linkedInvoice ? (
-              <p className="mt-2 text-xs leading-5 text-emerald-700">
-                Source estimate for invoice {linkedInvoice.invoiceNumber}.
+            <div className="flex shrink-0 items-center gap-2">
+              <p className="whitespace-nowrap text-sm font-black text-[#0F6BFF] sm:text-base">
+                {formatServiceRequestMoney(estimate.total)}
               </p>
-            ) : null}
-          </div>
-
-          <div className="flex min-w-0 flex-col gap-3 sm:items-end">
-            <p className="text-2xl font-bold text-[#0F6BFF] sm:text-xl">
-              {formatServiceRequestMoney(estimate.total)}
-            </p>
-            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
-              <button
-                className="rounded-md border border-[#E5E7EB] px-3 py-2 text-xs font-bold text-[#334155] transition hover:border-[#0F6BFF] hover:text-[#0F6BFF]"
-                onClick={() => toggleEstimateView(estimate.id, isExpanded)}
-                type="button"
-              >
-                {isExpanded ? "Hide" : "View Estimate"}
-              </button>
-              {estimate.estimateStatus === "draft" ? (
-                <>
-                  <button
-                    className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-[#0F6BFF] transition hover:bg-[#0F6BFF]/20"
-                    disabled={estimateSaveState.status === "saving"}
-                    onClick={() => void sendEstimateToCustomer(estimate)}
-                    type="button"
-                  >
-                    {sendingEstimateId === estimate.id
-                      ? "Sending..."
-                      : "Send To Customer"}
-                  </button>
-                  <button
-                    className="rounded-md border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-xs font-bold text-emerald-700 transition hover:bg-emerald-300/20"
-                    onClick={() => openSavedManualEstimateEditor(estimate)}
-                    type="button"
-                  >
-                    Open Draft
-                  </button>
-                  <button
-                    className="rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs font-bold text-amber-800 transition hover:bg-amber-300/20"
-                    disabled={estimateSaveState.status === "saving"}
-                    onClick={() => void archiveEstimateDraft(estimate)}
-                    type="button"
-                  >
-                    Archive Draft
-                  </button>
-                </>
-              ) : null}
-              {estimate.estimateStatus === "approved" ? (
-                linkedInvoice ? (
-                  <button
-                    className="rounded-md border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-xs font-bold text-emerald-700 transition hover:bg-emerald-300/20"
-                    onClick={() => toggleInvoiceView(linkedInvoice.id, false)}
-                    type="button"
-                  >
-                    View Invoice
-                  </button>
-                ) : (
-                  <button
-                    className="rounded-md border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-xs font-bold text-emerald-700 transition hover:bg-emerald-300/20 disabled:cursor-not-allowed disabled:opacity-60"
-                    disabled={invoiceActionState.status === "saving"}
-                    onClick={() => void createInvoiceFromEstimate(estimate)}
-                    type="button"
-                  >
-                    {invoiceActionId === estimate.id
-                      ? "Creating Invoice..."
-                      : "Create Invoice"}
-                  </button>
-                )
-              ) : null}
+              <span className="text-lg font-semibold leading-none text-[#64748B]">
+                ›
+              </span>
             </div>
+          </div>
+          <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[0.68rem] font-bold text-[#64748B]">
+            <span className="rounded-full border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[0.65rem] font-black text-[#0F6BFF]">
+              {formatServiceRequestSource(estimate.estimateStatus)}
+            </span>
+            <span>
+              {estimate.items.length} line{estimate.items.length === 1 ? "" : "s"}
+            </span>
+            <span aria-hidden="true">·</span>
+            <span className="min-w-0 truncate">
+              {formatServiceRequestDate(estimate.createdAt)}
+            </span>
+            {linkedInvoice ? (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="min-w-0 truncate text-emerald-700">
+                  Invoice {linkedInvoice.invoiceNumber}
+                </span>
+              </>
+            ) : null}
           </div>
         </div>
-
-        {isExpanded ? (
-          <div className="mt-4">
-            {estimateApprovalLink?.estimateId === estimate.id ? (
-              <div className="mb-4 rounded-md border border-emerald-300/20 bg-emerald-300/10 p-3">
-                <p className="text-sm font-black text-emerald-700">
-                  Customer approval link ready
-                </p>
-                <p className="mt-1 break-all text-xs leading-5 text-emerald-700">
-                  {estimateApprovalLink.approvalUrl}
-                </p>
-                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                  <button
-                    className="rounded-md bg-emerald-300 px-3 py-2 text-xs font-black text-[#0F172A] transition hover:bg-emerald-200"
-                    onClick={() => {
-                      void navigator.clipboard?.writeText(
-                        estimateApprovalLink.approvalUrl,
-                      );
-                    }}
-                    type="button"
-                  >
-                    Copy Approval Link
-                  </button>
-                  <a
-                    className="rounded-md border border-emerald-200/30 px-3 py-2 text-xs font-black text-emerald-700 transition hover:bg-emerald-200/10"
-                    href={estimateApprovalLink.approvalUrl}
-                    rel="noreferrer"
-                    target="_blank"
-                  >
-                    Open Customer View
-                  </a>
-                </div>
-              </div>
-            ) : null}
-            <div className="divide-y divide-[#E5E7EB] overflow-hidden rounded-md border border-[#E5E7EB]">
-              {estimate.items.map((item) => (
-                <div
-                  className="flex flex-col gap-2 bg-[#F8FAFC] p-3 text-sm sm:flex-row sm:items-center sm:justify-between"
-                  key={item.id}
-                >
-                  <div>
-                    <p className="font-bold text-[#0F172A]">
-                      {item.quantity}x {item.customerName ?? item.itemTitle}
-                    </p>
-                    <p className="mt-1 text-xs font-semibold text-[#64748B]">
-                      {professionalEstimateLineTypeLabels[item.lineType]} · Internal:{" "}
-                      {item.internalName ?? item.itemTitle}
-                      {item.internalCost !== null
-                        ? ` · Cost ${formatServiceRequestMoney(
-                            item.internalCost,
-                          )}`
-                        : ""}
-                    </p>
-                    {item.publicDescription ? (
-                      <p className="mt-1 text-xs text-[#64748B]">
-                        {item.publicDescription}
-                      </p>
-                    ) : null}
-                    {item.notes ? (
-                      <p className="mt-1 text-xs text-[#64748B]">{item.notes}</p>
-                    ) : null}
-                  </div>
-                  <p className="font-black text-[#0F6BFF]">
-                    {formatServiceRequestMoney(item.lineTotal)}
-                  </p>
-                </div>
-              ))}
-            </div>
-            {(estimate.warrantyText || estimate.disclaimerText) ? (
-              <div className="mt-4 grid gap-3 text-xs leading-5 text-[#64748B] md:grid-cols-2">
-                {estimate.warrantyText ? (
-                  <p>
-                    <span className="font-black text-[#0F172A]">Warranty: </span>
-                    {estimate.warrantyText}
-                  </p>
-                ) : null}
-                {estimate.disclaimerText ? (
-                  <p>
-                    <span className="font-black text-[#0F172A]">
-                      Disclaimer:{" "}
-                    </span>
-                    {estimate.disclaimerText}
-                  </p>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
       </article>
     );
   }
@@ -7461,7 +7621,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
           <Link
             aria-label="Back to jobs"
             className="flex h-10 w-10 items-center justify-center rounded-full border border-[#E5E7EB] bg-[#F8FAFC] text-xl font-black text-[#0F172A] transition hover:border-[#0F6BFF] hover:text-[#0F6BFF]"
-            href="/dashboard/leads"
+            href={returnTo}
           >
             ←
           </Link>
@@ -7501,6 +7661,15 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
               >
                 Photos
               </button>
+              <button
+                className="block w-full rounded-[10px] px-3 py-2 text-left text-sm font-bold text-red-600 hover:bg-red-50"
+                onClick={() =>
+                  setJobDeleteState({ status: "confirming", message: null })
+                }
+                type="button"
+              >
+                Delete Job
+              </button>
             </div>
           </details>
         </div>
@@ -7534,7 +7703,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
         <div className="min-w-0">
           <Link
             className="mb-2 inline-flex text-xs font-black text-[#0F6BFF] transition hover:text-[#0057D9]"
-            href="/dashboard/leads"
+            href={returnTo}
           >
             Back to jobs
           </Link>
@@ -8376,16 +8545,50 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                   <span className="text-sm font-black text-[#0F172A]">
                     Service Address
                   </span>
-                  <input
-                    className="w-full rounded-[12px] border border-[#CBD5E1] bg-white px-3 py-2.5 text-base font-semibold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
-                    onChange={(event) =>
-                      setClientDraft((current) => ({
-                        ...current,
-                        streetAddress: event.target.value,
-                      }))
-                    }
-                    value={clientDraft.streetAddress}
-                  />
+                  <div className="relative">
+                    <input
+                      className="w-full rounded-[12px] border border-[#CBD5E1] bg-white px-3 py-2.5 text-base font-semibold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
+                      onChange={(event) => {
+                        const nextAddress = event.target.value;
+                        updateAddressField("streetAddress", nextAddress);
+                        setAddressSearchQuery(nextAddress);
+                      }}
+                      value={addressForm.streetAddress}
+                    />
+                    {addressAutocomplete.isConfigured &&
+                    (addressSuggestions.length > 0 ||
+                      addressSuggestionState.status !== "idle") ? (
+                      <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-20 overflow-hidden rounded-[12px] border border-[#D7DEEA] bg-white text-sm shadow-[0_18px_38px_rgba(15,23,42,0.14)]">
+                        {addressSuggestionState.status === "loading" ? (
+                          <p className="px-3 py-2 text-xs font-bold text-[#64748B]">
+                            Searching addresses...
+                          </p>
+                        ) : null}
+                        {addressSuggestionState.status === "error" ? (
+                          <p className="px-3 py-2 text-xs font-bold text-[#B42318]">
+                            {addressSuggestionState.message}
+                          </p>
+                        ) : null}
+                        {addressSuggestions.map((suggestion) => (
+                          <button
+                            className="block w-full px-3 py-2 text-left font-semibold text-[#0F172A] transition hover:bg-[#F1F5F9]"
+                            key={suggestion.placeId || suggestion.label}
+                            onClick={() =>
+                              void selectAddressSuggestion(suggestion)
+                            }
+                            type="button"
+                          >
+                            {suggestion.label}
+                          </button>
+                        ))}
+                        {addressSuggestionState.status === "empty" ? (
+                          <p className="px-3 py-2 text-xs font-bold text-[#64748B]">
+                            No matches found. Continue with manual entry.
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
                 </label>
                 <label className="grid gap-2">
                   <span className="text-sm font-black text-[#0F172A]">
@@ -8394,15 +8597,12 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                   <input
                     className="w-full rounded-[12px] border border-[#CBD5E1] bg-white px-3 py-2.5 text-base font-semibold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
                     onChange={(event) =>
-                      setClientDraft((current) => ({
-                        ...current,
-                        unit: event.target.value,
-                      }))
+                      updateAddressField("unit", event.target.value)
                     }
-                    value={clientDraft.unit}
+                    value={addressForm.unit}
                   />
                 </label>
-                <div className="grid grid-cols-[minmax(0,1fr)_72px_96px] gap-2">
+                <div className="grid grid-cols-[minmax(0,1fr)_72px] gap-2">
                   <label className="grid gap-2">
                     <span className="text-sm font-black text-[#0F172A]">
                       City
@@ -8410,12 +8610,9 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                     <input
                       className="w-full rounded-[12px] border border-[#CBD5E1] bg-white px-3 py-2.5 text-base font-semibold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
                       onChange={(event) =>
-                        setClientDraft((current) => ({
-                          ...current,
-                          city: event.target.value,
-                        }))
+                        updateAddressField("city", event.target.value)
                       }
-                      value={clientDraft.city}
+                      value={addressForm.city}
                     />
                   </label>
                   <label className="grid gap-2">
@@ -8425,14 +8622,16 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                     <input
                       className="w-full rounded-[12px] border border-[#CBD5E1] bg-white px-3 py-2.5 text-base font-semibold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
                       onChange={(event) =>
-                        setClientDraft((current) => ({
-                          ...current,
-                          state: event.target.value,
-                        }))
+                        updateAddressField(
+                          "state",
+                          event.target.value.toUpperCase(),
+                        )
                       }
-                      value={clientDraft.state}
+                      value={addressForm.state}
                     />
                   </label>
+                </div>
+                <div className="grid grid-cols-[minmax(0,1fr)_72px] gap-2">
                   <label className="grid gap-2">
                     <span className="text-sm font-black text-[#0F172A]">
                       ZIP
@@ -8441,16 +8640,39 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                       className="w-full rounded-[12px] border border-[#CBD5E1] bg-white px-3 py-2.5 text-base font-semibold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
                       inputMode="numeric"
                       onChange={(event) =>
-                        setClientDraft((current) => ({
-                          ...current,
-                          zipCode: event.target.value,
-                        }))
+                        updateAddressField("zipCode", event.target.value)
                       }
-                      value={clientDraft.zipCode}
+                      value={addressForm.zipCode}
+                    />
+                  </label>
+                  <label className="grid gap-2">
+                    <span className="text-sm font-black text-[#0F172A]">
+                      Country
+                    </span>
+                    <input
+                      className="w-full rounded-[12px] border border-[#CBD5E1] bg-white px-3 py-2.5 text-base font-semibold text-[#0F172A] outline-none transition focus:border-[#2563EB]"
+                      onChange={(event) =>
+                        updateAddressField(
+                          "country",
+                          event.target.value.toUpperCase(),
+                        )
+                      }
+                      value={addressForm.country}
                     />
                   </label>
                 </div>
               </div>
+              {addressSaveState.message ? (
+                <p
+                  className={`mt-3 text-xs font-bold ${
+                    addressSaveState.status === "error"
+                      ? "text-[#B42318]"
+                      : "text-[#047857]"
+                  }`}
+                >
+                  {addressSaveState.message}
+                </p>
+              ) : null}
               <div className="mt-4 grid grid-cols-2 gap-2">
                 <button
                   className="min-h-11 rounded-[12px] border border-[#CBD5E1] bg-white px-4 text-sm font-black text-[#334155]"
@@ -8462,13 +8684,14 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                 <button
                   className="min-h-11 rounded-[12px] bg-[#2563EB] px-4 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50"
                   disabled={
-                    !clientDraft.firstName.trim() &&
-                    !clientDraft.lastName.trim()
+                    addressSaveState.status === "saving" ||
+                    (!clientDraft.firstName.trim() &&
+                      !clientDraft.lastName.trim())
                   }
-                  onClick={saveClientDraft}
+                  onClick={() => void saveClientDraft()}
                   type="button"
                 >
-                  Save
+                  {addressSaveState.status === "saving" ? "Saving..." : "Save"}
                 </button>
               </div>
             </div>
@@ -10678,14 +10901,29 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
       {activeJobTab === "estimate" ? (
         financeEstimateMode === "manual" || financeEstimateMode === "saved" ? (
           <ManualEstimateEditor
+            activeEstimateId={manualEstimateId}
+            estimates={financeEstimates}
             initialEstimate={financeEstimateMode === "saved" ? manualEstimate : null}
+            isCreatingInvoice={invoiceActionState.status === "saving"}
+            key={`${financeEstimateMode}:${manualEstimateId ?? "new"}`}
+            customerHref={estimateCustomerProfileHref}
+            linkedInvoiceNumber={
+              manualEstimate ? invoicesByEstimateId.get(manualEstimate.id)?.invoiceNumber ?? null : null
+            }
             onClose={closeManualEstimateEditor}
+            onCreateInvoice={(estimate) => createInvoiceFromEstimate(estimate)}
             onSaved={loadEstimates}
+            onSwitchEstimate={(estimate) =>
+              openSavedManualEstimateEditor(estimate, { history: "replace" })
+            }
             onApproveForCustomer={(estimate) =>
               approveEstimateForCustomer(estimate.id, estimate.estimateNumber)
             }
             onSendEstimate={(estimate) =>
               sendEstimateById(estimate.id, estimate.estimateNumber)
+            }
+            onDeleteEstimate={(estimate) =>
+              deleteDraftEstimateById(estimate.id, estimate.estimateNumber)
             }
             request={state.request}
             sendingEstimateId={sendingEstimateId}
@@ -10745,108 +10983,14 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
           ))}
         </div>
 
-        <div className="mt-7 px-3 sm:px-7">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <span className="block text-lg font-black tracking-[-0.035em] text-[#0B1228] sm:text-xl">
-                Create Estimate
-              </span>
-              <span className="mt-0.5 block text-[0.8rem] font-semibold leading-5 text-[#657089] sm:text-sm">
-                Generate with AI.
-              </span>
-            </div>
-            <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[0.65rem] font-black text-[#0F6BFF] shadow-none ring-1 ring-[#DCE6FF]">
-              AI Powered
-            </span>
-          </div>
-
-          <label className="mt-5 block text-[0.8rem] font-black text-[#0B1228]" htmlFor="finance-confirmed-repair">
-            Repair description
-          </label>
-          <div className="relative mt-2">
-            <textarea
-              className="min-h-[76px] w-full resize-none rounded-[0.85rem] border border-[#DCE3EF] bg-white px-3.5 py-2.5 pr-14 text-sm font-semibold leading-6 text-[#0B1228] outline-none transition placeholder:text-[#657089] focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
-              disabled={estimateSaveState.status === "saving"}
-              id="finance-confirmed-repair"
-              onChange={(event) => {
-                setEstimateDiagnosisText(event.target.value);
-                setEstimateSaveState({ status: "idle", message: null });
-                setEstimateGenerationState({
-                  status: "idle",
-                  message: null,
-                  source: null,
-                });
-              }}
-              placeholder="Example: Replaced evaporator, filter drier, installed service valve, evacuated system, recharged refrigerant, leak tested, and verified performance."
-              value={estimateDiagnosisText}
-            />
-            <button
-              aria-label="Dictate confirmed repair"
-              className="absolute bottom-3 right-3 flex h-9 w-9 items-center justify-center rounded-full border border-[#DCE6FF] bg-white text-[#0B1228] shadow-[0_8px_20px_rgba(15,23,42,0.08)] transition hover:text-[#0F6BFF] disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={isDictatingRepairScope || estimateSaveState.status === "saving"}
-              onClick={startRepairScopeDictation}
-              type="button"
-            >
-              <FinanceHomeIcon className="h-5 w-5" name="mic" />
-            </button>
-          </div>
-
-          <button
-            className="mt-4 flex w-full items-center justify-center gap-2 rounded-[0.8rem] bg-[#0F5BFF] px-4 py-2.5 text-sm font-black text-white shadow-[0_10px_20px_rgba(15,91,255,0.16)] transition hover:-translate-y-0.5 hover:bg-[#0A4FE0] disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={
-              estimateSaveState.status === "saving" ||
-              estimateGenerationState.status === "generating" ||
-              estimateDiagnosisText.trim().length === 0
-            }
-            onClick={() => {
-              setFinanceEstimateMode("ai");
-              setIsFinanceEstimateWorkflowOpen(true);
-              void generateEstimateDraftFromDiagnosis();
-            }}
-            type="button"
-          >
-            <FinanceHomeIcon className="h-5 w-5" name="sparkle" />
-            {estimateGenerationState.status === "generating"
-              ? "Generating..."
-              : "Generate with AI"}
-          </button>
-
-          <div className="my-4 flex items-center gap-3 text-sm font-bold text-[#657089]">
-            <span className="h-px flex-1 bg-[#DCE6FF]" />
-            or
-            <span className="h-px flex-1 bg-[#DCE6FF]" />
-          </div>
-
-          <button
-            className="mx-auto block rounded-full px-3 py-1.5 text-sm font-black text-[#0F5BFF] transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={estimateSaveState.status === "saving"}
-            onClick={openManualEstimateEditor}
-            type="button"
-          >
-            Create manually
-          </button>
-
-          {estimateGenerationState.message ? (
-            <p className="mt-4 rounded-2xl bg-white/80 p-3 text-sm font-semibold leading-6 text-[#475569] ring-1 ring-[#DCE6FF]">
-              {estimateGenerationState.message}
-            </p>
-          ) : null}
-
-          <div className="mt-4 border-t border-[#DCE6FF] pt-3">
-            <p className="text-[0.8rem] font-semibold leading-5 text-[#657089]">
-              Uses job details and your Price Book.
-            </p>
-          </div>
-        </div>
-
-        <div className="mt-7 space-y-0 border-y border-[#E3E8F0]">
+        <div className="mt-5 space-y-0 border-y border-[#E3E8F0]">
           <div className="border-b border-[#E3E8F0] bg-transparent last:border-b-0">
-            <button
-              className="flex w-full items-center justify-between gap-3 py-4 text-left sm:py-4"
-              onClick={() => setIsFinanceEstimatesOpen((current) => !current)}
-              type="button"
-            >
-              <span className="flex min-w-0 items-center gap-3">
+            <div className="flex items-center justify-between gap-3 py-4 sm:py-4">
+              <button
+                className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                onClick={() => setIsFinanceEstimatesOpen((current) => !current)}
+                type="button"
+              >
                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[0.7rem] bg-blue-50 text-[#0F6BFF] sm:h-10 sm:w-10">
                   <FinanceHomeIcon className="h-5 w-5" name="estimates" />
                 </span>
@@ -10860,13 +11004,25 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                       : "No estimates yet"}
                   </span>
                 </span>
-              </span>
-              <span className="shrink-0 text-[#0B1A33]">
+              </button>
+              <button
+                className="shrink-0 rounded-full border border-[#D7E4FF] px-3 py-1.5 text-xs font-black text-[#0F6BFF] transition hover:bg-blue-50"
+                onClick={openNewManualEstimateEditor}
+                type="button"
+              >
+                {financeEstimates.length > 0 ? "New Estimate" : "Create Estimate"}
+              </button>
+              <button
+                aria-label={isFinanceEstimatesOpen ? "Collapse estimates" : "Expand estimates"}
+                className="shrink-0 text-[#0B1A33]"
+                onClick={() => setIsFinanceEstimatesOpen((current) => !current)}
+                type="button"
+              >
                 <FinanceChevron open={isFinanceEstimatesOpen} />
-              </span>
-            </button>
+              </button>
+            </div>
             {isFinanceEstimatesOpen ? (
-              <div className="space-y-3 border-t border-[#EEF2F7] p-4">
+              <div className="border-t border-[#EEF2F7] px-4 py-2">
                 {estimatesState.status === "loading" ? (
                   <p className="text-sm font-semibold text-[#64748B]">
                     Loading estimates...
@@ -13006,7 +13162,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
               </p>
             ) : null}
             {currentEstimates.length > 0 ? (
-              <div className="mt-3 space-y-3">
+              <div className="mt-3">
                 {currentEstimates.map(renderEstimateCard)}
               </div>
             ) : estimatesState.status === "ready" &&
@@ -13035,7 +13191,7 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                 No history.
               </p>
             ) : visibleEstimateHistory.length > 0 ? (
-              <div className="mt-3 space-y-3">
+              <div className="mt-3">
                 {visibleEstimateHistory.map(renderEstimateCard)}
               </div>
             ) : (
@@ -13447,6 +13603,85 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
                   <p className="mt-1 text-xs font-bold text-white/70">
                     {photoTypeLabels[activeAttachment.photoType]}
                   </p>
+                  <div className="mt-3 rounded-xl bg-white/10 p-3">
+                    <p className="text-xs font-black uppercase tracking-[0.12em] text-white/60">
+                      Asset Intelligence
+                    </p>
+                    <p className="mt-1 text-sm font-bold text-white">
+                      {activeAttachment.assetProcessingStatus === "processed"
+                        ? "Asset identified"
+                        : activeAttachment.assetProcessingStatus === "needs_review"
+                          ? "Possible asset needs review"
+                          : activeAttachment.assetProcessingStatus === "failed"
+                            ? "Asset processing failed"
+                            : activeAttachment.assetProcessingStatus === "pending"
+                              ? "Analyzing..."
+                            : activeAttachment.assetProcessingStatus === "no_asset"
+                              ? "No asset identified"
+                              : "Eligible for processing"}
+                    </p>
+                    {activeAttachmentAssetBrand ||
+                    activeAttachmentAssetModel ||
+                    activeAttachmentAssetSerial ? (
+                      <p className="mt-1 text-xs font-semibold leading-5 text-white/75">
+                        {[activeAttachmentAssetBrand, activeAttachmentAssetModel]
+                          .filter(Boolean)
+                          .join(" ")}
+                        {activeAttachmentAssetSerial
+                          ? ` · SN ${activeAttachmentAssetSerial}`
+                          : ""}
+                      </p>
+                    ) : null}
+                    {activeAttachment.assetProcessingError ? (
+                      <p className="mt-1 text-xs font-semibold text-amber-100">
+                        {activeAttachment.assetProcessingError}
+                      </p>
+                    ) : null}
+                    {activeAttachment.assetProcessingStatus === "failed" ? (
+                      <button
+                        className="mt-3 rounded-full bg-white/15 px-3 py-2 text-xs font-black text-white disabled:cursor-wait disabled:opacity-60"
+                        disabled={assetAttachmentActionState.status === "saving"}
+                        onClick={handleRetryActiveAttachmentAssetIdentification}
+                        type="button"
+                      >
+                        Retry identification
+                      </button>
+                    ) : null}
+                    {activeAttachmentAssetHref ? (
+                      <Link
+                        className="mt-3 inline-flex rounded-full bg-white px-3 py-2 text-xs font-black text-[#2563EB]"
+                        href={activeAttachmentAssetHref}
+                      >
+                        View Asset
+                      </Link>
+                    ) : null}
+                    {request.customerApplianceId ||
+                    activeAttachment.linkedCustomerApplianceId ? (
+                      !activeAttachmentIsIdentifiedLabel ? (
+                        <button
+                          className="mt-3 rounded-full bg-white px-3 py-2 text-xs font-black text-[#2563EB] disabled:cursor-wait disabled:opacity-60"
+                          disabled={assetAttachmentActionState.status === "saving"}
+                          onClick={handleSetActiveAttachmentAsAssetCover}
+                          type="button"
+                        >
+                          {assetAttachmentActionState.status === "saving"
+                            ? "Saving..."
+                            : "Set as Asset Cover"}
+                        </button>
+                      ) : null
+                    ) : null}
+                    {assetAttachmentActionState.message ? (
+                      <p
+                        className={`mt-2 text-xs font-bold ${
+                          assetAttachmentActionState.status === "error"
+                            ? "text-amber-100"
+                            : "text-white/80"
+                        }`}
+                      >
+                        {assetAttachmentActionState.message}
+                      </p>
+                    ) : null}
+                  </div>
                 </div>
               </div>
             </div>
@@ -13551,7 +13786,41 @@ export function ServiceRequestDetail({ requestId }: ServiceRequestDetailProps) {
         </div>
       ) : null}
 
-      <Link className="mt-6 inline-flex text-sm font-bold text-[#0F6BFF]" href="/dashboard/leads">
+      {jobDeleteState.status !== "idle" ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/55 px-3 py-4 backdrop-blur-sm sm:items-center">
+          <div className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl">
+            <h3 className="text-lg font-black text-[#0F172A]">Delete this job?</h3>
+            <p className="mt-2 text-sm font-semibold leading-6 text-[#475569]">
+              This job will be permanently deleted. This action cannot be undone.
+            </p>
+            {jobDeleteState.status === "error" ? (
+              <p className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-bold text-red-700">
+                {jobDeleteState.message}
+              </p>
+            ) : null}
+            <div className="mt-5 grid grid-cols-2 gap-2">
+              <button
+                className="rounded-xl border border-[#E5E7EB] px-4 py-3 text-sm font-black text-[#0F172A] disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={jobDeleteState.status === "deleting"}
+                onClick={() => setJobDeleteState({ status: "idle", message: null })}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded-xl bg-red-600 px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={jobDeleteState.status === "deleting"}
+                onClick={() => void deleteCurrentJob()}
+                type="button"
+              >
+                {jobDeleteState.status === "deleting" ? "Deleting..." : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <Link className="mt-6 inline-flex text-sm font-bold text-[#0F6BFF]" href={returnTo}>
         Back to jobs
       </Link>
     </article>

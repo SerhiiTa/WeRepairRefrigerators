@@ -1,9 +1,15 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { MouseEvent } from "react";
 
 import {
-  formatServiceRequestDate,
+  CustomerEstimatePreview,
+  type CustomerEstimatePreviewData,
+} from "@/components/public/CustomerEstimatePreview";
+import {
   formatServiceRequestMoney,
   formatServiceRequestSource,
   type DashboardServiceRequest,
@@ -38,11 +44,46 @@ type ManualEstimateMetadata = {
   estimatedCompletion: string;
 };
 
+type PriceBookItemType = "labor" | "part" | "service" | "fee" | "bundle";
+
+type PriceBookSearchItem = {
+  id: string;
+  item_type: PriceBookItemType;
+  name: string;
+  description: string | null;
+  appliance_type: string | null;
+  brand: string | null;
+  default_quantity: number;
+  labor_price: number;
+  part_price: number;
+  total_price: number;
+  taxable: boolean;
+  customer_description: string | null;
+  active: boolean;
+  review_status: string;
+  archived_at?: string | null;
+};
+
+type PriceBookAlias = {
+  price_book_item_id: string;
+  alias: string;
+  normalized_alias: string;
+};
+
+type PriceBookSearchState =
+  | { status: "idle"; message: null }
+  | { status: "loading"; message: null }
+  | { status: "ready"; message: null }
+  | { status: "error"; message: string };
+
 type ManualEstimateEditorProps = {
   request: DashboardServiceRequest;
   initialEstimate: DashboardServiceRequestEstimate | null;
+  estimates?: DashboardServiceRequestEstimate[];
+  activeEstimateId?: string | null;
   onClose: () => void;
   onSaved: () => Promise<void> | void;
+  onSwitchEstimate?: (estimate: DashboardServiceRequestEstimate) => void;
   onApproveForCustomer: (estimate: {
     id: string;
     estimateNumber: string;
@@ -51,6 +92,14 @@ type ManualEstimateEditorProps = {
     id: string;
     estimateNumber: string;
   }) => Promise<boolean> | boolean;
+  onDeleteEstimate?: (estimate: {
+    id: string;
+    estimateNumber: string;
+  }) => Promise<boolean> | boolean;
+  onCreateInvoice?: (estimate: DashboardServiceRequestEstimate) => Promise<void> | void;
+  customerHref?: string | null;
+  linkedInvoiceNumber?: string | null;
+  isCreatingInvoice?: boolean;
   sendingEstimateId: string | null;
 };
 
@@ -58,6 +107,16 @@ type SaveState =
   | { status: "idle"; message: null }
   | { status: "saving"; message: null }
   | { status: "success"; message: string }
+  | { status: "error"; message: string };
+
+type SaveResult = {
+  id: string;
+  estimateNumber: string;
+} | null;
+
+type DeleteState =
+  | { status: "idle"; message: null }
+  | { status: "deleting"; message: null }
   | { status: "error"; message: string };
 
 type ItemDraftState = {
@@ -149,12 +208,99 @@ function EstimateIcon({
   );
 }
 
+function EstimateCustomerCardContent({
+  address,
+  customerInitials,
+  customerName,
+  customerPhone,
+}: {
+  address: string;
+  customerInitials: string;
+  customerName: string;
+  customerPhone: string | null;
+}) {
+  return (
+    <>
+      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-blue-50 text-sm font-black text-[#0F6BFF]">
+        {customerInitials}
+      </div>
+      <div className="min-w-0 flex-1">
+        <h3 className="text-base font-black leading-5 tracking-[-0.02em] text-[#0F172A]">
+          {customerName}
+        </h3>
+        {customerPhone ? (
+          <p className="mt-1 text-sm font-semibold leading-5 text-[#475569]">
+            {customerPhone}
+          </p>
+        ) : null}
+        {address ? (
+          <p className="mt-0.5 text-sm font-semibold leading-5 text-[#475569]">
+            {address}
+          </p>
+        ) : null}
+      </div>
+      <span className="self-center text-xl text-[#64748B]">›</span>
+    </>
+  );
+}
+
 function buildLineId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return `manual-line-${crypto.randomUUID()}`;
   }
 
   return `manual-line-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function formatCompactJobNumber(requestId: string) {
+  return `Job #${requestId.slice(0, 8).toUpperCase()}`;
+}
+
+function mapPriceBookTypeToLineType(
+  itemType: PriceBookItemType,
+): ManualEstimateLineType {
+  if (itemType === "labor" || itemType === "part" || itemType === "service" || itemType === "fee") {
+    return itemType;
+  }
+
+  return "service";
+}
+
+function getPriceBookSellPrice(item: PriceBookSearchItem) {
+  const totalPrice = Number(item.total_price);
+
+  if (Number.isFinite(totalPrice) && totalPrice > 0) {
+    return totalPrice;
+  }
+
+  const laborPrice = Number(item.labor_price);
+  const partPrice = Number(item.part_price);
+  const fallbackPrice = (Number.isFinite(laborPrice) ? laborPrice : 0) +
+    (Number.isFinite(partPrice) ? partPrice : 0);
+
+  return Math.max(0, fallbackPrice);
+}
+
+function normalizePriceBookSearchText(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function createLineFromPriceBookItem(item: PriceBookSearchItem): ManualEstimateLine {
+  return {
+    id: buildLineId(),
+    type: mapPriceBookTypeToLineType(item.item_type),
+    name: item.name,
+    description: item.customer_description ?? item.description ?? "",
+    quantity: Number(item.default_quantity) > 0 ? Number(item.default_quantity) : 1,
+    customerUnitPrice: getPriceBookSellPrice(item),
+    internalUnitCost: 0,
+    taxable: item.taxable,
+    customerVisible: true,
+    warrantyIncluded: false,
+    partNumber: "",
+    vendor: "",
+    internalNote: "",
+  };
 }
 
 function createBlankLine(type: ManualEstimateLineType = "part"): ManualEstimateLine {
@@ -333,6 +479,32 @@ function safeNumber(value: number) {
   return Number.isFinite(value) ? value : 0;
 }
 
+function formatMoneyInputValue(value: number) {
+  return safeNumber(value).toFixed(2);
+}
+
+function sanitizeMoneyInputValue(value: string) {
+  const normalized = value.replace(",", ".").replace(/[^\d.]/g, "");
+  const [integer = "", ...decimalParts] = normalized.split(".");
+  const decimal = decimalParts.join("").slice(0, 2);
+
+  if (!normalized.includes(".")) {
+    return integer;
+  }
+
+  return `${integer}.${decimal}`;
+}
+
+function parseMoneyInputValue(value: string) {
+  if (value.trim() === "" || value === ".") {
+    return 0;
+  }
+
+  const parsed = Number(value);
+
+  return Number.isFinite(parsed) ? Math.round(parsed * 100) / 100 : 0;
+}
+
 function limitMetadataText(value: string, maxLength: number) {
   return value.trim().slice(0, maxLength);
 }
@@ -363,15 +535,43 @@ function getInitialMetadata(
   };
 }
 
+function getInitialEstimateLines(
+  estimate: DashboardServiceRequestEstimate | null,
+) {
+  return (
+    estimate?.items
+      .filter((item) => item.lineType !== "warranty")
+      .map(estimateLineToManualLine) ?? []
+  );
+}
+
+function getInitialWarrantyText(
+  estimate: DashboardServiceRequestEstimate | null,
+) {
+  return (
+    estimate?.warrantyText ??
+    "90 days labor and installed parts unless otherwise specified."
+  );
+}
+
 export function ManualEstimateEditor({
   request,
   initialEstimate,
+  estimates = [],
+  activeEstimateId,
   onClose,
   onSaved,
+  onSwitchEstimate,
   onApproveForCustomer,
   onSendEstimate,
+  onDeleteEstimate,
+  onCreateInvoice,
+  customerHref,
+  linkedInvoiceNumber,
+  isCreatingInvoice = false,
   sendingEstimateId,
 }: ManualEstimateEditorProps) {
+  const router = useRouter();
   const initialMetadata = useMemo(
     () => getInitialMetadata(request, initialEstimate),
     [initialEstimate, request],
@@ -393,14 +593,10 @@ export function ManualEstimateEditor({
     initialMetadata.estimatedCompletion,
   );
   const [warrantyText, setWarrantyText] = useState(
-    initialEstimate?.warrantyText ??
-      "90 days labor and installed parts unless otherwise specified.",
+    getInitialWarrantyText(initialEstimate),
   );
   const [lines, setLines] = useState<ManualEstimateLine[]>(
-    () =>
-      initialEstimate?.items
-        .filter((item) => item.lineType !== "warranty")
-        .map(estimateLineToManualLine) ?? [],
+    () => getInitialEstimateLines(initialEstimate),
   );
   const [discountType, setDiscountType] = useState<"flat" | "percent">(
     initialEstimate?.discountType ?? "flat",
@@ -422,6 +618,158 @@ export function ManualEstimateEditor({
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isEstimateMenuOpen, setIsEstimateMenuOpen] = useState(false);
   const [isApproveConfirmOpen, setIsApproveConfirmOpen] = useState(false);
+  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
+  const [deleteState, setDeleteState] = useState<DeleteState>({
+    status: "idle",
+    message: null,
+  });
+  const activeSavePromiseRef = useRef<Promise<SaveResult> | null>(null);
+  const lastSavedSignatureRef = useRef("");
+  const savedFeedbackTimerRef = useRef<number | null>(null);
+  const [priceBookItems, setPriceBookItems] = useState<PriceBookSearchItem[]>([]);
+  const [priceBookAliases, setPriceBookAliases] = useState<PriceBookAlias[]>([]);
+  const [priceBookSearch, setPriceBookSearch] = useState("");
+  const [priceBookState, setPriceBookState] = useState<PriceBookSearchState>({
+    status: "idle",
+    message: null,
+  });
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadPriceBook() {
+      const supabase = getSupabaseBrowserClient();
+
+      if (!supabase) {
+        if (isMounted) {
+          setPriceBookState({
+            status: "error",
+            message: "Price Book is not available for this workspace.",
+          });
+        }
+        return;
+      }
+
+      const { data: sessionData, error: sessionError } =
+        await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+
+      if (sessionError || !accessToken) {
+        if (isMounted) {
+          setPriceBookState({
+            status: "error",
+            message: "Log in again to search Price Book.",
+          });
+        }
+        return;
+      }
+
+      if (isMounted) {
+        setPriceBookState({ status: "loading", message: null });
+      }
+
+      try {
+        const response = await fetch("/api/settings/price-book", {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        });
+        const payload = (await response.json().catch(() => null)) as {
+          ok?: boolean;
+          message?: string;
+          items?: PriceBookSearchItem[];
+          aliases?: PriceBookAlias[];
+        } | null;
+
+        if (!response.ok || !payload?.ok) {
+          throw new Error(payload?.message ?? "Price Book could not be loaded.");
+        }
+
+        if (isMounted) {
+          setPriceBookItems(Array.isArray(payload.items) ? payload.items : []);
+          setPriceBookAliases(Array.isArray(payload.aliases) ? payload.aliases : []);
+          setPriceBookState({ status: "ready", message: null });
+        }
+      } catch (error) {
+        if (isMounted) {
+          setPriceBookState({
+            status: "error",
+            message:
+              error instanceof Error
+                ? error.message
+                : "Price Book could not be loaded.",
+          });
+        }
+      }
+    }
+
+    void loadPriceBook();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const aliasesByItemId = useMemo(() => {
+    const map = new Map<string, string[]>();
+
+    for (const alias of priceBookAliases) {
+      map.set(alias.price_book_item_id, [
+        ...(map.get(alias.price_book_item_id) ?? []),
+        alias.alias,
+        alias.normalized_alias,
+      ]);
+    }
+
+    return map;
+  }, [priceBookAliases]);
+  const priceBookMatches = useMemo(() => {
+    const query = normalizePriceBookSearchText(priceBookSearch);
+
+    if (query.length < 2) {
+      return [];
+    }
+
+    return priceBookItems
+      .filter((item) =>
+        item.active &&
+        item.archived_at == null &&
+        ["approved", "pending"].includes(item.review_status),
+      )
+      .map((item) => {
+        const aliases = aliasesByItemId.get(item.id) ?? [];
+        const searchText = normalizePriceBookSearchText(
+          [
+            item.name,
+            item.customer_description,
+            item.description,
+            item.appliance_type,
+            item.brand,
+            item.item_type,
+            ...aliases,
+          ]
+            .filter(Boolean)
+            .join(" "),
+        );
+        const normalizedName = normalizePriceBookSearchText(item.name);
+        const startsWithName = normalizedName.startsWith(query);
+        const includesQuery = searchText.includes(query);
+
+        if (!startsWithName && !includesQuery) {
+          return null;
+        }
+
+        return { item, score: startsWithName ? 2 : 1 };
+      })
+      .filter((match): match is { item: PriceBookSearchItem; score: number } =>
+        Boolean(match),
+      )
+      .sort((left, right) =>
+        right.score - left.score || left.item.name.localeCompare(right.item.name),
+      )
+      .slice(0, 6)
+      .map((match) => match.item);
+  }, [aliasesByItemId, priceBookItems, priceBookSearch]);
 
   const customerVisibleLines = lines.filter((line) => line.customerVisible);
   const totals = calculateRepairProposalTotals({
@@ -478,22 +826,60 @@ export function ManualEstimateEditor({
     !hasCustomerLinkage ? "Link a customer before sending." : null,
     !savedEstimateId ? "Save the draft before sending." : null,
   ].filter((error): error is string => Boolean(error));
-  const canSend =
-    sendErrors.length === 0 &&
+  const sendReadinessErrors = [
+    ...saveErrors,
+    customerVisibleLines.length === 0
+      ? "Add at least one customer-facing item."
+      : null,
+    customerVisibleLines.some((line) => line.customerUnitPrice <= 0)
+      ? "Customer-facing items need prices before sending."
+      : null,
+    totals.total <= 0 ? "Estimate total must be greater than zero." : null,
+    !hasCustomerLinkage ? "Link a customer before sending." : null,
+  ].filter((error): error is string => Boolean(error));
+  const canAttemptSend =
+    sendReadinessErrors.length === 0 &&
     saveState.status !== "saving" &&
     sendingEstimateId === null &&
-    savedEstimateId !== null &&
     !["declined", "void"].includes(estimateStatus);
   const canApproveForCustomer =
     savedEstimateId !== null &&
     saveState.status !== "saving" &&
     !["approved", "declined", "void"].includes(estimateStatus);
-  const estimateTitle =
-    repairSolution.trim() ||
-    lines.find((line) => line.name.trim())?.name.trim() ||
-    "New Estimate";
+  const canDeleteEstimate =
+    savedEstimateId !== null &&
+    estimateStatus === "draft" &&
+    deleteState.status !== "deleting" &&
+    Boolean(onDeleteEstimate);
   const createdDate = initialEstimate?.createdAt ?? new Date().toISOString();
   const address = getRequestAddress(request);
+  const customerPreviewData: CustomerEstimatePreviewData = {
+    companyName:
+      request.selectedTechnicianBusinessName ?? "WeRepairRefrigerators",
+    estimateNumber: savedEstimateNumber ?? "Draft estimate",
+    estimateStatus,
+    customerName: request.customerName || "Customer",
+    serviceAddress: address,
+    estimateDate: createdDate,
+    whatWeFound,
+    repairSolution,
+    items: customerVisibleLines.map((line) => ({
+      id: line.id,
+      title: line.name || "Estimate item",
+      description: line.description || null,
+      quantity: line.quantity,
+      unitPrice: line.customerUnitPrice,
+      lineTotal: getLineTotal(line),
+    })),
+    subtotal: totals.subtotal,
+    discountAmount: totals.discountAmount,
+    tax: totals.tax,
+    taxRate: totals.taxRate,
+    total: totals.total,
+    warrantyText: warrantyText.trim() || null,
+    estimatedCompletion: estimatedCompletion.trim() || null,
+    customerNotes: null,
+  };
   const customerInitials = (request.customerName || "Customer")
     .split(/\s+/)
     .filter(Boolean)
@@ -502,6 +888,48 @@ export function ManualEstimateEditor({
     .join("") || "C";
   const statusLabel =
     estimateStatus === "unsaved" ? "Not saved" : formatServiceRequestSource(estimateStatus);
+  const activeSwitcherEstimateId = activeEstimateId ?? savedEstimateId;
+  const canCreateInvoice =
+    initialEstimate?.estimateStatus === "approved" &&
+    !linkedInvoiceNumber &&
+    Boolean(onCreateInvoice);
+  const editableSignature = useMemo(
+    () =>
+      JSON.stringify({
+      whatWeFound,
+      repairSolution,
+      estimatedCompletion,
+      warrantyText,
+      lines,
+      discountType,
+      discountValue,
+      taxRate,
+      }),
+    [
+    discountType,
+    discountValue,
+    estimatedCompletion,
+    lines,
+    repairSolution,
+    taxRate,
+    warrantyText,
+    whatWeFound,
+    ],
+  );
+
+  const [lastSavedSignature, setLastSavedSignature] = useState(editableSignature);
+
+  const hasUnsavedChanges = editableSignature !== lastSavedSignature;
+  const saveFeedbackLabel =
+    saveState.status === "saving"
+      ? "Saving..."
+      : saveState.status === "success"
+        ? "Saved"
+        : null;
+
+  useEffect(() => {
+    lastSavedSignatureRef.current = lastSavedSignature;
+  }, [lastSavedSignature]);
 
   function resetFeedback() {
     if (saveState.status !== "idle") {
@@ -515,6 +943,13 @@ export function ManualEstimateEditor({
       lineId: null,
       line: createBlankLine(type),
     });
+  }
+
+  function addPriceBookItem(item: PriceBookSearchItem) {
+    setLines((current) => [...current, createLineFromPriceBookItem(item)]);
+    setPriceBookSearch("");
+    setValidationAttempted(false);
+    resetFeedback();
   }
 
   function openEditItem(line: ManualEstimateLine) {
@@ -659,10 +1094,37 @@ export function ManualEstimateEditor({
     };
   }
 
-  async function saveDraft() {
-    setValidationAttempted(true);
+  async function saveDraft(
+    options: { source?: "autosave" | "navigation" | "manual" } = {},
+  ): Promise<SaveResult> {
+    const source = options.source ?? "manual";
+
+    if (activeSavePromiseRef.current) {
+      const activePromise = activeSavePromiseRef.current;
+      const activeResult = await activePromise;
+
+      if (activeSavePromiseRef.current === activePromise) {
+        activeSavePromiseRef.current = null;
+      }
+
+      if (editableSignature === lastSavedSignatureRef.current) {
+        return activeResult;
+      }
+
+      return saveDraft(options);
+    }
+
+    const signatureAtSaveStart = editableSignature;
+
+    if (source !== "autosave") {
+      setValidationAttempted(true);
+    }
 
     if (saveErrors.length > 0) {
+      if (source === "autosave") {
+        return null;
+      }
+
       setSaveState({ status: "error", message: saveErrors[0] });
       return null;
     }
@@ -689,79 +1151,197 @@ export function ManualEstimateEditor({
       return null;
     }
 
-    setSaveState({ status: "saving", message: null });
-    setPendingAction("save");
+    const savePromise = (async () => {
+      setSaveState({ status: "saving", message: null });
+      setPendingAction(source === "manual" ? "save" : null);
 
-    let response: Response;
+      let response: Response;
 
-    try {
-      response = await fetch(
-        `/api/service-requests/${request.id}/estimates`,
-        {
-          method: savedEstimateId ? "PATCH" : "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${accessToken}`,
+      try {
+        response = await fetch(
+          `/api/service-requests/${request.id}/estimates`,
+          {
+            method: savedEstimateId ? "PATCH" : "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${accessToken}`,
+            },
+            body: JSON.stringify(buildPayload()),
           },
-          body: JSON.stringify(buildPayload()),
-        },
-      );
-    } catch {
+        );
+      } catch {
+        setPendingAction(null);
+        setSaveState({
+          status: "error",
+          message: "Estimate could not be fully saved. Please try again.",
+        });
+        return null;
+      }
+      const payload = (await response.json().catch(() => null)) as {
+        ok?: boolean;
+        message?: string;
+        estimate?: {
+          id?: string;
+          estimate_number?: string | null;
+          total?: number | string | null;
+        };
+      } | null;
+
+      if (!response.ok || !payload?.ok) {
+        setPendingAction(null);
+        setSaveState({
+          status: "error",
+          message: payload?.message ?? "We could not save this estimate yet.",
+        });
+        return null;
+      }
+
+      const nextEstimateId =
+        payload.estimate?.id && typeof payload.estimate.id === "string"
+          ? payload.estimate.id
+          : savedEstimateId;
+      const nextEstimateNumber =
+        payload.estimate?.estimate_number ?? savedEstimateNumber ?? "Estimate";
+
+      lastSavedSignatureRef.current = signatureAtSaveStart;
+      setLastSavedSignature(signatureAtSaveStart);
+      setSavedEstimateId(nextEstimateId);
+      setSavedEstimateNumber(nextEstimateNumber);
+      setEstimateStatus("draft");
       setPendingAction(null);
       setSaveState({
-        status: "error",
-        message: "Estimate could not be fully saved. Please try again.",
+        status: "success",
+        message: "Saved",
       });
-      return null;
-    }
-    const payload = (await response.json().catch(() => null)) as {
-      ok?: boolean;
-      message?: string;
-      estimate?: {
-        id?: string;
-        estimate_number?: string | null;
-        total?: number | string | null;
-      };
-    } | null;
+      await onSaved();
 
-    if (!response.ok || !payload?.ok) {
-      setPendingAction(null);
-      setSaveState({
-        status: "error",
-        message: payload?.message ?? "We could not save this estimate yet.",
-      });
-      return null;
+      return nextEstimateId
+        ? { id: nextEstimateId, estimateNumber: nextEstimateNumber }
+        : null;
+    })();
+
+    activeSavePromiseRef.current = savePromise;
+    const result = await savePromise;
+
+    if (activeSavePromiseRef.current === savePromise) {
+      activeSavePromiseRef.current = null;
     }
 
-    const nextEstimateId =
-      payload.estimate?.id && typeof payload.estimate.id === "string"
-        ? payload.estimate.id
-        : savedEstimateId;
-    const nextEstimateNumber =
-      payload.estimate?.estimate_number ?? savedEstimateNumber ?? "Estimate";
-
-    setSavedEstimateId(nextEstimateId);
-    setSavedEstimateNumber(nextEstimateNumber);
-    setEstimateStatus("draft");
-    setPendingAction(null);
-    setSaveState({
-      status: "success",
-      message: `${nextEstimateNumber} saved as draft.`,
-    });
-    await onSaved();
-
-    return nextEstimateId
-      ? { id: nextEstimateId, estimateNumber: nextEstimateNumber }
-      : null;
+    return result;
   }
+
+  async function flushPendingChangesBeforeNavigation() {
+    if (activeSavePromiseRef.current) {
+      const activePromise = activeSavePromiseRef.current;
+      await activePromise;
+
+      if (activeSavePromiseRef.current === activePromise) {
+        activeSavePromiseRef.current = null;
+      }
+    }
+
+    if (editableSignature === lastSavedSignatureRef.current) {
+      return true;
+    }
+
+    const result = await saveDraft({ source: "navigation" });
+
+    return Boolean(result);
+  }
+
+  async function closeAfterSave() {
+    const canNavigate = await flushPendingChangesBeforeNavigation();
+
+    if (canNavigate) {
+      onClose();
+    }
+  }
+
+  async function switchEstimateAfterSave(estimate: DashboardServiceRequestEstimate) {
+    const canNavigate = await flushPendingChangesBeforeNavigation();
+
+    if (canNavigate) {
+      onSwitchEstimate?.(estimate);
+    }
+  }
+
+  async function openCustomerAfterSave(
+    event: MouseEvent<HTMLAnchorElement>,
+    href: string,
+  ) {
+    event.preventDefault();
+    const canNavigate = await flushPendingChangesBeforeNavigation();
+
+    if (canNavigate) {
+      router.push(href);
+    }
+  }
+
+  useEffect(() => {
+    if (!hasUnsavedChanges || saveErrors.length > 0 || saveState.status === "saving") {
+      return;
+    }
+
+    const autosaveTimer = window.setTimeout(() => {
+      void saveDraft({ source: "autosave" });
+    }, 750);
+
+    return () => window.clearTimeout(autosaveTimer);
+    // saveDraft intentionally reads the latest render snapshot; editableSignature is the debounce key.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editableSignature, hasUnsavedChanges, saveErrors.length, saveState.status]);
+
+  useEffect(() => {
+    if (savedFeedbackTimerRef.current) {
+      window.clearTimeout(savedFeedbackTimerRef.current);
+      savedFeedbackTimerRef.current = null;
+    }
+
+    if (saveState.status !== "success") {
+      return;
+    }
+
+    savedFeedbackTimerRef.current = window.setTimeout(() => {
+      setSaveState((current) =>
+        current.status === "success" ? { status: "idle", message: null } : current,
+      );
+    }, 1400);
+
+    return () => {
+      if (savedFeedbackTimerRef.current) {
+        window.clearTimeout(savedFeedbackTimerRef.current);
+        savedFeedbackTimerRef.current = null;
+      }
+    };
+  }, [saveState.status]);
 
   async function sendToClient() {
     setValidationAttempted(true);
 
-    if (!canSend || !savedEstimateId) {
+    const savedEstimate =
+      savedEstimateId && !hasUnsavedChanges
+        ? {
+            id: savedEstimateId,
+            estimateNumber: savedEstimateNumber ?? "Estimate",
+          }
+        : await saveDraft({ source: "navigation" });
+    const sendValidationErrors = [
+      ...saveErrors,
+      customerVisibleLines.length === 0
+        ? "Add at least one customer-facing item."
+        : null,
+      customerVisibleLines.some((line) => line.customerUnitPrice <= 0)
+        ? "Customer-facing items need prices before sending."
+        : null,
+      totals.total <= 0 ? "Estimate total must be greater than zero." : null,
+      !hasCustomerLinkage ? "Link a customer before sending." : null,
+      !savedEstimate ? "Save a valid estimate before sending." : null,
+    ].filter((error): error is string => Boolean(error));
+
+    if (!savedEstimate || sendValidationErrors.length > 0 || sendingEstimateId !== null) {
       setSaveState({
         status: "error",
-        message: sendErrors[0] ?? "Save a valid estimate before sending.",
+        message: sendValidationErrors[0] ?? "Estimate is already being sent.",
       });
       return;
     }
@@ -771,8 +1351,8 @@ export function ManualEstimateEditor({
 
     try {
       const sent = await onSendEstimate({
-        id: savedEstimateId,
-        estimateNumber: savedEstimateNumber ?? "Estimate",
+        id: savedEstimate.id,
+        estimateNumber: savedEstimate.estimateNumber,
       });
       if (!sent) {
         setPendingAction(null);
@@ -798,7 +1378,15 @@ export function ManualEstimateEditor({
   }
 
   async function approveForCustomer() {
-    if (!savedEstimateId || !canApproveForCustomer) {
+    const savedEstimate =
+      savedEstimateId && !hasUnsavedChanges
+        ? {
+            id: savedEstimateId,
+            estimateNumber: savedEstimateNumber ?? "Estimate",
+          }
+        : await saveDraft({ source: "navigation" });
+
+    if (!savedEstimate || !canApproveForCustomer) {
       setSaveState({
         status: "error",
         message: "Save this estimate before recording approval.",
@@ -813,8 +1401,8 @@ export function ManualEstimateEditor({
 
     try {
       const approved = await onApproveForCustomer({
-        id: savedEstimateId,
-        estimateNumber: savedEstimateNumber ?? "Estimate",
+        id: savedEstimate.id,
+        estimateNumber: savedEstimate.estimateNumber,
       });
 
       if (!approved) {
@@ -842,14 +1430,45 @@ export function ManualEstimateEditor({
     }
   }
 
+  async function deleteEstimate() {
+    if (!savedEstimateId || !canDeleteEstimate) {
+      return;
+    }
+
+    setDeleteState({ status: "deleting", message: null });
+
+    try {
+      const deleted = await onDeleteEstimate?.({
+        id: savedEstimateId,
+        estimateNumber: savedEstimateNumber ?? "Estimate",
+      });
+
+      if (!deleted) {
+        setDeleteState({
+          status: "error",
+          message: "Estimate could not be deleted.",
+        });
+        return;
+      }
+
+      setIsDeleteConfirmOpen(false);
+      setDeleteState({ status: "idle", message: null });
+    } catch {
+      setDeleteState({
+        status: "error",
+        message: "Estimate could not be deleted.",
+      });
+    }
+  }
+
   return (
-    <section className="relative mt-4 bg-white pb-[calc(5.75rem+env(safe-area-inset-bottom))] text-[#0B1228] sm:rounded-[2rem] sm:border sm:border-[#E5E7EB] sm:px-6 sm:pb-28 sm:pt-5">
+    <section className="fixed inset-0 z-40 overflow-y-auto bg-white pb-[calc(5.75rem+env(safe-area-inset-bottom))] text-[#0B1228]">
       <div className="sticky top-0 z-10 border-b border-[#E5E7EB] bg-white/95 px-3 py-2.5 backdrop-blur sm:static sm:border-b-0 sm:px-0 sm:pb-4">
-        <div className="flex items-center justify-between gap-3">
+        <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 sm:px-6">
           <button
             aria-label="Back to Finance"
             className="flex h-10 w-10 items-center justify-center rounded-full text-[#0F172A] transition hover:bg-[#F1F5F9]"
-            onClick={onClose}
+            onClick={() => void closeAfterSave()}
             type="button"
           >
             <EstimateIcon name="back" />
@@ -861,6 +1480,11 @@ export function ManualEstimateEditor({
             <span className="mt-1 inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-xs font-black text-[#0F6BFF]">
               {statusLabel}
             </span>
+            {saveFeedbackLabel ? (
+              <p className="mt-1 text-[0.68rem] font-black text-[#64748B]">
+                {saveFeedbackLabel}
+              </p>
+            ) : null}
           </div>
           <div className="relative">
             <button
@@ -905,7 +1529,7 @@ export function ManualEstimateEditor({
                 </button>
                 <button
                   className="block w-full px-4 py-2.5 text-left text-[#0F6BFF] hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-40"
-                  disabled={!canSend}
+                  disabled={!canAttemptSend}
                   onClick={() => {
                     setIsEstimateMenuOpen(false);
                     void sendToClient();
@@ -916,31 +1540,107 @@ export function ManualEstimateEditor({
                     ? "Resend"
                     : "Send to Customer"}
                 </button>
+                {canCreateInvoice && initialEstimate ? (
+                  <button
+                    className="block w-full px-4 py-2.5 text-left text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={isCreatingInvoice}
+                    onClick={() => {
+                      setIsEstimateMenuOpen(false);
+                      void onCreateInvoice?.(initialEstimate);
+                    }}
+                    type="button"
+                  >
+                    {isCreatingInvoice ? "Creating Invoice..." : "Convert to Invoice"}
+                  </button>
+                ) : null}
+                {linkedInvoiceNumber ? (
+                  <div className="px-4 py-2.5 text-left text-xs font-black text-emerald-700">
+                    Invoice {linkedInvoiceNumber}
+                  </div>
+                ) : null}
+                {savedEstimateId && estimateStatus === "draft" ? (
+                  <button
+                    className="block w-full px-4 py-2.5 text-left text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={!canDeleteEstimate}
+                    onClick={() => {
+                      setIsEstimateMenuOpen(false);
+                      setDeleteState({ status: "idle", message: null });
+                      setIsDeleteConfirmOpen(true);
+                    }}
+                    type="button"
+                  >
+                    Delete Estimate
+                  </button>
+                ) : null}
               </div>
             ) : null}
           </div>
         </div>
+        {estimates.length > 1 ? (
+          <div className="mx-auto mt-3 flex max-w-3xl gap-2 overflow-x-auto px-1 pb-1 sm:px-6">
+            {estimates.map((estimate, index) => {
+              const isActive = estimate.id === activeSwitcherEstimateId;
+
+              return (
+                <button
+                  className={`shrink-0 border-b-2 px-3 py-2 text-sm font-black transition ${
+                    isActive
+                      ? "border-[#0F6BFF] text-[#0F6BFF]"
+                      : "border-transparent text-[#64748B] hover:text-[#0F172A]"
+                  }`}
+                  key={estimate.id}
+                  onClick={() => {
+                    if (!isActive) {
+                      void switchEstimateAfterSave(estimate);
+                    }
+                  }}
+                  type="button"
+                >
+                  Estimate {index + 1}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
       </div>
 
-      <div className="px-3 pt-3 sm:px-0 sm:pt-0">
-        <div className="flex gap-3 border-b border-[#E5E7EB] pb-4">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-blue-50 text-sm font-black text-[#0F6BFF]">
-            {customerInitials}
-          </div>
-          <div className="min-w-0 flex-1">
-            <h3 className="text-base font-black leading-5 tracking-[-0.02em] text-[#0F172A] sm:text-xl">
-              {request.customerName || "Customer"}
-            </h3>
-            {address ? (
-              <p className="mt-1 text-sm font-semibold leading-5 text-[#475569]">
-                {address}
-              </p>
-            ) : null}
-            <p className="mt-2 text-sm font-semibold leading-5 text-[#475569]">
-              {formatServiceRequestDate(createdDate)}
+      <div className="mx-auto max-w-3xl px-3 pt-3 sm:px-6 sm:pt-0">
+        <div className="grid gap-2">
+          {customerHref ? (
+            <Link
+              className="flex gap-3 rounded-2xl border border-[#E5E7EB] bg-white p-3 text-left transition hover:bg-[#F8FAFC]"
+              href={customerHref}
+              onClick={(event) => void openCustomerAfterSave(event, customerHref)}
+            >
+              <EstimateCustomerCardContent
+                address={address}
+                customerInitials={customerInitials}
+                customerName={request.customerName || "Customer"}
+                customerPhone={request.customerPhone}
+              />
+            </Link>
+          ) : (
+            <div className="flex gap-3 rounded-2xl border border-[#E5E7EB] bg-white p-3 text-left">
+              <EstimateCustomerCardContent
+                address={address}
+                customerInitials={customerInitials}
+                customerName={request.customerName || "Customer"}
+                customerPhone={request.customerPhone}
+              />
+            </div>
+          )}
+        </div>
+
+          <div className="rounded-2xl bg-[#F8FAFC] p-3">
+            <p className="text-sm font-black text-[#0F172A]">
+              {formatCompactJobNumber(request.id)}
+            </p>
+            <p className="mt-0.5 text-sm font-semibold text-[#475569]">
+              {[request.applianceType, request.issueDescription]
+                .filter(Boolean)
+                .join(" - ") || "Job details"}
             </p>
           </div>
-        </div>
 
         <section className="mt-4">
           <div className="flex items-center justify-between gap-3">
@@ -951,8 +1651,66 @@ export function ManualEstimateEditor({
               type="button"
             >
               <EstimateIcon className="h-4 w-4" name="plus" />
-              Add item
+              Custom Line Item
             </button>
+          </div>
+
+          <div className="relative mt-3">
+            <label className="block text-xs font-black text-[#64748B]" htmlFor="price-book-search">
+              Search Price Book
+            </label>
+            <input
+              autoComplete="off"
+              className="mt-1 w-full rounded-xl border border-[#D7E4FF] bg-white px-3 py-2.5 text-sm font-bold text-[#0F172A] outline-none transition placeholder:text-[#94A3B8] focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
+              id="price-book-search"
+              onChange={(event) => setPriceBookSearch(event.target.value)}
+              placeholder="Search parts, labor, services, fees"
+              type="search"
+              value={priceBookSearch}
+            />
+            {priceBookSearch.trim().length >= 2 ? (
+              <div className="absolute left-0 right-0 z-20 mt-2 max-h-72 overflow-y-auto rounded-2xl border border-[#E5E7EB] bg-white shadow-[0_18px_44px_rgba(15,23,42,0.14)]">
+                {priceBookState.status === "loading" ? (
+                  <p className="px-3 py-3 text-sm font-semibold text-[#64748B]">
+                    Loading Price Book...
+                  </p>
+                ) : priceBookState.status === "error" ? (
+                  <p className="px-3 py-3 text-sm font-semibold text-amber-800">
+                    {priceBookState.message}
+                  </p>
+                ) : priceBookMatches.length > 0 ? (
+                  <div className="divide-y divide-[#E5E7EB]">
+                    {priceBookMatches.map((item) => (
+                      <button
+                        className="block w-full px-3 py-2.5 text-left transition hover:bg-[#F8FAFC]"
+                        key={item.id}
+                        onClick={() => addPriceBookItem(item)}
+                        type="button"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-black text-[#0F172A]">
+                              {item.name}
+                            </p>
+                            <p className="mt-0.5 text-xs font-semibold text-[#64748B]">
+                              {lineTypeLabel(mapPriceBookTypeToLineType(item.item_type))}
+                              {item.appliance_type ? ` • ${item.appliance_type}` : ""}
+                            </p>
+                          </div>
+                          <p className="shrink-0 text-sm font-black text-[#0F6BFF]">
+                            {formatServiceRequestMoney(getPriceBookSellPrice(item))}
+                          </p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="px-3 py-3 text-sm font-semibold text-[#64748B]">
+                    No active Price Book items found. Add a custom line item instead.
+                  </p>
+                )}
+              </div>
+            ) : null}
           </div>
 
           {lines.length > 0 ? (
@@ -979,23 +1737,18 @@ export function ManualEstimateEditor({
                         <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[0.68rem] font-black text-emerald-700">
                           {lineTypeLabel(line.type)}
                         </span>
-                        {line.customerVisible ? (
-                          <span className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[0.68rem] font-black text-[#0F6BFF]">
-                            Customer facing
-                          </span>
-                        ) : null}
                       </div>
                       {line.description ? (
                         <p className="mt-0.5 text-xs font-semibold leading-4 text-[#64748B]">
                           {line.description}
                         </p>
                       ) : null}
-                      <dl className="mt-2 grid grid-cols-4 gap-x-2 text-xs">
+                      <dl className="mt-2 grid grid-cols-2 gap-x-2 text-xs">
                         <div>
                           <dt className="font-semibold text-[#64748B]">Qty</dt>
                           <dd className="mt-1 font-black">{line.quantity}</dd>
                         </div>
-                        <div className="col-span-2">
+                        <div>
                           <dt className="font-semibold text-[#64748B]">Price</dt>
                           <dd className="mt-1 font-black">
                             {line.customerVisible && line.customerUnitPrice <= 0 ? (
@@ -1003,12 +1756,6 @@ export function ManualEstimateEditor({
                             ) : (
                               formatServiceRequestMoney(line.customerUnitPrice)
                             )}
-                          </dd>
-                        </div>
-                        <div>
-                          <dt className="font-semibold text-[#64748B]">Taxable</dt>
-                          <dd className="mt-1 font-black">
-                            {line.taxable ? "Yes" : "No"}
                           </dd>
                         </div>
                       </dl>
@@ -1157,6 +1904,73 @@ export function ManualEstimateEditor({
           </div>
         </section>
 
+        <section className="mt-4 grid gap-2 border-b border-[#E5E7EB] pb-4">
+          <button
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#0F6BFF] px-4 py-3 text-sm font-black text-white transition hover:bg-[#0057D9] disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!canAttemptSend}
+            onClick={() => void sendToClient()}
+            type="button"
+          >
+            Send for Approval
+          </button>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              className="rounded-xl border border-[#D7E4FF] bg-white px-3 py-2.5 text-sm font-black text-[#0F6BFF] opacity-55"
+              disabled
+              title="Deposit collection requires the future payment/deposit backend."
+              type="button"
+            >
+              Collect Deposit
+            </button>
+            <button
+              className="rounded-xl border border-[#D7E4FF] bg-white px-3 py-2.5 text-sm font-black text-[#0F6BFF] opacity-55"
+              disabled
+              title="Signature capture requires the future signature backend."
+              type="button"
+            >
+              Get Signature
+            </button>
+          </div>
+          <details className="rounded-xl border border-[#E5E7EB] bg-white">
+            <summary className="flex cursor-pointer list-none items-center justify-center px-4 py-3 text-sm font-black text-[#0F172A]">
+              More Actions
+              <span className="ml-2 text-[#64748B]">v</span>
+            </summary>
+            <div className="grid gap-2 border-t border-[#E5E7EB] p-3 text-sm font-black">
+              <button
+                className="rounded-lg border border-[#E5E7EB] px-3 py-2 text-[#0F6BFF]"
+                disabled={lines.length === 0}
+                onClick={() => setIsPreviewOpen(true)}
+                type="button"
+              >
+                Preview Proposal
+              </button>
+              <button
+                className="rounded-lg border border-[#E5E7EB] px-3 py-2 text-[#0F172A]"
+                onClick={duplicateEstimate}
+                type="button"
+              >
+                Duplicate
+              </button>
+              {canCreateInvoice && initialEstimate ? (
+                <button
+                  className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={isCreatingInvoice}
+                  onClick={() => void onCreateInvoice?.(initialEstimate)}
+                  type="button"
+                >
+                  {isCreatingInvoice ? "Creating Invoice..." : "Convert to Invoice"}
+                </button>
+              ) : null}
+              {linkedInvoiceNumber ? (
+                <p className="rounded-lg bg-emerald-50 px-3 py-2 text-emerald-700">
+                  Converted to invoice {linkedInvoiceNumber}
+                </p>
+              ) : null}
+            </div>
+          </details>
+        </section>
+
         <div className="mt-4 border-b border-[#E5E7EB]">
           <EditableTextSection
             label="What we found"
@@ -1244,7 +2058,7 @@ export function ManualEstimateEditor({
       </div>
 
       <div className="fixed inset-x-0 bottom-0 z-30 border-t border-[#E5E7EB] bg-white/95 px-3 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-12px_32px_rgba(15,23,42,0.08)] backdrop-blur sm:absolute sm:rounded-b-[2rem]">
-        {(validationAttempted && sendErrors.length > 0) || saveState.message ? (
+        {(validationAttempted && sendErrors.length > 0) || saveState.status === "error" ? (
           <p
             className={`mb-2 text-xs font-bold ${
               saveState.status === "error" || sendErrors.length > 0
@@ -1255,7 +2069,7 @@ export function ManualEstimateEditor({
             {saveState.message ?? sendErrors[0]}
           </p>
         ) : null}
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2">
           <button
             className="rounded-xl border border-[#D7E4FF] bg-white px-2 py-3 text-xs font-black text-[#0F6BFF] disabled:cursor-not-allowed disabled:opacity-50 sm:text-sm"
             disabled={lines.length === 0}
@@ -1265,22 +2079,14 @@ export function ManualEstimateEditor({
             Preview proposal
           </button>
           <button
-            className="rounded-xl border border-[#E5E7EB] bg-white px-2 py-3 text-xs font-black text-[#0F172A] disabled:cursor-not-allowed disabled:opacity-50 sm:text-sm"
-            disabled={saveState.status === "saving"}
-            onClick={() => void saveDraft()}
-            type="button"
-          >
-            {pendingAction === "save" ? "Saving..." : "Save draft"}
-          </button>
-          <button
             className="rounded-xl bg-[#FFD400] px-2 py-3 text-xs font-black text-[#0F172A] disabled:cursor-not-allowed disabled:opacity-45 sm:text-sm"
-            disabled={!canSend}
+            disabled={!canAttemptSend}
             onClick={() => void sendToClient()}
             type="button"
           >
             {pendingAction === "send" || sendingEstimateId === savedEstimateId
               ? "Sending..."
-              : "Send to client"}
+              : "Send for Approval"}
           </button>
         </div>
       </div>
@@ -1326,65 +2132,53 @@ export function ManualEstimateEditor({
         </div>
       ) : null}
 
-      {isPreviewOpen ? (
+      {isDeleteConfirmOpen ? (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/55 px-3 py-4 backdrop-blur-sm sm:items-center">
-          <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
-                  Customer Preview
-                </p>
-                <h3 className="mt-2 text-2xl font-black text-[#0F172A]">
-                  {estimateTitle}
-                </h3>
-              </div>
-              <button
-                className="rounded-full border border-[#E5E7EB] px-3 py-1 text-sm font-black text-[#334155]"
-                onClick={() => setIsPreviewOpen(false)}
-                type="button"
-              >
-                Close
-              </button>
-            </div>
-            <p className="mt-4 text-sm font-semibold leading-6 text-[#475569]">
-              {whatWeFound || "The technician prepared this repair proposal for review."}
+          <div className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl">
+            <h3 className="text-lg font-black text-[#0F172A]">
+              Delete this draft estimate?
+            </h3>
+            <p className="mt-2 text-sm font-semibold leading-6 text-[#475569]">
+              This estimate will be permanently deleted. This action cannot be undone.
             </p>
-            <div className="mt-4 divide-y divide-[#E5E7EB] rounded-2xl border border-[#E5E7EB]">
-              {customerVisibleLines.map((line) => (
-                <div
-                  className="flex items-start justify-between gap-3 px-4 py-3 text-sm"
-                  key={line.id}
-                >
-                  <div>
-                    <p className="font-black">
-                      {line.quantity}x {line.name || "Estimate item"}
-                    </p>
-                    {line.description ? (
-                      <p className="mt-1 text-xs leading-5 text-[#64748B]">
-                        {line.description}
-                      </p>
-                    ) : null}
-                  </div>
-                  <p className="font-black">
-                    {formatServiceRequestMoney(getLineTotal(line))}
-                  </p>
-                </div>
-              ))}
-            </div>
-            <div className="mt-4 rounded-2xl bg-blue-50 p-4">
-              <p className="text-xs font-black uppercase tracking-[0.16em] text-[#64748B]">
-                Proposal Total
-              </p>
-              <p className="mt-1 text-4xl font-black text-[#0F6BFF]">
-                {formatServiceRequestMoney(totals.total)}
-              </p>
-            </div>
-            {warrantyText ? (
-              <p className="mt-4 rounded-2xl bg-[#F8FAFC] p-3 text-sm leading-6 text-[#334155]">
-                <span className="font-black">Warranty: </span>
-                {warrantyText}
+            {deleteState.status === "error" ? (
+              <p className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-bold text-red-700">
+                {deleteState.message}
               </p>
             ) : null}
+            <div className="mt-5 grid grid-cols-2 gap-2">
+              <button
+                className="rounded-xl border border-[#E5E7EB] px-4 py-3 text-sm font-black text-[#0F172A] disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={deleteState.status === "deleting"}
+                onClick={() => {
+                  setIsDeleteConfirmOpen(false);
+                  setDeleteState({ status: "idle", message: null });
+                }}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded-xl bg-red-600 px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={deleteState.status === "deleting"}
+                onClick={() => void deleteEstimate()}
+                type="button"
+              >
+                {deleteState.status === "deleting" ? "Deleting..." : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isPreviewOpen ? (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-[#F8FAFC]">
+          <div className="min-h-full pb-[env(safe-area-inset-bottom)]">
+            <CustomerEstimatePreview
+              data={customerPreviewData}
+              mode="technician-preview"
+              onBack={() => setIsPreviewOpen(false)}
+            />
           </div>
         </div>
       ) : null}
@@ -1446,9 +2240,47 @@ function ManualEstimateItemSheet({
   const line = draft.line;
   const hasName = line.name.trim().length > 0;
   const hasValidQuantity = line.quantity > 0;
+  const [customerPriceInput, setCustomerPriceInput] = useState(() =>
+    draft.mode === "add" && line.customerUnitPrice === 0
+      ? ""
+      : formatMoneyInputValue(line.customerUnitPrice),
+  );
+  const [internalCostInput, setInternalCostInput] = useState(() =>
+    draft.mode === "add" && line.internalUnitCost === 0
+      ? ""
+      : formatMoneyInputValue(line.internalUnitCost),
+  );
 
   function updateLine(patch: Partial<ManualEstimateLine>) {
     onChange({ ...line, ...patch });
+  }
+
+  function updateMoneyInput(
+    value: string,
+    field: "customerUnitPrice" | "internalUnitCost",
+    setInput: (nextValue: string) => void,
+  ) {
+    const nextValue = sanitizeMoneyInputValue(value);
+
+    setInput(nextValue);
+    updateLine({ [field]: parseMoneyInputValue(nextValue) });
+  }
+
+  function normalizeMoneyInput(
+    value: string,
+    field: "customerUnitPrice" | "internalUnitCost",
+    setInput: (nextValue: string) => void,
+  ) {
+    const parsed = parseMoneyInputValue(value);
+
+    if (value.trim() === "") {
+      setInput("");
+      updateLine({ [field]: 0 });
+      return;
+    }
+
+    setInput(formatMoneyInputValue(parsed));
+    updateLine({ [field]: parsed });
   }
 
   return (
@@ -1546,15 +2378,25 @@ function ManualEstimateItemSheet({
               </span>
               <input
                 className="w-full rounded-xl border border-[#E5E7EB] px-3 py-2 text-right text-sm font-black text-[#0F6BFF] outline-none focus:border-[#0F6BFF]"
-                min="0"
-                onChange={(event) =>
-                  updateLine({
-                    customerUnitPrice: safeNumber(Number(event.target.value)),
-                  })
+                inputMode="decimal"
+                onBlur={() =>
+                  normalizeMoneyInput(
+                    customerPriceInput,
+                    "customerUnitPrice",
+                    setCustomerPriceInput,
+                  )
                 }
-                step="0.01"
-                type="number"
-                value={String(line.customerUnitPrice)}
+                onChange={(event) =>
+                  updateMoneyInput(
+                    event.target.value,
+                    "customerUnitPrice",
+                    setCustomerPriceInput,
+                  )
+                }
+                onFocus={(event) => event.currentTarget.select()}
+                placeholder="$0.00"
+                type="text"
+                value={customerPriceInput}
               />
               {line.customerVisible && line.customerUnitPrice <= 0 ? (
                 <span className="mt-1 block text-xs font-bold text-amber-800">
@@ -1568,15 +2410,25 @@ function ManualEstimateItemSheet({
               </span>
               <input
                 className="w-full rounded-xl border border-[#E5E7EB] px-3 py-2 text-right text-sm font-black outline-none focus:border-[#0F6BFF]"
-                min="0"
-                onChange={(event) =>
-                  updateLine({
-                    internalUnitCost: safeNumber(Number(event.target.value)),
-                  })
+                inputMode="decimal"
+                onBlur={() =>
+                  normalizeMoneyInput(
+                    internalCostInput,
+                    "internalUnitCost",
+                    setInternalCostInput,
+                  )
                 }
-                step="0.01"
-                type="number"
-                value={String(line.internalUnitCost)}
+                onChange={(event) =>
+                  updateMoneyInput(
+                    event.target.value,
+                    "internalUnitCost",
+                    setInternalCostInput,
+                  )
+                }
+                onFocus={(event) => event.currentTarget.select()}
+                placeholder="$0.00"
+                type="text"
+                value={internalCostInput}
               />
             </label>
           </div>

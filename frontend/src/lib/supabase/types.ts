@@ -558,12 +558,26 @@ export type Database = {
           created_at: string;
           updated_at: string;
           customer_id: string;
+          company_id: string | null;
+          customer_address_id: string | null;
           appliance_type: string;
           brand: string | null;
           model_number: string | null;
           serial_number: string | null;
           purchase_year: number | null;
           location_label: string | null;
+          asset_status: "active" | "inactive" | "archived";
+          cover_photo_id: string | null;
+          identity_source: "manual" | "ai_attachment" | "qa_attachment";
+          identity_source_photo_id: string | null;
+          identity_confidence: number | null;
+          identity_review_status:
+            | "confirmed"
+            | "needs_review"
+            | "unreviewed"
+            | "rejected";
+          identity_raw_text: string | null;
+          identity_extraction: Json;
           notes: string | null;
         };
         Insert: Partial<Database["public"]["Tables"]["customer_appliances"]["Row"]>;
@@ -787,6 +801,17 @@ export type Database = {
           storage_path: string;
           original_filename: string | null;
           photo_type: DatabaseServiceRequestPhotoType;
+          asset_processing_status:
+            | "not_started"
+            | "pending"
+            | "processed"
+            | "needs_review"
+            | "no_asset"
+            | "failed";
+          asset_processing_result: Json;
+          asset_processing_error: string | null;
+          linked_customer_appliance_id: string | null;
+          processed_at: string | null;
           created_at: string;
         };
         Insert: Partial<Database["public"]["Tables"]["service_request_photos"]["Row"]>;
@@ -823,6 +848,7 @@ export type Database = {
       service_requests: {
         Row: {
           id: string;
+          company_id: string | null;
           customer_id: string | null;
           customer_appliance_id: string | null;
           customer_name: string;
@@ -1183,6 +1209,19 @@ export type Database = {
         };
         Returns: boolean;
       };
+      process_service_request_photo_asset_intelligence_rpc: {
+        Args: {
+          p_photo_id: string;
+          p_identity?: Json | null;
+        };
+        Returns: Json;
+      };
+      set_customer_appliance_cover_photo_from_job_rpc: {
+        Args: {
+          p_photo_id: string;
+        };
+        Returns: Json;
+      };
       latest_dispatcher_preview_snapshot_rpc: {
         Args: {
           p_service_request_id: string;
@@ -1211,6 +1250,18 @@ export type Database = {
       send_service_request_estimate_to_customer_rpc: {
         Args: {
           p_estimate_id: string;
+        };
+        Returns: Json;
+      };
+      delete_draft_service_request_estimate_rpc: {
+        Args: {
+          p_estimate_id: string;
+        };
+        Returns: Json;
+      };
+      delete_safe_service_request_rpc: {
+        Args: {
+          p_service_request_id: string;
         };
         Returns: Json;
       };

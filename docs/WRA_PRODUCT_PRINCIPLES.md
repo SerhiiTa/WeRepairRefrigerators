@@ -216,3 +216,19 @@ When a user chooses New Job, the interface should speak in job language. Intake 
 Task 161.2 adds the concrete Jobs Center rule: New Job should be a single customer-first form whenever possible. Search/select the customer first, then service address, appliance/problem, schedule, and technician. Avoid step ceremonies unless the workflow truly needs them.
 
 Mobile dashboard navigation should use one reusable drawer pattern across Dashboard, Jobs Center, and future dashboard pages. Do not create route-specific mobile menus that drift in animation, styling, route list, or profile behavior.
+
+## 30. Home App And Pro App Share One Platform
+
+The current product is the Pro App / Contractor OS. Its active priority is helping HomeFix replace Workiz with a production-ready contractor CRM and operating system.
+
+The long-term North Star is broader: a separate Home App for homeowners, family members, authorized occupants, and tenants may become the Property OS / Home Passport experience, while the Pro App remains the contractor operating system.
+
+These should not become disconnected products. They should share common platform entities over time: Property, Assets / Equipment / Home Systems, Jobs, Service Records, Documents, History, and Knowledge.
+
+The property is the durable history anchor. People change, owners change, tenants change, contractors change, and service companies change; the property remains. The platform should preserve authorized lifetime technical/service history subject to privacy, ownership, consent, and access-control rules.
+
+The homeowner controls their Home Passport and permissions. Contractor CRM data must not automatically become public marketplace data, and a contractor's own customer relationship must remain protected.
+
+The Pro App must remain valuable even if the future marketplace sends a contractor zero jobs. Contractors must be able to run their own business from phone, website, Google, advertising, referrals, repeat customers, and other external sources.
+
+Customer Portal work should be designed with the future Home App in mind, but do not expose contractor CRM complexity to homeowners and do not start Home Passport implementation without an explicit task.

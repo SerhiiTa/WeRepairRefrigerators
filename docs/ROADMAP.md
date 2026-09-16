@@ -72,6 +72,21 @@ Success definition:
 
 Future task filter: every task must answer `Does this help HomeFix stop using Workiz within two months?` If no, move it to backlog.
 
+## Long-Term Product Direction: Home App + Pro App
+
+The active roadmap remains Workiz Exit: complete WRA as the Pro App / Contractor OS for HomeFix before expanding implementation scope.
+
+Long term, WRA is expected to evolve into two user-facing products on one shared platform/backend:
+
+- Home App: homeowner/occupant-facing Property OS and Home Passport for properties, assets, documents, warranties, service history, invoices, photos, inspection videos, Home AI, service requests, and future marketplace/service discovery.
+- Pro App / Contractor OS: contractor-facing CRM and operating system for communications, customers, jobs, dispatch, diagnostics, estimates, invoices, payments, inventory, company operations, and service history creation.
+
+Do not turn this North Star into active HVAC, plumbing, electrical, builder, insurance, manufacturer, marketplace, Partner Portal, or Home Passport implementation work until the Workiz Exit milestone is complete or a future task explicitly changes priority.
+
+The Pro App must work independently from any future marketplace. Contractors must be able to manage their own phone, website, Google, advertising, referral, repeat-customer, and other external leads without depending on Home App demand.
+
+Future warranty/service routing should eventually choose the appropriate path for a homeowner request: manufacturer warranty, builder warranty, home warranty, insurance workflow, existing trusted contractor, or marketplace only when no better coverage/relationship applies. This is a future product principle only.
+
 ## Next Task Sequence
 
 ### Task 149 — Professional Job Workspace Completion

@@ -51,6 +51,27 @@ The Attention Engine is not a notification system. Its purpose is to decide who 
 
 The first production vertical is Houston/HomeFix appliance repair. This is the validation environment for the larger property operating model, not the final platform boundary.
 
+## Home App / Pro App Long-Term Product Decision
+
+The current execution priority remains unchanged: finish WRA as a production-ready Contractor Operating System / CRM so HomeFix Appliance Repair can fully replace Workiz.
+
+The Home Passport / Property OS vision is a long-term North Star, not a reason to interrupt the current Workiz Exit roadmap or expand active implementation into HVAC, plumbing, electrical, builders, insurance, manufacturers, marketplace, or other future verticals.
+
+Long term, the platform is expected to become two separate user-facing products sharing one common backend/platform:
+
+- Home App: for homeowners, family members, authorized occupants, and tenants where applicable. It should own the future My Homes / Home Passport experience, property assets, warranties, maintenance schedules, service history, invoices, photos, inspection videos, documents, Home AI, service requests, and marketplace/service discovery without exposing contractor CRM complexity.
+- Pro App / Contractor OS: for independent technicians, contractors, service companies, dispatchers, owners, and employees. This is the product currently being developed as WRA and must remain useful as a standalone CRM even when a contractor receives zero jobs from a future platform marketplace.
+
+The shared long-term domain relationship is `Property -> Assets / Equipment / Home Systems -> Jobs -> Service Records`. A completed contractor job may create or update an authorized service record for the relevant property asset, subject to privacy, ownership, consent, and access-control rules.
+
+Core principle: people, owners, tenants, contractors, and service companies change; the property remains. The platform should preserve authorized lifetime technical/service history while protecting contractor CRM data and the contractor's own customer relationships. Contractor data must not automatically become public marketplace data.
+
+Manufacturers, builders, home-warranty companies, insurers, property managers, and similar partners may later connect through integrations or a separate Partner Web Portal. Do not design or implement that portal now.
+
+The existing/future Customer Portal should be treated as the seed of the future Home App / Property OS experience, not only a small CRM companion for jobs, estimates, and invoices. Do not redesign it or create Home Passport entities until explicitly scheduled.
+
+WRA / WeRepairRefrigerators remains the internal/current project name. It is not assumed to be the final consumer brand, and no repository, route, database, documentation, or application rename is part of this decision.
+
 ## Current confirmed handoff status
 
 - P0 auth recovery is complete. Owner account passwords were restored outside git, and future QA provisioning must only modify `qa-` accounts.

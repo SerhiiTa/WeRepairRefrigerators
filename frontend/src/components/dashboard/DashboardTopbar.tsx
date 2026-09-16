@@ -13,8 +13,12 @@ import { DashboardNavigationLinks } from "./DashboardNavigationLinks";
 export function DashboardTopbar() {
   const pathname = usePathname();
   const [isSigningOut, setIsSigningOut] = useState(false);
+  const [isGlobalSearchOpen, setIsGlobalSearchOpen] = useState(false);
   const isJobsCenter = pathname === "/dashboard/leads";
   const isJobWorkspace = /^\/dashboard\/leads\/[^/]+$/.test(pathname);
+  const isCustomersIndex = pathname === "/dashboard/customers";
+  const isCustomerWorkspace = /^\/dashboard\/customers\/[^/]+$/.test(pathname);
+  const usesCompactMobileAppBar = isJobsCenter || isCustomersIndex;
 
   if (pathname === "/dashboard") {
     return null;
@@ -32,23 +36,67 @@ export function DashboardTopbar() {
     window.location.assign("/login");
   }
 
-  if (isJobsCenter) {
+  if (usesCompactMobileAppBar) {
     return (
       <header className="border-b border-[#E5E7EB] bg-white px-4 py-3 shadow-[0_8px_24px_rgba(15,23,42,0.04)] sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between gap-3 lg:hidden">
-          <DashboardMobileDrawer trigger="hamburger" />
-          <div className="flex min-w-0 items-center gap-3">
-            <BrandLogo compact />
+        {isCustomersIndex ? (
+          <div className="flex min-h-12 items-center justify-between gap-3 lg:hidden">
+            <div className="flex min-w-0 items-center gap-3">
+              <DashboardMobileDrawer trigger="hamburger" />
+              <h1 className="truncate text-xl font-medium tracking-normal text-[#0F172A]">
+                Customers
+              </h1>
+            </div>
+            <div className="flex shrink-0 items-center gap-3">
+              <button
+                aria-label="Create customer"
+                className="flex h-10 w-10 items-center justify-center rounded-full text-4xl font-light leading-none text-[#0F6BFF] transition hover:bg-blue-50"
+                onClick={() =>
+                  window.dispatchEvent(new CustomEvent("wra:create-customer"))
+                }
+                type="button"
+              >
+                +
+              </button>
+              <button
+                aria-label="Open global search"
+                className="flex h-10 w-10 items-center justify-center rounded-full text-[#1E293B] transition hover:bg-slate-100"
+                onClick={() => setIsGlobalSearchOpen(true)}
+                type="button"
+              >
+                <svg
+                  aria-hidden="true"
+                  className="h-7 w-7"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    d="m20 20-4.2-4.2M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4Z"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                  />
+                </svg>
+              </button>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="flex items-center justify-between gap-3 lg:hidden">
+            <DashboardMobileDrawer trigger="hamburger" />
+            <div className="flex min-w-0 items-center gap-3">
+              <BrandLogo compact />
+            </div>
+          </div>
+        )}
 
         <div className="hidden flex-col gap-4 lg:flex lg:flex-row lg:items-center lg:justify-between">
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#0F6BFF]">
               Dashboard
             </p>
-            <h1 className="mt-1 text-2xl font-black tracking-tight text-[#0F172A]">
-              Jobs command center
+              <h1 className="mt-1 text-2xl font-black tracking-tight text-[#0F172A]">
+              {isCustomersIndex ? "Customers" : "Jobs command center"}
             </h1>
           </div>
 
@@ -84,6 +132,36 @@ export function DashboardTopbar() {
             </span>
           </div>
         </div>
+        {isGlobalSearchOpen ? (
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/45 px-3 py-4 backdrop-blur-sm sm:items-center lg:hidden">
+            <div className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-black text-[#0F172A]">Search WRA</h2>
+                  <p className="mt-1 text-sm font-semibold leading-6 text-slate-600">
+                    Global search is coming soon. Use the Customers search field below for now.
+                  </p>
+                </div>
+                <button
+                  aria-label="Close global search"
+                  className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-xl font-black text-slate-600"
+                  onClick={() => setIsGlobalSearchOpen(false)}
+                  type="button"
+                >
+                  ×
+                </button>
+              </div>
+              <label className="mt-4 block">
+                <span className="sr-only">Future global search</span>
+                <input
+                  className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm font-semibold text-slate-500 outline-none"
+                  disabled
+                  placeholder="Customers, jobs, estimates, invoices..."
+                />
+              </label>
+            </div>
+          </div>
+        ) : null}
       </header>
     );
   }
@@ -91,7 +169,9 @@ export function DashboardTopbar() {
   return (
     <header
       className={`border-b border-[#E5E7EB] bg-white px-4 py-4 shadow-[0_8px_24px_rgba(15,23,42,0.04)] sm:px-6 lg:px-8 ${
-        isJobWorkspace ? "hidden lg:block" : ""
+        isJobWorkspace || isCustomerWorkspace
+          ? "hidden lg:block"
+          : ""
       }`}
     >
       <div className="mb-4 flex items-center justify-between gap-4 lg:hidden">

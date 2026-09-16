@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { StatusBadge } from "@/components/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -224,6 +224,34 @@ function getAppointmentLabel(request: DashboardServiceRequest) {
   );
 }
 
+function looksLikeInternalListText(value: string | null | undefined) {
+  const normalized = value?.trim();
+
+  if (!normalized) {
+    return false;
+  }
+
+  return /\b(?:qa[-_\s]*addr|qa\d{4}|dedupe|address\s+workflow\s+test|whw[0-9a-z]+)\b/i.test(
+    normalized,
+  );
+}
+
+function getListCustomerName(request: DashboardServiceRequest) {
+  if (looksLikeInternalListText(request.customerName)) {
+    return "Customer name needed";
+  }
+
+  return request.customerName || "Customer name needed";
+}
+
+function getListProblemDescription(request: DashboardServiceRequest) {
+  if (looksLikeInternalListText(request.issueDescription)) {
+    return "Problem details needed";
+  }
+
+  return request.issueDescription || "Problem details needed";
+}
+
 function getTechnicianLabel(request: DashboardServiceRequest) {
   if (request.selectedTechnicianBusinessName) {
     return request.selectedTechnicianBusinessName;
@@ -393,6 +421,7 @@ export function ServiceRequestsInbox() {
     status: "idle",
     message: null,
   });
+  const customerPrefillHandledRef = useRef<string | null>(null);
   const [addressFocused, setAddressFocused] = useState(false);
   const [addressSuggestions, setAddressSuggestions] = useState<AddressSuggestion[]>([]);
   const [addressState, setAddressState] = useState<
@@ -516,13 +545,6 @@ export function ServiceRequestsInbox() {
         }));
 
         setTechnicians(nextTechnicians);
-        if (nextTechnicians.length === 1) {
-          setNewJobForm((current) => ({
-            ...current,
-            assignedTechnicianId:
-              current.assignedTechnicianId || nextTechnicians[0]?.id || "",
-          }));
-        }
       }
       if (!conversationsResult.error) {
         const counts = ((conversationsResult.data ?? []) as {
@@ -731,6 +753,61 @@ export function ServiceRequestsInbox() {
       gross,
     };
   }, [invoiceSummaries, monthRequests, selectedMonth]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || customers.length === 0) {
+      return;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const shouldOpenNewJob = params.get("newJob") === "1";
+    const customerId = params.get("customerId");
+
+    if (
+      !shouldOpenNewJob ||
+      !customerId ||
+      customerPrefillHandledRef.current === customerId
+    ) {
+      return;
+    }
+
+    const matchingCustomer = customers.find((customer) => customer.id === customerId);
+
+    if (!matchingCustomer) {
+      return;
+    }
+
+    customerPrefillHandledRef.current = customerId;
+
+    const timeoutId = window.setTimeout(() => {
+      const nameParts = splitCustomerName(matchingCustomer.fullName);
+
+      setNewJobForm({
+        ...emptyNewJobForm,
+        city: matchingCustomer.city ?? "",
+        customerEmail: matchingCustomer.email ?? "",
+        customerFirstName: nameParts.firstName,
+        customerLastName: nameParts.lastName,
+        customerPhone: formatUSPhone(matchingCustomer.phone),
+        customerSearch: [
+          matchingCustomer.fullName,
+          matchingCustomer.phone,
+          matchingCustomer.email,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        selectedCustomerId: customerId,
+        serviceAddress: matchingCustomer.streetAddress ?? "",
+        state: matchingCustomer.state ?? "TX",
+        unit: matchingCustomer.unit ?? "",
+        zipCode: cleanZip(matchingCustomer.zipCode ?? ""),
+      });
+      setShowNewJobWizard(true);
+      setNewJobState({ status: "idle", message: null });
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [customers, technicians]);
 
   function clearFilters() {
     setSearchQuery("");
@@ -1053,8 +1130,6 @@ export function ServiceRequestsInbox() {
             onClick={() => {
               setNewJobForm({
                 ...emptyNewJobForm,
-                assignedTechnicianId:
-                  technicians.length === 1 ? technicians[0]?.id ?? "" : "",
               });
               setShowNewJobWizard(true);
               setNewJobState({ status: "idle", message: null });
@@ -1077,59 +1152,59 @@ export function ServiceRequestsInbox() {
       </div>
 
       {filteredRequests.length > 0 ? (
-        <div className="grid gap-1.5">
+        <div className="grid gap-1">
           {filteredRequests.map((request) => (
             <article
-              className="w-full rounded-xl border border-[#E5E7EB] bg-white shadow-[0_6px_18px_rgba(15,23,42,0.035)] transition hover:border-[#0F6BFF]/30 hover:shadow-[0_10px_26px_rgba(15,23,42,0.06)]"
+              className="w-full rounded-[10px] border border-[#E5E7EB] bg-white shadow-[0_4px_12px_rgba(15,23,42,0.025)] transition hover:border-[#0F6BFF]/30 hover:shadow-[0_8px_20px_rgba(15,23,42,0.05)]"
               key={request.id}
             >
               <Link
-                className="flex w-full items-start gap-2 p-2"
+                className="flex w-full items-stretch gap-1.5 p-1.5"
                 href={`/dashboard/leads/${request.id}`}
               >
-                <div className="w-[4.25rem] max-w-24 shrink-0 rounded-lg border border-[#E5E7EB] bg-[#F8FAFC] px-1.5 py-1 text-center">
-                  <p className="text-[10px] font-black uppercase tracking-[0.08em] text-[#64748B]">
+                <div className="flex w-[3.75rem] max-w-24 shrink-0 flex-col justify-center rounded-[8px] border border-[#E5E7EB] bg-[#F8FAFC] px-1 py-0.5 text-center">
+                  <p className="text-[9px] font-black uppercase tracking-[0.06em] text-[#64748B]">
                     {getJobDateParts(request).month}
                   </p>
-                  <p className="text-xl font-black leading-none text-[#0F172A]">
+                  <p className="text-lg font-black leading-none text-[#0F172A]">
                     {getJobDateParts(request).day}
                   </p>
-                  <p className="mt-0.5 truncate text-[10px] font-bold leading-tight text-[#475569]">
+                  <p className="mt-0.5 truncate text-[9px] font-bold leading-tight text-[#475569]">
                     {getAppointmentLabel(request)}
                   </p>
                 </div>
-                <div className="flex min-w-0 flex-1 flex-col justify-center py-0.5">
+                <div className="flex min-w-0 flex-1 flex-col justify-center">
                   <div className="flex min-w-0 items-start gap-2">
-                    <h2 className="min-w-0 flex-1 truncate text-[15px] font-black leading-tight tracking-tight text-[#0F172A]">
-                      {request.customerName}
+                    <h2 className="min-w-0 flex-1 truncate text-sm font-black leading-tight text-[#0F172A]">
+                      {getListCustomerName(request)}
                     </h2>
                     <div className="flex max-w-[52%] shrink-0 justify-end">
-                      <span className="[&>span]:max-w-[9.75rem] [&>span]:whitespace-normal [&>span]:px-2 [&>span]:py-0.5 [&>span]:text-center [&>span]:text-[10px] [&>span]:leading-tight">
+                      <span className="[&>span]:max-w-[8.5rem] [&>span]:whitespace-normal [&>span]:px-1.5 [&>span]:py-0.5 [&>span]:text-center [&>span]:text-[9px] [&>span]:leading-tight">
                         <StatusBadge tone={SERVICE_REQUEST_STATUS_TONES[request.status] ?? "slate"}>
                           {formatServiceRequestSource(request.status)}
                         </StatusBadge>
                       </span>
                     </div>
                   </div>
-                  <p className="mt-0.5 min-w-0 truncate text-[13px] leading-tight text-[#334155]">
+                  <p className="mt-0.5 min-w-0 truncate text-xs leading-tight text-[#334155]">
                     <span className="font-bold">
                       {getApplianceLabel(request) || "Appliance needed"}
                     </span>
                     <span className="px-1 text-[#94A3B8]">•</span>
-                    <span>{request.issueDescription || "Problem details needed"}</span>
+                    <span>{getListProblemDescription(request)}</span>
                   </p>
                   <div className="mt-0.5 flex min-w-0 items-center justify-between gap-2">
-                    <p className="min-w-0 truncate text-[11px] font-bold leading-tight text-[#64748B]">
+                    <p className="min-w-0 truncate text-[10px] font-bold leading-tight text-[#64748B]">
                       {getCityZip(request)}
                     </p>
                     <div className="flex shrink-0 items-center gap-1">
                       {communicationCounts[request.id]?.phone ? (
-                        <span className="rounded-full border border-blue-100 bg-blue-50 px-1.5 py-0 text-[10px] font-black leading-5 text-[#2563EB]">
+                        <span className="rounded-full border border-blue-100 bg-blue-50 px-1.5 py-0 text-[9px] font-black leading-4 text-[#2563EB]">
                           📞 {communicationCounts[request.id].phone}
                         </span>
                       ) : null}
                       {communicationCounts[request.id]?.messages ? (
-                        <span className="rounded-full border border-emerald-100 bg-emerald-50 px-1.5 py-0 text-[10px] font-black leading-5 text-emerald-700">
+                        <span className="rounded-full border border-emerald-100 bg-emerald-50 px-1.5 py-0 text-[9px] font-black leading-4 text-emerald-700">
                           💬 {communicationCounts[request.id].messages}
                         </span>
                       ) : null}
@@ -1543,11 +1618,6 @@ export function ServiceRequestsInbox() {
                       </option>
                     ))}
                   </select>
-                  {technicians.length === 1 ? (
-                    <span className="mt-1 block text-xs font-semibold text-[#64748B]">
-                      Defaulted to the only available technician.
-                    </span>
-                  ) : null}
                 </label>
               </section>
             </div>

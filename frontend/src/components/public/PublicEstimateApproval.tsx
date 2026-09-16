@@ -4,8 +4,11 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import {
+  CustomerEstimatePreview,
+  type CustomerEstimatePreviewData,
+} from "@/components/public/CustomerEstimatePreview";
+import {
   formatServiceRequestDate,
-  formatServiceRequestMoney,
   formatServiceRequestSource,
 } from "@/lib/service-request-records";
 
@@ -61,6 +64,62 @@ type PublicEstimateApprovalProps = {
   initialEstimate: PublicEstimatePayload;
 };
 
+function buildServiceLocation(estimate: PublicEstimatePayload) {
+  return [
+    estimate.service_request.city,
+    [
+      estimate.service_request.state,
+      estimate.service_request.zip_code,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
+function buildCustomerPreviewData(
+  estimate: PublicEstimatePayload,
+): CustomerEstimatePreviewData {
+  const proposalDescription =
+    estimate.estimate.items
+      .map((item) => item.notes)
+      .filter((note): note is string => Boolean(note?.trim()))
+      .slice(0, 2)
+      .join(" ") ||
+    estimate.service_request.issue_description ||
+    "Recommended repair details are listed below.";
+
+  return {
+    companyName:
+      estimate.service_request.selected_technician_business_name ??
+      "WeRepairRefrigerators",
+    estimateNumber: estimate.estimate.estimate_number,
+    estimateStatus: estimate.estimate.estimate_status,
+    customerName: estimate.service_request.customer_name,
+    serviceAddress: buildServiceLocation(estimate),
+    estimateDate: estimate.estimate.sent_at ?? new Date().toISOString(),
+    whatWeFound: estimate.service_request.issue_description,
+    repairSolution: proposalDescription,
+    items: estimate.estimate.items.map((item, index) => ({
+      id: `${item.item_title}-${index}`,
+      title: item.item_title,
+      description: item.notes,
+      quantity: Number(item.quantity),
+      unitPrice: Number(item.unit_price),
+      lineTotal: Number(item.line_total),
+    })),
+    subtotal: Number(estimate.estimate.subtotal),
+    discountAmount: Number(estimate.estimate.discount_amount ?? 0),
+    tax: Number(estimate.estimate.tax ?? 0),
+    taxRate: Number(estimate.estimate.tax_rate ?? 0),
+    total: Number(estimate.estimate.total),
+    warrantyText: estimate.estimate.warranty_text,
+    estimatedCompletion: null,
+    customerNotes: estimate.estimate.disclaimer_text,
+  };
+}
+
 export function PublicEstimateApproval({
   token,
   initialEstimate,
@@ -75,29 +134,9 @@ export function PublicEstimateApproval({
   const [pendingResponse, setPendingResponse] = useState<
     "approved" | "declined" | null
   >(null);
-  const [itemizedOpen, setItemizedOpen] = useState(false);
 
   const isOpenForResponse = estimate.estimate.estimate_status === "sent";
-  const businessName =
-    estimate.service_request.selected_technician_business_name ??
-    "WeRepairRefrigerators";
-  const applianceLabel = [
-    estimate.service_request.appliance_brand,
-    estimate.service_request.appliance_model,
-    estimate.service_request.appliance_type,
-  ]
-    .filter(Boolean)
-    .join(" ");
-  const primaryRepairTitle =
-    estimate.estimate.items[0]?.item_title || "Recommended repair";
-  const proposalDescription =
-    estimate.estimate.items
-      .map((item) => item.notes)
-      .filter((note): note is string => Boolean(note?.trim()))
-      .slice(0, 2)
-      .join(" ") ||
-    estimate.service_request.issue_description ||
-    "The technician prepared this repair proposal for your review.";
+  const customerPreviewData = buildCustomerPreviewData(estimate);
 
   async function submitResponse(response: "approved" | "declined") {
     setResponseState({ status: "saving", message: null });
@@ -169,239 +208,69 @@ export function PublicEstimateApproval({
   }
 
   return (
-    <main className="min-h-screen bg-[#F8FAFC] px-4 py-6 text-[#0F172A]">
-      <section className="mx-auto max-w-3xl overflow-hidden rounded-3xl border border-[#E5E7EB] bg-white shadow-2xl shadow-slate-200/70">
-        <div className="border-b border-[#E5E7EB] px-5 py-6 sm:px-8">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
-                Repair Proposal
-              </p>
-              <h1 className="mt-2 text-3xl font-black">{primaryRepairTitle}</h1>
-              <p className="mt-2 text-sm font-bold text-[#64748B]">
-                {businessName} · {estimate.estimate.estimate_number}
-              </p>
-            </div>
-            <span className="w-fit rounded-full border border-blue-100 bg-blue-50 px-3 py-1 text-xs font-black text-[#0F6BFF]">
-              {formatServiceRequestSource(estimate.estimate.estimate_status)}
-            </span>
-          </div>
-        </div>
+    <main className="min-h-screen bg-[#F3F6FA] pb-6">
+      <CustomerEstimatePreview data={customerPreviewData} />
 
-        <div className="grid gap-5 p-5 sm:p-8">
-          <div className="rounded-3xl bg-[#F8FAFC] p-5">
-            <p className="text-sm font-black text-[#0F172A]">
-              What happened
-            </p>
-            <p className="mt-2 text-sm leading-6 text-[#475569]">
-              {estimate.service_request.issue_description}
-            </p>
-            <p className="mt-5 text-sm font-black text-[#0F172A]">
-              What will be done
-            </p>
-            <p className="mt-2 text-sm leading-6 text-[#475569]">
-              {proposalDescription}
-            </p>
-          </div>
-
-          <div className="rounded-3xl border border-blue-100 bg-blue-50 p-5">
-            <p className="text-xs font-black uppercase tracking-[0.16em] text-[#0F6BFF]">
-              Proposal Total
-            </p>
-            <p className="mt-2 text-5xl font-black text-[#0F6BFF]">
-              {formatServiceRequestMoney(Number(estimate.estimate.total))}
-            </p>
-            <p className="mt-2 text-sm font-semibold text-[#475569]">
-              Includes the repair proposal listed below and applicable tax.
-            </p>
-          </div>
-
-          <div className="grid gap-3 rounded-3xl border border-[#E5E7EB] p-4 text-sm sm:grid-cols-2">
-            <div>
-              <p className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
-                Customer
+      <section className="mx-auto mt-3 max-w-4xl px-3 sm:px-6">
+        <div className="rounded-2xl border border-blue-100 bg-white p-4 shadow-[0_12px_32px_rgba(15,23,42,0.06)]">
+          {isOpenForResponse ? (
+            <>
+              <p className="text-sm font-black text-[#0F172A]">
+                Ready for your response
               </p>
-              <p className="mt-1 font-black">
-                {estimate.service_request.customer_name}
+              <p className="mt-1 text-sm leading-6 text-[#475569]">
+                Approving lets the technician know you want to move forward.
+                Declining closes this proposal for now.
               </p>
-            </div>
-            <div>
-              <p className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
-                Appliance
+              <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+                <button
+                  className="rounded-xl bg-emerald-500 px-4 py-3 text-sm font-black text-white transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={responseState.status === "saving"}
+                  onClick={() => void submitResponse("approved")}
+                  type="button"
+                >
+                  {pendingResponse === "approved"
+                    ? "Approving..."
+                    : "Approve Proposal"}
+                </button>
+                <button
+                  className="rounded-xl border border-amber-200 bg-white px-4 py-3 text-sm font-black text-amber-700 transition hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={responseState.status === "saving"}
+                  onClick={() => void submitResponse("declined")}
+                  type="button"
+                >
+                  {pendingResponse === "declined" ? "Declining..." : "Decline"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-sm font-black text-[#0F172A]">
+                Response recorded
               </p>
-              <p className="mt-1 font-black">{applianceLabel}</p>
-            </div>
-            <div>
-              <p className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
-                Area
-              </p>
-              <p className="mt-1 font-black">
-                {estimate.service_request.city
-                  ? `${estimate.service_request.city}, `
+              <p className="mt-1 text-sm leading-6 text-[#475569]">
+                This proposal is marked{" "}
+                {formatServiceRequestSource(estimate.estimate.estimate_status)}
+                {estimate.estimate.customer_responded_at
+                  ? ` as of ${formatServiceRequestDate(
+                      estimate.estimate.customer_responded_at,
+                    )}`
                   : ""}
-                {estimate.service_request.state}{" "}
-                {estimate.service_request.zip_code}
+                .
               </p>
-            </div>
-            {estimate.estimate.sent_at ? (
-              <div>
-                <p className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
-                  Sent
-                </p>
-                <p className="mt-1 font-black">
-                  {formatServiceRequestDate(estimate.estimate.sent_at)}
-                </p>
-              </div>
-            ) : null}
-          </div>
-
-          <button
-            className="w-fit text-sm font-black text-[#0F6BFF] underline decoration-[#0F6BFF]/40 underline-offset-4"
-            onClick={() => setItemizedOpen((current) => !current)}
-            type="button"
-          >
-            {itemizedOpen ? "Hide Itemized Estimate" : "View Itemized Estimate"}
-          </button>
-
-          {itemizedOpen ? (
-            <div className="overflow-hidden rounded-3xl border border-[#E5E7EB]">
-              <div className="divide-y divide-[#E5E7EB]">
-                {estimate.estimate.items.map((item) => (
-                  <div
-                    className="flex flex-col gap-2 bg-white px-4 py-4 sm:flex-row sm:items-start sm:justify-between"
-                    key={`${item.item_title}-${item.line_total}`}
-                  >
-                    <div>
-                      <p className="font-bold text-[#0F172A]">
-                        {item.quantity}x {item.item_title}
-                      </p>
-                      {item.notes ? (
-                        <p className="mt-1 text-xs leading-5 text-[#64748B]">
-                          {item.notes}
-                        </p>
-                      ) : null}
-                    </div>
-                    <p className="font-black text-[#0F6BFF]">
-                      {formatServiceRequestMoney(Number(item.line_total))}
-                    </p>
-                  </div>
-                ))}
-              </div>
-              <div className="bg-[#F8FAFC] px-4 py-4">
-                <div className="flex items-center justify-between text-sm font-bold">
-                  <span>Subtotal</span>
-                  <span>
-                    {formatServiceRequestMoney(Number(estimate.estimate.subtotal))}
-                  </span>
-                </div>
-                <div className="mt-2 flex items-center justify-between text-sm font-bold">
-                  <span>Discount</span>
-                  <span>
-                    -
-                    {formatServiceRequestMoney(
-                      Number(estimate.estimate.discount_amount ?? 0),
-                    )}
-                  </span>
-                </div>
-                <div className="mt-2 flex items-center justify-between text-sm font-bold">
-                  <span>Tax</span>
-                  <span>
-                    {estimate.estimate.tax === null
-                      ? "Not calculated"
-                      : formatServiceRequestMoney(Number(estimate.estimate.tax))}
-                  </span>
-                </div>
-                {Number(estimate.estimate.tax_rate ?? 0) > 0 ? (
-                  <div className="mt-1 flex items-center justify-between text-xs font-semibold text-[#64748B]">
-                    <span>Tax rate</span>
-                    <span>{Number(estimate.estimate.tax_rate ?? 0).toFixed(2)}%</span>
-                  </div>
-                ) : null}
-                <div className="mt-4 flex items-center justify-between border-t border-slate-200 pt-4">
-                  <span className="text-lg font-black">Total</span>
-                  <span className="text-3xl font-black">
-                    {formatServiceRequestMoney(Number(estimate.estimate.total))}
-                  </span>
-                </div>
-              </div>
-            </div>
-          ) : null}
-
-          <div className="grid gap-4 text-sm leading-6 text-[#475569] md:grid-cols-2">
-            {estimate.estimate.warranty_text ? (
-              <div className="rounded-3xl border border-[#E5E7EB] bg-[#F8FAFC] p-4">
-                <p className="font-black text-[#0F172A]">Warranty</p>
-                <p className="mt-2">{estimate.estimate.warranty_text}</p>
-              </div>
-            ) : null}
-            {estimate.estimate.disclaimer_text ? (
-              <div className="rounded-3xl border border-[#E5E7EB] bg-[#F8FAFC] p-4">
-                <p className="font-black text-[#0F172A]">Notes</p>
-                <p className="mt-2">{estimate.estimate.disclaimer_text}</p>
-              </div>
-            ) : null}
-          </div>
-
-          <div className="rounded-3xl border border-blue-100 bg-blue-50 p-4">
-            {isOpenForResponse ? (
-              <>
-                <p className="text-sm font-black text-[#0F172A]">
-                  Ready for your response
-                </p>
-                <p className="mt-1 text-sm leading-6 text-[#475569]">
-                  Approving lets the technician know you want to move forward.
-                  Declining closes this proposal for now.
-                </p>
-                <div className="mt-4 flex flex-col gap-3 sm:flex-row">
-                  <button
-                    className="rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-black text-white transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
-                    disabled={responseState.status === "saving"}
-                    onClick={() => void submitResponse("approved")}
-                    type="button"
-                  >
-                    {pendingResponse === "approved"
-                      ? "Approving..."
-                      : "Approve Proposal"}
-                  </button>
-                  <button
-                    className="rounded-2xl border border-amber-200 bg-white px-4 py-3 text-sm font-black text-amber-700 transition hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-60"
-                    disabled={responseState.status === "saving"}
-                    onClick={() => void submitResponse("declined")}
-                    type="button"
-                  >
-                    {pendingResponse === "declined" ? "Declining..." : "Decline"}
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <p className="text-sm font-black text-[#0F172A]">
-                  Response recorded
-                </p>
-                <p className="mt-1 text-sm leading-6 text-[#475569]">
-                  This proposal is marked{" "}
-                  {formatServiceRequestSource(estimate.estimate.estimate_status)}
-                  {estimate.estimate.customer_responded_at
-                    ? ` as of ${formatServiceRequestDate(
-                        estimate.estimate.customer_responded_at,
-                      )}`
-                    : ""}
-                  .
-                </p>
-              </>
-            )}
-            {responseState.message ? (
-              <p
+            </>
+          )}
+          {responseState.message ? (
+            <p
               className={`mt-3 text-sm font-bold ${
                 responseState.status === "error"
-                    ? "text-amber-700"
-                    : "text-emerald-700"
-                }`}
-              >
-                {responseState.message}
-              </p>
-            ) : null}
-          </div>
+                  ? "text-amber-700"
+                  : "text-emerald-700"
+              }`}
+            >
+              {responseState.message}
+            </p>
+          ) : null}
         </div>
       </section>
     </main>

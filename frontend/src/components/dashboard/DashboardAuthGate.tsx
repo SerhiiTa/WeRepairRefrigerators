@@ -75,10 +75,14 @@ export function DashboardAuthGate({ children }: DashboardAuthGateProps) {
         }
       };
 
-      setGateState({
-        status: "checking",
-        decision: initialDecision,
-      });
+      setGateState((current) =>
+        current.status === "allowed"
+          ? current
+          : {
+              status: "checking",
+              decision: initialDecision,
+            },
+      );
       setDiagnosticSteps([]);
 
       try {
