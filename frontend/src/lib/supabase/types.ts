@@ -584,6 +584,34 @@ export type Database = {
         Update: Partial<Database["public"]["Tables"]["customer_appliances"]["Row"]>;
         Relationships: [];
       };
+      customer_appliance_photos: {
+        Row: {
+          id: string;
+          customer_id: string;
+          company_id: string | null;
+          customer_appliance_id: string | null;
+          uploaded_by_profile_id: string | null;
+          storage_path: string;
+          original_filename: string | null;
+          photo_type: "asset_label" | "asset_photo";
+          processing_status:
+            | "not_started"
+            | "pending"
+            | "processed"
+            | "needs_review"
+            | "no_asset"
+            | "failed";
+          processing_result: Json;
+          processing_error: string | null;
+          is_cover: boolean;
+          processed_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Partial<Database["public"]["Tables"]["customer_appliance_photos"]["Row"]>;
+        Update: Partial<Database["public"]["Tables"]["customer_appliance_photos"]["Row"]>;
+        Relationships: [];
+      };
       customer_addresses: {
         Row: {
           id: string;

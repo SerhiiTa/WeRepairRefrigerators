@@ -33,6 +33,8 @@ type CommunicationConversationRow =
   PublicSchema["Tables"]["communication_conversations"]["Row"];
 type CommunicationTimelineEventRow =
   PublicSchema["Tables"]["communication_timeline_events"]["Row"];
+type CustomerAppliancePhotoRow =
+  PublicSchema["Tables"]["customer_appliance_photos"]["Row"];
 
 type CustomerListState =
   | { status: "loading" }
@@ -79,6 +81,12 @@ const CLOSED_JOB_STATUSES = new Set(["completed", "closed", "canceled"]);
 type ActionState =
   | { status: "idle"; message: null }
   | { status: "saving"; message: string | null }
+  | { status: "success"; message: string }
+  | { status: "error"; message: string };
+
+type AssetPhotoScanState =
+  | { status: "idle"; message: null }
+  | { status: "processing"; message: string }
   | { status: "success"; message: string }
   | { status: "error"; message: string };
 
@@ -136,6 +144,7 @@ type ApplianceFormState = {
   locationLabelMode: "preset" | "custom";
   notes: string;
   coverPhotoId: string | null;
+  assetPhotoId: string | null;
 };
 
 type AssetLocationOption = {
@@ -149,6 +158,7 @@ type AssetLocationOption = {
 
 const CUSTOM_ASSET_TYPE_VALUE = "__custom_asset_type__";
 const CUSTOM_ASSET_AREA_VALUE = "__custom_asset_area__";
+const CUSTOMER_APPLIANCE_PHOTO_BUCKET = "customer-appliance-photos";
 
 const ADD_ASSET_TYPE_OPTIONS = [
   ...WRA_ASSET_PLACEHOLDER_TYPES.filter((type) => type !== "unknown_appliance").map(
@@ -221,6 +231,7 @@ const emptyApplianceForm: ApplianceFormState = {
   locationLabelMode: "preset",
   notes: "",
   coverPhotoId: null,
+  assetPhotoId: null,
 };
 
 function cleanPhone(value: string): string {
@@ -307,7 +318,28 @@ function buildAppliancePayload(form: ApplianceFormState): Record<string, Json> {
     location_label: form.locationLabel.trim() || null,
     notes: form.notes.trim() || null,
     cover_photo_id: form.coverPhotoId,
+    asset_photo_id: form.assetPhotoId,
   };
+}
+
+function readRecordObject(source: unknown, field: string): Record<string, unknown> | null {
+  if (!source || typeof source !== "object" || !(field in source)) {
+    return null;
+  }
+
+  const value = (source as Record<string, unknown>)[field];
+
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function readRecordString(source: unknown, field: string): string | null {
+  if (!source || typeof source !== "object" || !(field in source)) {
+    return null;
+  }
+
+  const value = (source as Record<string, unknown>)[field];
+
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function formatDate(value: string | null | undefined, fallback = "Not available"): string {
@@ -606,6 +638,7 @@ function buildApplianceForm(appliance?: CustomerApplianceRow): ApplianceFormStat
     locationLabelMode,
     notes: appliance.notes ?? "",
     coverPhotoId: appliance.cover_photo_id ?? null,
+    assetPhotoId: null,
   };
 }
 
@@ -1628,6 +1661,7 @@ export function DashboardCustomerDetail({
       const coverPhotoIds = loadedAppliances
         .map((appliance) => appliance.cover_photo_id)
         .filter((id): id is string => Boolean(id));
+      const assetIds = loadedAppliances.map((appliance) => appliance.id);
       const conversationIds = (
         (conversationsResult.data ?? []) as CommunicationConversationRow[]
       ).map((conversation) => conversation.id);
@@ -1686,6 +1720,31 @@ export function DashboardCustomerDetail({
 
             if (signedUrlData?.signedUrl) {
               coverPhotoUrls[photo.id] = signedUrlData.signedUrl;
+            }
+          }),
+        );
+      }
+
+      if (assetIds.length > 0) {
+        const { data: assetPhotos } = await supabase
+          .from("customer_appliance_photos")
+          .select("id,customer_appliance_id,storage_path,is_cover")
+          .in("customer_appliance_id", assetIds)
+          .eq("is_cover", true)
+          .order("created_at", { ascending: false });
+
+        await Promise.all(
+          ((assetPhotos ?? []) as CustomerAppliancePhotoRow[]).map(async (photo) => {
+            if (!photo.customer_appliance_id) {
+              return;
+            }
+
+            const { data: signedUrlData } = await supabase.storage
+              .from(CUSTOMER_APPLIANCE_PHOTO_BUCKET)
+              .createSignedUrl(photo.storage_path, 60 * 30);
+
+            if (signedUrlData?.signedUrl && !coverPhotoUrls[photo.customer_appliance_id]) {
+              coverPhotoUrls[photo.customer_appliance_id] = signedUrlData.signedUrl;
             }
           }),
         );
@@ -2196,8 +2255,10 @@ export function DashboardCustomerDetail({
             addresses={state.addresses}
             coverUrl={
               selectedAsset.cover_photo_id
-                ? state.assetCoverUrls[selectedAsset.cover_photo_id] ?? null
-                : null
+                ? state.assetCoverUrls[selectedAsset.cover_photo_id] ??
+                  state.assetCoverUrls[selectedAsset.id] ??
+                  null
+                : state.assetCoverUrls[selectedAsset.id] ?? null
             }
             customerId={customer.id}
             onNewJob={(asset) => {
@@ -2233,6 +2294,7 @@ export function DashboardCustomerDetail({
             addresses={state.addresses}
             appliances={state.appliances}
             coverUrls={state.assetCoverUrls}
+            customerId={customer.id}
             form={applianceForm}
             isFormOpen={isAssetFormOpen}
             onAdd={() => {
@@ -2472,6 +2534,7 @@ export function DashboardCustomerDetail({
               <ApplianceEditForm
                 actionState={applianceAction}
                 addresses={state.addresses}
+                customerId={customerId}
                 form={applianceForm}
                 onCancel={() => setApplianceForm(emptyApplianceForm)}
                 onChange={setApplianceForm}
@@ -3189,6 +3252,7 @@ function CustomerAssetsWorkspace({
   appliances,
   requests,
   coverUrls,
+  customerId,
   actionState,
   form,
   isFormOpen,
@@ -3202,6 +3266,7 @@ function CustomerAssetsWorkspace({
   appliances: CustomerApplianceRow[];
   requests: ServiceRequestRow[];
   coverUrls: Record<string, string>;
+  customerId: string;
   actionState: ActionState;
   form: ApplianceFormState;
   isFormOpen: boolean;
@@ -3233,6 +3298,7 @@ function CustomerAssetsWorkspace({
             <ApplianceEditForm
               actionState={actionState}
               addresses={addresses}
+              customerId={customerId}
               form={form}
               onCancel={onCancelForm}
               onChange={onFormChange}
@@ -3265,8 +3331,8 @@ function CustomerAssetsWorkspace({
               const history = getAssetServiceHistory(asset, requests);
               const lastService = history[0]?.created_at ?? null;
               const coverUrl = asset.cover_photo_id
-                ? coverUrls[asset.cover_photo_id] ?? null
-                : null;
+                ? coverUrls[asset.cover_photo_id] ?? coverUrls[asset.id] ?? null
+                : coverUrls[asset.id] ?? null;
 
               return (
                 <button
@@ -3406,6 +3472,7 @@ function CustomerAssetDetailWorkspace({
           <ApplianceEditForm
             actionState={actionState}
             addresses={addresses}
+            customerId={customerId}
             form={form}
             onCancel={onCancelEdit}
             onChange={onFormChange}
@@ -3624,6 +3691,7 @@ function ApplianceList({
 
 function ApplianceEditForm({
   addresses,
+  customerId,
   form,
   onChange,
   onSubmit,
@@ -3632,6 +3700,7 @@ function ApplianceEditForm({
   requests,
 }: {
   addresses: CustomerAddressRow[];
+  customerId: string;
   form: ApplianceFormState;
   onChange: (form: ApplianceFormState) => void;
   onSubmit: () => void;
@@ -3639,6 +3708,13 @@ function ApplianceEditForm({
   actionState: ActionState;
   requests: ServiceRequestRow[];
 }) {
+  const [entryMode, setEntryMode] = useState<"scan" | "manual">(
+    form.id ? "manual" : "scan",
+  );
+  const [scanState, setScanState] = useState<AssetPhotoScanState>({
+    status: "idle",
+    message: null,
+  });
   const update = <Key extends keyof ApplianceFormState>(
     key: Key,
     value: ApplianceFormState[Key],
@@ -3653,6 +3729,81 @@ function ApplianceEditForm({
     ? CUSTOM_ASSET_AREA_VALUE
     : form.locationLabel;
 
+  async function scanAssetPhoto(file: File | null | undefined) {
+    if (!file) {
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setScanState({ status: "error", message: "Asset scanning is not configured." });
+      return;
+    }
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData.session?.access_token;
+
+    if (!accessToken) {
+      setScanState({ status: "error", message: "A logged-in dashboard session is required." });
+      return;
+    }
+
+    setScanState({ status: "processing", message: "Scanning asset label..." });
+
+    const body = new FormData();
+    body.set("photo", file);
+
+    const response = await fetch(
+      `/api/customers/${encodeURIComponent(customerId)}/asset-intelligence`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}` },
+        body,
+      },
+    );
+    const data = (await response.json().catch(() => null)) as unknown;
+
+    if (!response.ok || !data || typeof data !== "object") {
+      setScanState({
+        status: "error",
+        message:
+          readRecordString(data, "message") ??
+          "Asset photo saved, but identification is temporarily unavailable.",
+      });
+      setEntryMode("manual");
+      return;
+    }
+
+    const identity = readRecordObject(data, "identity");
+    const photoId = readRecordString(data, "photoId");
+    const nextApplianceType = readRecordString(identity, "applianceType");
+    const nextBrand = readRecordString(identity, "brand");
+    const nextModel = readRecordString(identity, "modelNumber");
+    const nextSerial = readRecordString(identity, "serialNumber");
+    const nextTypeKnown = nextApplianceType
+      ? ADD_ASSET_TYPE_OPTIONS.some((option) => option.value === nextApplianceType)
+      : false;
+
+    onChange({
+      ...form,
+      applianceType: nextApplianceType ?? form.applianceType,
+      applianceTypeMode: nextApplianceType && !nextTypeKnown ? "custom" : form.applianceTypeMode,
+      brand: nextBrand ?? form.brand,
+      modelNumber: nextModel ?? form.modelNumber,
+      serialNumber: nextSerial ?? form.serialNumber,
+      assetPhotoId: photoId ?? form.assetPhotoId,
+    });
+
+    setEntryMode("manual");
+    setScanState({
+      status: "success",
+      message:
+        readRecordString(data, "message") ??
+        "Asset label scanned. Review the fields before saving.",
+    });
+  }
+
   return (
     <div className="mt-3 grid min-w-0 gap-3">
       {!form.id ? (
@@ -3661,17 +3812,64 @@ function ApplianceEditForm({
             Add Asset
           </p>
           <div className="grid grid-cols-2 gap-2">
-            <span className="rounded-xl bg-white px-3 py-2 text-center text-xs font-semibold text-slate-700 ring-1 ring-blue-100">
+            <button
+              className={`rounded-xl px-3 py-2 text-center text-xs font-semibold ring-1 ring-blue-100 ${
+                entryMode === "scan" ? "bg-[#0F6BFF] text-white" : "bg-white text-slate-700"
+              }`}
+              onClick={() => setEntryMode("scan")}
+              type="button"
+            >
               Scan / Photo Assisted
-            </span>
-            <span className="rounded-xl bg-white px-3 py-2 text-center text-xs font-semibold text-slate-700 ring-1 ring-blue-100">
+            </button>
+            <button
+              className={`rounded-xl px-3 py-2 text-center text-xs font-semibold ring-1 ring-blue-100 ${
+                entryMode === "manual" ? "bg-[#0F6BFF] text-white" : "bg-white text-slate-700"
+              }`}
+              onClick={() => setEntryMode("manual")}
+              type="button"
+            >
               Enter Manually
-            </span>
+            </button>
           </div>
-          <p className="text-xs leading-5 text-slate-600">
-            Job label photos still use the existing Asset Intelligence pipeline. Manual
-            assets can be saved here now, then linked jobs and cover photos remain reused.
-          </p>
+          {entryMode === "scan" ? (
+            <div className="grid gap-2">
+              <label className="flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-blue-200 bg-white px-3 py-4 text-center text-sm font-semibold text-[#0F6BFF] transition hover:bg-blue-50">
+                {scanState.status === "processing" ? "Scanning..." : "Take Photo / Upload Photo"}
+                <input
+                  accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+                  capture="environment"
+                  className="sr-only"
+                  disabled={scanState.status === "processing"}
+                  onChange={(event) => {
+                    void scanAssetPhoto(event.target.files?.[0]);
+                    event.target.value = "";
+                  }}
+                  type="file"
+                />
+              </label>
+              <p className="text-xs leading-5 text-slate-600">
+                Scan the equipment label, then review and correct the fields before saving.
+              </p>
+            </div>
+          ) : null}
+          {scanState.message ? (
+            <p
+              className={`text-xs leading-5 ${
+                scanState.status === "error"
+                  ? "text-red-700"
+                  : scanState.status === "success"
+                    ? "text-emerald-700"
+                    : "text-slate-600"
+              }`}
+            >
+              {scanState.message}
+            </p>
+          ) : null}
+          {form.assetPhotoId ? (
+            <p className="text-xs font-medium text-slate-600">
+              Photo will be attached when this asset is saved.
+            </p>
+          ) : null}
         </div>
       ) : null}
       <div className="grid min-w-0 gap-3 md:grid-cols-2">
