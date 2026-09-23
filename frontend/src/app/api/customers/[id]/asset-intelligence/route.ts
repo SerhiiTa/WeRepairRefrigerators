@@ -64,6 +64,10 @@ function toPrefillIdentity(identity: ReturnType<typeof toAssetIntelligenceRpcIde
   return identity;
 }
 
+function readPhotoPurpose(formData: FormData): "asset_label" | "asset_photo" {
+  return formData.get("photoType") === "asset_photo" ? "asset_photo" : "asset_label";
+}
+
 async function updateAssetPhotoProcessingState({
   photoId,
   status,
@@ -140,6 +144,7 @@ export async function POST(
   }
 
   const file = formData.get("photo");
+  const photoType = readPhotoPurpose(formData);
 
   if (!(file instanceof File)) {
     return fail("Choose an asset label photo to scan.");
@@ -185,15 +190,29 @@ export async function POST(
       uploaded_by_profile_id: userData.user.id,
       storage_path: storagePath,
       original_filename: file.name.slice(0, 180),
-      photo_type: "asset_label",
-      processing_status: "pending",
-      processing_result: { provider: "openai", model: ASSET_VISION_MODEL },
+      photo_type: photoType,
+      is_cover: photoType === "asset_photo",
+      processing_status: photoType === "asset_label" ? "pending" : "processed",
+      processing_result:
+        photoType === "asset_label"
+          ? { provider: "openai", model: ASSET_VISION_MODEL }
+          : { source: "manual_asset_photo" },
+      processed_at: photoType === "asset_photo" ? new Date().toISOString() : null,
     })
     .select("id")
     .single();
 
   if (metadataError || !photo) {
     return fail("Asset photo metadata is not ready yet.", 503);
+  }
+
+  if (photoType === "asset_photo") {
+    return NextResponse.json({
+      ok: true,
+      photoId: photo.id,
+      status: "processed",
+      message: "Asset photo added. It will be attached when this asset is saved.",
+    });
   }
 
   try {

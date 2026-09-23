@@ -62,7 +62,9 @@ type CustomerDetailState =
       customerNotes: CustomerInternalNoteRow[];
       conversations: CommunicationConversationRow[];
       communicationEvents: CommunicationTimelineEventRow[];
+      assetPhotos: CustomerAppliancePhotoRow[];
       assetCoverUrls: Record<string, string>;
+      assetPhotoUrls: Record<string, string>;
       currentRole: DatabaseAppRole | null;
     }
   | { status: "unavailable"; message: string };
@@ -145,6 +147,9 @@ type ApplianceFormState = {
   notes: string;
   coverPhotoId: string | null;
   assetPhotoId: string | null;
+  labelPhotoId: string | null;
+  mainPhotoId: string | null;
+  additionalPhotoIds: string[];
 };
 
 type AssetLocationOption = {
@@ -232,6 +237,9 @@ const emptyApplianceForm: ApplianceFormState = {
   notes: "",
   coverPhotoId: null,
   assetPhotoId: null,
+  labelPhotoId: null,
+  mainPhotoId: null,
+  additionalPhotoIds: [],
 };
 
 function cleanPhone(value: string): string {
@@ -319,6 +327,9 @@ function buildAppliancePayload(form: ApplianceFormState): Record<string, Json> {
     notes: form.notes.trim() || null,
     cover_photo_id: form.coverPhotoId,
     asset_photo_id: form.assetPhotoId,
+    label_photo_id: form.labelPhotoId,
+    main_photo_id: form.mainPhotoId,
+    additional_photo_ids: form.additionalPhotoIds,
   };
 }
 
@@ -639,6 +650,9 @@ function buildApplianceForm(appliance?: CustomerApplianceRow): ApplianceFormStat
     notes: appliance.notes ?? "",
     coverPhotoId: appliance.cover_photo_id ?? null,
     assetPhotoId: null,
+    labelPhotoId: null,
+    mainPhotoId: null,
+    additionalPhotoIds: [],
   };
 }
 
@@ -1555,6 +1569,7 @@ export function DashboardCustomerDetail({
     return new URLSearchParams(window.location.search).get("asset");
   });
   const [jobsFilter, setJobsFilter] = useState<CustomerJobsFilter>("all");
+  const [showArchivedAssets, setShowArchivedAssets] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [profileForm, setProfileForm] = useState<CustomerFormState>(emptyCustomerForm);
   const [applianceForm, setApplianceForm] =
@@ -1705,6 +1720,8 @@ export function DashboardCustomerDetail({
               { data: [], error: null },
             ];
       const coverPhotoUrls: Record<string, string> = {};
+      const assetPhotoUrls: Record<string, string> = {};
+      let loadedAssetPhotos: CustomerAppliancePhotoRow[] = [];
 
       if (coverPhotoIds.length > 0) {
         const { data: coverPhotos } = await supabase
@@ -1728,13 +1745,13 @@ export function DashboardCustomerDetail({
       if (assetIds.length > 0) {
         const { data: assetPhotos } = await supabase
           .from("customer_appliance_photos")
-          .select("id,customer_appliance_id,storage_path,is_cover")
+          .select("*")
           .in("customer_appliance_id", assetIds)
-          .eq("is_cover", true)
           .order("created_at", { ascending: false });
+        loadedAssetPhotos = (assetPhotos ?? []) as CustomerAppliancePhotoRow[];
 
         await Promise.all(
-          ((assetPhotos ?? []) as CustomerAppliancePhotoRow[]).map(async (photo) => {
+          loadedAssetPhotos.map(async (photo) => {
             if (!photo.customer_appliance_id) {
               return;
             }
@@ -1743,8 +1760,15 @@ export function DashboardCustomerDetail({
               .from(CUSTOMER_APPLIANCE_PHOTO_BUCKET)
               .createSignedUrl(photo.storage_path, 60 * 30);
 
-            if (signedUrlData?.signedUrl && !coverPhotoUrls[photo.customer_appliance_id]) {
-              coverPhotoUrls[photo.customer_appliance_id] = signedUrlData.signedUrl;
+            if (signedUrlData?.signedUrl) {
+              assetPhotoUrls[photo.id] = signedUrlData.signedUrl;
+              if (
+                photo.photo_type === "asset_photo" &&
+                photo.is_cover &&
+                !coverPhotoUrls[photo.customer_appliance_id]
+              ) {
+                coverPhotoUrls[photo.customer_appliance_id] = signedUrlData.signedUrl;
+              }
             }
           }),
         );
@@ -1763,7 +1787,9 @@ export function DashboardCustomerDetail({
           customerNotes: (customerNotesResult.data ?? []) as CustomerInternalNoteRow[],
           conversations: (conversationsResult.data ?? []) as CommunicationConversationRow[],
           communicationEvents: (timelineResult.data ?? []) as CommunicationTimelineEventRow[],
+          assetPhotos: loadedAssetPhotos,
           assetCoverUrls: coverPhotoUrls,
+          assetPhotoUrls,
           currentRole: (profileResult.data as DatabaseAppRole | null) ?? null,
         });
 
@@ -1830,7 +1856,12 @@ export function DashboardCustomerDetail({
 
   function selectWorkspaceTab(tab: CustomerWorkspaceTab) {
     setActiveTab(tab);
-    if (tab !== "assets") {
+    if (tab === "assets") {
+      setSelectedAssetId(null);
+      setShowArchivedAssets(false);
+      setIsAssetFormOpen(false);
+      setApplianceForm(emptyApplianceForm);
+    } else {
       setSelectedAssetId(null);
     }
     if (typeof window === "undefined") {
@@ -1867,6 +1898,18 @@ export function DashboardCustomerDetail({
         "",
         `/dashboard/customers/${customerId}?tab=assets`,
       );
+    }
+  }
+
+  function returnToActiveAssetsList() {
+    setActiveTab("assets");
+    setSelectedAssetId(null);
+    setShowArchivedAssets(false);
+    setIsAssetFormOpen(false);
+    setApplianceForm(emptyApplianceForm);
+
+    if (typeof window !== "undefined") {
+      window.history.pushState(null, "", `/dashboard/customers/${customerId}?tab=assets`);
     }
   }
 
@@ -2022,6 +2065,87 @@ export function DashboardCustomerDetail({
     refreshCustomer();
   }
 
+  async function runAssetLifecycleAction({
+    action,
+    asset,
+    linkedJobCount,
+  }: {
+    action: "delete" | "archive" | "restore";
+    asset: CustomerApplianceRow;
+    linkedJobCount: number;
+  }) {
+    const confirmation =
+      action === "delete"
+        ? "Delete Asset?\n\nThis asset has no service history and will be permanently deleted, including its standalone photos. This action cannot be undone."
+        : action === "archive"
+          ? "Archive Asset?\n\nThis asset has existing service history and cannot be permanently deleted. It will be hidden from active assets while its jobs and service history remain available."
+          : "Restore Asset?\n\nThis asset will be restored to active assets.";
+
+    if (!window.confirm(confirmation)) {
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setApplianceAction({ status: "error", message: "Customer CRM is not configured." });
+      return;
+    }
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData.session?.access_token;
+
+    if (!accessToken) {
+      setApplianceAction({ status: "error", message: "A logged-in dashboard session is required." });
+      return;
+    }
+
+    if (action === "delete" && linkedJobCount > 0) {
+      setApplianceAction({
+        status: "error",
+        message: "This asset has service history. Archive it instead of deleting it.",
+      });
+      return;
+    }
+
+    setApplianceAction({ status: "saving", message: "Updating asset..." });
+
+    const endpoint = `/api/customers/${encodeURIComponent(customerId)}/assets/${encodeURIComponent(asset.id)}/lifecycle`;
+    const response = await fetch(endpoint, {
+      method: action === "delete" ? "DELETE" : "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: action === "delete" ? undefined : JSON.stringify({ action }),
+    });
+    const data = (await response.json().catch(() => null)) as unknown;
+
+    if (!response.ok) {
+      setApplianceAction({
+        status: "error",
+        message:
+          readRecordString(data, "message") ??
+          (action === "delete" ? "Asset could not be deleted." : "Asset could not be updated."),
+      });
+      return;
+    }
+
+    setApplianceAction({
+      status: "success",
+      message:
+        action === "delete"
+          ? "Asset deleted."
+          : action === "archive"
+            ? "Asset archived."
+            : "Asset restored.",
+    });
+
+    returnToActiveAssetsList();
+
+    refreshCustomer();
+  }
+
   async function addCustomerNote() {
     const body = noteBody.trim();
     if (!body) {
@@ -2136,6 +2260,13 @@ export function DashboardCustomerDetail({
     { label: "Estimates", value: state.estimates.length.toString() },
     { label: "Invoices", value: state.invoices.length.toString() },
   ];
+  const activeAssets = state.appliances.filter(
+    (appliance) => appliance.asset_status !== "archived",
+  );
+  const archivedAssets = state.appliances.filter(
+    (appliance) => appliance.asset_status === "archived",
+  );
+  const visibleAssets = showArchivedAssets ? archivedAssets : activeAssets;
   const selectedAsset =
     selectedAssetId !== null
       ? state.appliances.find((appliance) => appliance.id === selectedAssetId) ?? null
@@ -2254,14 +2385,21 @@ export function DashboardCustomerDetail({
             asset={selectedAsset}
             addresses={state.addresses}
             coverUrl={
-              selectedAsset.cover_photo_id
-                ? state.assetCoverUrls[selectedAsset.cover_photo_id] ??
-                  state.assetCoverUrls[selectedAsset.id] ??
-                  null
-                : state.assetCoverUrls[selectedAsset.id] ?? null
+              state.assetCoverUrls[selectedAsset.id] ??
+              (selectedAsset.cover_photo_id
+                ? state.assetCoverUrls[selectedAsset.cover_photo_id] ?? null
+                : null)
             }
+            assetPhotos={state.assetPhotos.filter(
+              (photo) => photo.customer_appliance_id === selectedAsset.id,
+            )}
+            assetPhotoUrls={state.assetPhotoUrls}
             customerId={customer.id}
             onNewJob={(asset) => {
+              if (asset.asset_status === "archived") {
+                return;
+              }
+
               const params = new URLSearchParams({
                 newJob: "1",
                 customerId: customer.id,
@@ -2269,6 +2407,9 @@ export function DashboardCustomerDetail({
               });
 
               router.push(`/dashboard/leads?${params.toString()}`);
+            }}
+            onLifecycleAction={(action, asset, linkedJobCount) => {
+              void runAssetLifecycleAction({ action, asset, linkedJobCount });
             }}
             onBack={closeAssetDetail}
             onEdit={(asset) => {
@@ -2292,11 +2433,13 @@ export function DashboardCustomerDetail({
           <CustomerAssetsWorkspace
             actionState={applianceAction}
             addresses={state.addresses}
-            appliances={state.appliances}
+            appliances={visibleAssets}
+            archivedCount={archivedAssets.length}
             coverUrls={state.assetCoverUrls}
             customerId={customer.id}
             form={applianceForm}
             isFormOpen={isAssetFormOpen}
+            showArchived={showArchivedAssets}
             onAdd={() => {
               setApplianceForm({
                 ...emptyApplianceForm,
@@ -2313,6 +2456,7 @@ export function DashboardCustomerDetail({
             onFormChange={setApplianceForm}
             onOpenAsset={openAssetDetail}
             onSave={() => void saveAppliance()}
+            onShowArchivedChange={setShowArchivedAssets}
             requests={state.serviceRequests}
           />
         )
@@ -3250,49 +3394,68 @@ function getAssetServiceHistory(
 function CustomerAssetsWorkspace({
   addresses,
   appliances,
+  archivedCount,
   requests,
   coverUrls,
   customerId,
   actionState,
   form,
   isFormOpen,
+  showArchived,
   onAdd,
   onCancelForm,
   onFormChange,
   onOpenAsset,
   onSave,
+  onShowArchivedChange,
 }: {
   addresses: CustomerAddressRow[];
   appliances: CustomerApplianceRow[];
+  archivedCount: number;
   requests: ServiceRequestRow[];
   coverUrls: Record<string, string>;
   customerId: string;
   actionState: ActionState;
   form: ApplianceFormState;
   isFormOpen: boolean;
+  showArchived: boolean;
   onAdd: () => void;
   onCancelForm: () => void;
   onFormChange: (form: ApplianceFormState) => void;
   onOpenAsset: (assetId: string) => void;
   onSave: () => void;
+  onShowArchivedChange: (showArchived: boolean) => void;
 }) {
   return (
     <main className="mt-3 grid min-w-0 gap-3">
       <section className="min-w-0 overflow-hidden rounded-[18px] border border-slate-200 bg-white p-3 shadow-[0_8px_24px_rgba(15,23,42,0.045)]">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-base font-semibold text-slate-950">
-            Assets ({appliances.length})
+            {showArchived ? "Archived Assets" : "Assets"} ({appliances.length})
           </h2>
-          <button
-            className="rounded-full bg-[#0F6BFF] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[#0057D9]"
-            onClick={onAdd}
-            type="button"
-          >
-            + Add Asset
-          </button>
+          <div className="flex items-center gap-2">
+            {archivedCount > 0 ? (
+              <button
+                className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-[#0F6BFF] hover:text-[#0F6BFF]"
+                onClick={() => onShowArchivedChange(!showArchived)}
+                type="button"
+              >
+                {showArchived ? "Active" : `Archived (${archivedCount})`}
+              </button>
+            ) : null}
+            {!showArchived ? (
+              <button
+                className="rounded-full bg-[#0F6BFF] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[#0057D9]"
+                onClick={onAdd}
+                type="button"
+              >
+                + Add Asset
+              </button>
+            ) : null}
+          </div>
         </div>
 
-        {isFormOpen ? (
+        {isFormOpen && !showArchived ? (
           <div className="mt-3 rounded-2xl border border-slate-200 bg-[#F8FAFC] p-3">
             <p className="text-sm font-semibold text-slate-950">Add Asset</p>
             <ApplianceEditForm
@@ -3310,18 +3473,23 @@ function CustomerAssetsWorkspace({
 
         {appliances.length === 0 && !isFormOpen ? (
           <div className="mt-3 rounded-2xl border border-dashed border-slate-300 bg-[#F8FAFC] p-4 text-center">
-            <p className="text-sm font-semibold text-slate-950">No assets yet</p>
-            <p className="mt-1 text-sm leading-5 text-slate-500">
-              Assets can be added manually or identified automatically from
-              model/serial label photos in Jobs.
+            <p className="text-sm font-semibold text-slate-950">
+              {showArchived ? "No archived assets" : "No assets yet"}
             </p>
-            <button
-              className="mt-3 rounded-full bg-[#0F6BFF] px-4 py-2 text-sm font-semibold text-white"
-              onClick={onAdd}
-              type="button"
-            >
-              + Add Asset
-            </button>
+            <p className="mt-1 text-sm leading-5 text-slate-500">
+              {showArchived
+                ? "Archived assets will appear here while preserving their service history."
+                : "Assets can be added manually or identified automatically from model/serial label photos in Jobs."}
+            </p>
+            {!showArchived ? (
+              <button
+                className="mt-3 rounded-full bg-[#0F6BFF] px-4 py-2 text-sm font-semibold text-white"
+                onClick={onAdd}
+                type="button"
+              >
+                + Add Asset
+              </button>
+            ) : null}
           </div>
         ) : null}
 
@@ -3331,7 +3499,7 @@ function CustomerAssetsWorkspace({
               const history = getAssetServiceHistory(asset, requests);
               const lastService = history[0]?.created_at ?? null;
               const coverUrl = asset.cover_photo_id
-                ? coverUrls[asset.cover_photo_id] ?? coverUrls[asset.id] ?? null
+                ? coverUrls[asset.id] ?? coverUrls[asset.cover_photo_id] ?? null
                 : coverUrls[asset.id] ?? null;
 
               return (
@@ -3385,6 +3553,8 @@ function CustomerAssetsWorkspace({
 function CustomerAssetDetailWorkspace({
   addresses,
   asset,
+  assetPhotos,
+  assetPhotoUrls,
   coverUrl,
   customerId,
   requests,
@@ -3395,11 +3565,14 @@ function CustomerAssetDetailWorkspace({
   onCancelEdit,
   onEdit,
   onFormChange,
+  onLifecycleAction,
   onNewJob,
   onSave,
 }: {
   addresses: CustomerAddressRow[];
   asset: CustomerApplianceRow;
+  assetPhotos: CustomerAppliancePhotoRow[];
+  assetPhotoUrls: Record<string, string>;
   coverUrl: string | null;
   customerId: string;
   requests: ServiceRequestRow[];
@@ -3410,11 +3583,20 @@ function CustomerAssetDetailWorkspace({
   onCancelEdit: () => void;
   onEdit: (asset: CustomerApplianceRow) => void;
   onFormChange: (form: ApplianceFormState) => void;
+  onLifecycleAction: (
+    action: "delete" | "archive" | "restore",
+    asset: CustomerApplianceRow,
+    linkedJobCount: number,
+  ) => void;
   onNewJob: (asset: CustomerApplianceRow) => void;
   onSave: () => void;
 }) {
   const history = getAssetServiceHistory(asset, requests);
   const returnTo = `/dashboard/customers/${customerId}?tab=assets&asset=${asset.id}`;
+  const labelPhotos = assetPhotos.filter((photo) => photo.photo_type === "asset_label");
+  const mainPhotos = assetPhotos.filter((photo) => photo.photo_type === "asset_photo");
+  const coverPhoto = mainPhotos.find((photo) => photo.is_cover) ?? mainPhotos[0] ?? null;
+  const additionalPhotos = mainPhotos.filter((photo) => photo.id !== coverPhoto?.id);
 
   return (
     <main className="mt-3 grid min-w-0 gap-3">
@@ -3429,7 +3611,8 @@ function CustomerAssetDetailWorkspace({
             Assets
           </button>
           <button
-            className="rounded-full bg-[#0F6BFF] px-3 py-1.5 text-xs font-semibold text-white"
+            className="rounded-full bg-[#0F6BFF] px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={asset.asset_status === "archived"}
             onClick={() => onNewJob(asset)}
             type="button"
           >
@@ -3462,7 +3645,55 @@ function CustomerAssetDetailWorkspace({
                 Needs review
               </span>
             ) : null}
+            {asset.asset_status === "archived" ? (
+              <span className="mt-2 inline-flex rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
+                Archived
+              </span>
+            ) : null}
           </div>
+        </div>
+      </section>
+
+      <ActionMessage actionState={actionState} />
+
+      <section className="rounded-[18px] border border-slate-200 bg-white p-3">
+        <h3 className="text-sm font-semibold text-slate-950">Lifecycle</h3>
+        <p className="mt-1 text-xs leading-5 text-slate-500">
+          {asset.asset_status === "archived"
+            ? "Restore this asset to use it for new jobs."
+            : history.length > 0
+              ? "This asset has service history, so it can be archived but not deleted."
+              : "This asset has no service history and can be permanently deleted."}
+        </p>
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+          {asset.asset_status === "archived" ? (
+            <button
+              className="rounded-xl bg-[#0F6BFF] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#0057D9] disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={actionState.status === "saving"}
+              onClick={() => onLifecycleAction("restore", asset, history.length)}
+              type="button"
+            >
+              Restore Asset
+            </button>
+          ) : history.length > 0 ? (
+            <button
+              className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800 transition hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={actionState.status === "saving"}
+              onClick={() => onLifecycleAction("archive", asset, history.length)}
+              type="button"
+            >
+              Archive Asset
+            </button>
+          ) : (
+            <button
+              className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700 transition hover:border-red-300 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={actionState.status === "saving"}
+              onClick={() => onLifecycleAction("delete", asset, history.length)}
+              type="button"
+            >
+              Delete Asset
+            </button>
+          )}
         </div>
       </section>
 
@@ -3472,6 +3703,10 @@ function CustomerAssetDetailWorkspace({
           <ApplianceEditForm
             actionState={actionState}
             addresses={addresses}
+            assetPhotoUrls={assetPhotoUrls}
+            existingAdditionalPhotos={additionalPhotos}
+            existingLabelPhotos={labelPhotos}
+            existingMainPhoto={coverPhoto}
             customerId={customerId}
             form={form}
             onCancel={onCancelEdit}
@@ -3546,6 +3781,38 @@ function CustomerAssetDetailWorkspace({
         />
       </section>
 
+      {labelPhotos.length > 0 ? (
+        <section className="rounded-[18px] border border-slate-200 bg-white p-3">
+          <h3 className="text-sm font-semibold text-slate-950">Label Photo</h3>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            {labelPhotos.slice(0, 2).map((photo) => (
+              <PhotoPreviewCard
+                alt="Asset label photo"
+                key={photo.id}
+                label="Model / serial label"
+                src={assetPhotoUrls[photo.id] ?? null}
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {additionalPhotos.length > 0 ? (
+        <section className="rounded-[18px] border border-slate-200 bg-white p-3">
+          <h3 className="text-sm font-semibold text-slate-950">Additional Photos</h3>
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            {additionalPhotos.slice(0, 6).map((photo) => (
+              <PhotoPreviewCard
+                alt="Asset photo"
+                key={photo.id}
+                label="Asset photo"
+                src={assetPhotoUrls[photo.id] ?? null}
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       <section className="rounded-[18px] border border-slate-200 bg-white p-3">
         <h3 className="text-sm font-semibold text-slate-950">
           Service History ({history.length})
@@ -3579,6 +3846,30 @@ function CustomerAssetDetailWorkspace({
         )}
       </section>
     </main>
+  );
+}
+
+function PhotoPreviewCard({
+  alt,
+  label,
+  src,
+}: {
+  alt: string;
+  label: string;
+  src: string | null;
+}) {
+  return (
+    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+      {src ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img alt={alt} className="aspect-[4/3] w-full object-cover" src={src} />
+      ) : (
+        <div className="flex aspect-[4/3] w-full items-center justify-center bg-slate-100 text-xs font-medium text-slate-400">
+          No photo
+        </div>
+      )}
+      <p className="truncate px-2 py-1.5 text-xs font-medium text-slate-600">{label}</p>
+    </div>
   );
 }
 
@@ -3691,7 +3982,11 @@ function ApplianceList({
 
 function ApplianceEditForm({
   addresses,
+  assetPhotoUrls = {},
   customerId,
+  existingAdditionalPhotos = [],
+  existingLabelPhotos = [],
+  existingMainPhoto = null,
   form,
   onChange,
   onSubmit,
@@ -3700,7 +3995,11 @@ function ApplianceEditForm({
   requests,
 }: {
   addresses: CustomerAddressRow[];
+  assetPhotoUrls?: Record<string, string>;
   customerId: string;
+  existingAdditionalPhotos?: CustomerAppliancePhotoRow[];
+  existingLabelPhotos?: CustomerAppliancePhotoRow[];
+  existingMainPhoto?: CustomerAppliancePhotoRow | null;
   form: ApplianceFormState;
   onChange: (form: ApplianceFormState) => void;
   onSubmit: () => void;
@@ -3715,6 +4014,9 @@ function ApplianceEditForm({
     status: "idle",
     message: null,
   });
+  const [labelPreviewUrl, setLabelPreviewUrl] = useState<string | null>(null);
+  const [mainPreviewUrl, setMainPreviewUrl] = useState<string | null>(null);
+  const [additionalPreviewUrls, setAdditionalPreviewUrls] = useState<string[]>([]);
   const update = <Key extends keyof ApplianceFormState>(
     key: Key,
     value: ApplianceFormState[Key],
@@ -3749,10 +4051,15 @@ function ApplianceEditForm({
       return;
     }
 
-    setScanState({ status: "processing", message: "Scanning asset label..." });
+    if (labelPreviewUrl) {
+      URL.revokeObjectURL(labelPreviewUrl);
+    }
+    setLabelPreviewUrl(URL.createObjectURL(file));
+    setScanState({ status: "processing", message: "Analyzing photo..." });
 
     const body = new FormData();
     body.set("photo", file);
+    body.set("photoType", "asset_label");
 
     const response = await fetch(
       `/api/customers/${encodeURIComponent(customerId)}/asset-intelligence`,
@@ -3793,6 +4100,7 @@ function ApplianceEditForm({
       modelNumber: nextModel ?? form.modelNumber,
       serialNumber: nextSerial ?? form.serialNumber,
       assetPhotoId: photoId ?? form.assetPhotoId,
+      labelPhotoId: photoId ?? form.labelPhotoId,
     });
 
     setEntryMode("manual");
@@ -3800,7 +4108,83 @@ function ApplianceEditForm({
       status: "success",
       message:
         readRecordString(data, "message") ??
-        "Asset label scanned. Review the fields before saving.",
+        "AI detected — please verify.",
+    });
+  }
+
+  async function uploadAssetPhoto({
+    file,
+    role,
+  }: {
+    file: File | null | undefined;
+    role: "main" | "additional";
+  }) {
+    if (!file) {
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setScanState({ status: "error", message: "Asset photo upload is not configured." });
+      return;
+    }
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData.session?.access_token;
+
+    if (!accessToken) {
+      setScanState({ status: "error", message: "A logged-in dashboard session is required." });
+      return;
+    }
+
+    const previewUrl = URL.createObjectURL(file);
+    if (role === "main") {
+      if (mainPreviewUrl) URL.revokeObjectURL(mainPreviewUrl);
+      setMainPreviewUrl(previewUrl);
+    } else {
+      setAdditionalPreviewUrls((urls) => [...urls, previewUrl]);
+    }
+
+    setScanState({ status: "processing", message: "Uploading photo..." });
+
+    const body = new FormData();
+    body.set("photo", file);
+    body.set("photoType", "asset_photo");
+
+    const response = await fetch(
+      `/api/customers/${encodeURIComponent(customerId)}/asset-intelligence`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}` },
+        body,
+      },
+    );
+    const data = (await response.json().catch(() => null)) as unknown;
+
+    if (!response.ok || !data || typeof data !== "object") {
+      setScanState({
+        status: "error",
+        message: readRecordString(data, "message") ?? "Asset photo could not be uploaded.",
+      });
+      return;
+    }
+
+    const photoId = readRecordString(data, "photoId");
+
+    if (!photoId) {
+      setScanState({ status: "error", message: "Asset photo could not be saved." });
+      return;
+    }
+
+    onChange(
+      role === "main"
+        ? { ...form, mainPhotoId: photoId }
+        : { ...form, additionalPhotoIds: [...form.additionalPhotoIds, photoId] },
+    );
+    setScanState({
+      status: "success",
+      message: role === "main" ? "Main photo ready." : "Additional photo ready.",
     });
   }
 
@@ -3819,7 +4203,7 @@ function ApplianceEditForm({
               onClick={() => setEntryMode("scan")}
               type="button"
             >
-              Scan / Photo Assisted
+              Scan Label Photo
             </button>
             <button
               className={`rounded-xl px-3 py-2 text-center text-xs font-semibold ring-1 ring-blue-100 ${
@@ -3833,11 +4217,22 @@ function ApplianceEditForm({
           </div>
           {entryMode === "scan" ? (
             <div className="grid gap-2">
+              <PhotoPreviewCard
+                alt="Selected asset label"
+                label="Label photo"
+                src={labelPreviewUrl ?? assetPhotoUrls[existingLabelPhotos[0]?.id ?? ""] ?? null}
+              />
               <label className="flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-blue-200 bg-white px-3 py-4 text-center text-sm font-semibold text-[#0F6BFF] transition hover:bg-blue-50">
-                {scanState.status === "processing" ? "Scanning..." : "Take Photo / Upload Photo"}
+                {scanState.status === "processing" ? (
+                  <span className="inline-flex items-center gap-2">
+                    <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-blue-200 border-t-[#0F6BFF]" />
+                    Analyzing photo...
+                  </span>
+                ) : (
+                  "Choose Label Photo"
+                )}
                 <input
-                  accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
-                  capture="environment"
+                  accept="image/*"
                   className="sr-only"
                   disabled={scanState.status === "processing"}
                   onChange={(event) => {
@@ -3848,7 +4243,7 @@ function ApplianceEditForm({
                 />
               </label>
               <p className="text-xs leading-5 text-slate-600">
-                Scan the equipment label, then review and correct the fields before saving.
+                Scan the model/serial label, then compare it with the detected fields below.
               </p>
             </div>
           ) : null}
@@ -3867,9 +4262,52 @@ function ApplianceEditForm({
           ) : null}
           {form.assetPhotoId ? (
             <p className="text-xs font-medium text-slate-600">
-              Photo will be attached when this asset is saved.
+              Label photo will be attached when this asset is saved.
             </p>
           ) : null}
+        </div>
+      ) : null}
+      <div className="grid gap-2 rounded-xl border border-slate-200 bg-white p-3">
+        <div>
+          <p className="text-sm font-semibold text-slate-950">Main Photo</p>
+          <p className="mt-1 text-xs leading-5 text-slate-500">
+            Normal equipment photo used for the Asset card and detail image.
+          </p>
+        </div>
+        <PhotoPreviewCard
+          alt="Main asset photo"
+          label="Main asset photo"
+          src={mainPreviewUrl ?? assetPhotoUrls[existingMainPhoto?.id ?? ""] ?? null}
+        />
+        <label className="flex cursor-pointer items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-sm font-semibold text-[#0F6BFF] transition hover:bg-blue-50">
+          Select Main Photo
+          <input
+            accept="image/*"
+            className="sr-only"
+            disabled={scanState.status === "processing"}
+            onChange={(event) => {
+              void uploadAssetPhoto({ file: event.target.files?.[0], role: "main" });
+              event.target.value = "";
+            }}
+            type="file"
+          />
+        </label>
+      </div>
+      {(labelPreviewUrl || existingLabelPhotos.length > 0) ? (
+        <div className="grid gap-3 rounded-xl border border-amber-100 bg-amber-50 p-3 md:grid-cols-[minmax(0,220px)_minmax(0,1fr)]">
+          <PhotoPreviewCard
+            alt="Asset label comparison"
+            label="Label reference"
+            src={labelPreviewUrl ?? assetPhotoUrls[existingLabelPhotos[0]?.id ?? ""] ?? null}
+          />
+          <div className="text-xs leading-5 text-amber-800">
+            <p className="font-semibold text-amber-950">
+              {scanState.status === "success" ? "AI detected — please verify" : "Compare label to fields"}
+            </p>
+            <p className="mt-1">
+              Keep the photo nearby while checking Type, Brand, Model, and Serial.
+            </p>
+          </div>
         </div>
       ) : null}
       <div className="grid min-w-0 gap-3 md:grid-cols-2">
@@ -3969,6 +4407,44 @@ function ApplianceEditForm({
             onChange={(value) => update("locationLabel", value)}
           />
         ) : null}
+      </div>
+      <div className="grid gap-2 rounded-xl border border-slate-200 bg-white p-3">
+        <div>
+          <p className="text-sm font-semibold text-slate-950">Additional Photos</p>
+          <p className="mt-1 text-xs leading-5 text-slate-500">
+            Optional normal equipment photos. These are not sent through Vision.
+          </p>
+        </div>
+        {[...existingAdditionalPhotos.map((photo) => assetPhotoUrls[photo.id] ?? null), ...additionalPreviewUrls]
+          .filter((url): url is string => Boolean(url))
+          .length > 0 ? (
+          <div className="grid grid-cols-3 gap-2">
+            {[...existingAdditionalPhotos.map((photo) => assetPhotoUrls[photo.id] ?? null), ...additionalPreviewUrls]
+              .filter((url): url is string => Boolean(url))
+              .slice(0, 6)
+              .map((url, index) => (
+                <PhotoPreviewCard
+                  alt="Additional asset photo"
+                  key={`${url}-${index}`}
+                  label="Asset photo"
+                  src={url}
+                />
+              ))}
+          </div>
+        ) : null}
+        <label className="flex cursor-pointer items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-sm font-semibold text-[#0F6BFF] transition hover:bg-blue-50">
+          Add Photo
+          <input
+            accept="image/*"
+            className="sr-only"
+            disabled={scanState.status === "processing"}
+            onChange={(event) => {
+              void uploadAssetPhoto({ file: event.target.files?.[0], role: "additional" });
+              event.target.value = "";
+            }}
+            type="file"
+          />
+        </label>
       </div>
       <ActionMessage actionState={actionState} />
       <div className="flex flex-col gap-2 sm:flex-row">

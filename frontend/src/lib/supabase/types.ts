@@ -1231,6 +1231,12 @@ export type Database = {
         };
         Returns: boolean;
       };
+      can_manage_customer_crm: {
+        Args: {
+          target_customer_id: string;
+        };
+        Returns: boolean;
+      };
       can_view_customer_appliance: {
         Args: {
           target_customer_appliance_id: string;
