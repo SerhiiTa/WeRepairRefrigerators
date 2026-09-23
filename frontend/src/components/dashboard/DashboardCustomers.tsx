@@ -110,6 +110,21 @@ type CustomerFormState = {
   placeId: string | null;
 };
 
+type CustomerAddressFormState = {
+  id: string | null;
+  label: string;
+  streetAddress: string;
+  unit: string;
+  city: string;
+  state: string;
+  zipCode: string;
+  country: string;
+  latitude: number | null;
+  longitude: number | null;
+  placeId: string | null;
+  isPrimary: boolean;
+};
+
 type CustomerSectionKey =
   | "profile"
   | "addresses"
@@ -205,6 +220,14 @@ const ADD_ASSET_AREA_OPTIONS = [
   "Pool Area",
 ];
 
+const CUSTOMER_ADDRESS_TYPE_OPTIONS = [
+  "Home",
+  "Rental Property",
+  "Vacation Home",
+  "Business",
+  "Other",
+] as const;
+
 const emptyCustomerForm: CustomerFormState = {
   firstName: "",
   lastName: "",
@@ -221,6 +244,21 @@ const emptyCustomerForm: CustomerFormState = {
   latitude: null,
   longitude: null,
   placeId: null,
+};
+
+const emptyCustomerAddressForm: CustomerAddressFormState = {
+  id: null,
+  label: "Home",
+  streetAddress: "",
+  unit: "",
+  city: "",
+  state: "TX",
+  zipCode: "",
+  country: "US",
+  latitude: null,
+  longitude: null,
+  placeId: null,
+  isPrimary: false,
 };
 
 const emptyApplianceForm: ApplianceFormState = {
@@ -288,6 +326,22 @@ function buildAddressPayload(form: CustomerFormState): Record<string, Json> {
     longitude: form.longitude,
     place_id: form.placeId,
     is_primary: true,
+  };
+}
+
+function buildCustomerAddressPayload(form: CustomerAddressFormState): Record<string, Json> {
+  return {
+    label: normalizeCustomerAddressType(form.label),
+    street_address: form.streetAddress.trim() || null,
+    unit: form.unit.trim() || null,
+    city: form.city.trim() || null,
+    state: form.state.trim().toUpperCase() || "TX",
+    zip_code: cleanZip(form.zipCode) || null,
+    country: form.country.trim().toUpperCase() || "US",
+    latitude: form.latitude,
+    longitude: form.longitude,
+    place_id: form.placeId,
+    is_primary: form.isPrimary,
   };
 }
 
@@ -465,6 +519,27 @@ function getAddressLabel(address: CustomerAddressRow | undefined): string {
     .join(", ");
 }
 
+function getCustomerInfoClipboardText(customer: CustomerRow): string {
+  const explicitName = [customer.first_name, customer.last_name].filter(Boolean).join(" ");
+
+  return [explicitName || customer.full_name, customer.phone, customer.email]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value))
+    .join("\n");
+}
+
+function getCustomerAddressClipboardText(address: CustomerAddressRow): string {
+  const streetLine = [address.street_address, address.unit].filter(Boolean).join(", ");
+  const cityLine = [
+    address.city,
+    [address.state, address.zip_code].filter(Boolean).join(" "),
+  ]
+    .filter(Boolean)
+    .join(", ");
+
+  return [streetLine, cityLine].filter(Boolean).join("\n");
+}
+
 function normalizeAssetLocationPart(value: string | null | undefined): string {
   return (value ?? "")
     .trim()
@@ -621,6 +696,56 @@ function buildCustomerForm(
   };
 }
 
+function normalizeCustomerAddressType(label: string | null | undefined): string {
+  const cleanLabel = label?.trim();
+
+  if (!cleanLabel) {
+    return "Home";
+  }
+
+  const matchedOption = CUSTOMER_ADDRESS_TYPE_OPTIONS.find(
+    (option) => option.toLowerCase() === cleanLabel.toLowerCase(),
+  );
+
+  if (matchedOption) {
+    return matchedOption;
+  }
+
+  const normalized = cleanLabel.toLowerCase();
+  if (
+    normalized === "primary" ||
+    normalized === "saved address" ||
+    normalized === "customer primary address" ||
+    normalized === "primary address" ||
+    normalized === "previous job address"
+  ) {
+    return "Home";
+  }
+
+  return "Other";
+}
+
+function buildCustomerAddressForm(address?: CustomerAddressRow): CustomerAddressFormState {
+  if (!address) {
+    return emptyCustomerAddressForm;
+  }
+
+  return {
+    id: address.id,
+    label: normalizeCustomerAddressType(address.label),
+    streetAddress: address.street_address ?? "",
+    unit: address.unit ?? "",
+    city: address.city ?? "",
+    state: address.state ?? "TX",
+    zipCode: address.zip_code ?? "",
+    country: address.country ?? "US",
+    latitude: address.latitude ?? null,
+    longitude: address.longitude ?? null,
+    placeId: address.place_id ?? null,
+    isPrimary: address.is_primary,
+  };
+}
+
 function buildApplianceForm(appliance?: CustomerApplianceRow): ApplianceFormState {
   if (!appliance) {
     return emptyApplianceForm;
@@ -654,6 +779,26 @@ function buildApplianceForm(appliance?: CustomerApplianceRow): ApplianceFormStat
     mainPhotoId: null,
     additionalPhotoIds: [],
   };
+}
+
+function formatPreferredContact(value: CustomerRow["preferred_contact_method"]): string {
+  if (value === "sms") {
+    return "SMS";
+  }
+
+  if (value === "email") {
+    return "Email";
+  }
+
+  return "Phone";
+}
+
+function getLastServiceDate(requests: ServiceRequestRow[]): string | null {
+  const newestRequest = [...requests]
+    .filter((request) => Boolean(request.created_at))
+    .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0];
+
+  return newestRequest?.created_at ?? null;
 }
 
 function getAppointmentLabel(request: ServiceRequestRow): string {
@@ -932,9 +1077,11 @@ function CustomerOverviewIcon({
 function CustomerQuickAction({
   href,
   label,
+  onClick,
 }: {
   href?: string;
   label: "Call" | "Text" | "Email" | "More";
+  onClick?: () => void;
 }) {
   const iconName: Record<typeof label, CustomerOverviewIconName> = {
     Call: "phone",
@@ -962,7 +1109,7 @@ function CustomerQuickAction({
   }
 
   return (
-    <button className={className} type="button">
+    <button className={className} disabled={!onClick} onClick={onClick} type="button">
       {content}
     </button>
   );
@@ -1572,10 +1719,16 @@ export function DashboardCustomerDetail({
   const [showArchivedAssets, setShowArchivedAssets] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [profileForm, setProfileForm] = useState<CustomerFormState>(emptyCustomerForm);
+  const [addressForm, setAddressForm] =
+    useState<CustomerAddressFormState>(emptyCustomerAddressForm);
   const [applianceForm, setApplianceForm] =
     useState<ApplianceFormState>(emptyApplianceForm);
   const [noteBody, setNoteBody] = useState("");
   const [profileAction, setProfileAction] = useState<ActionState>({
+    status: "idle",
+    message: null,
+  });
+  const [addressAction, setAddressAction] = useState<ActionState>({
     status: "idle",
     message: null,
   });
@@ -1584,7 +1737,14 @@ export function DashboardCustomerDetail({
     message: null,
   });
   const [isAssetFormOpen, setIsAssetFormOpen] = useState(false);
+  const [isAddressEditorOpen, setIsAddressEditorOpen] = useState(false);
   const [noteAction, setNoteAction] = useState<ActionState>({
+    status: "idle",
+    message: null,
+  });
+  const [isCustomerActionsOpen, setIsCustomerActionsOpen] = useState(false);
+  const [isQuickNoteComposerOpen, setIsQuickNoteComposerOpen] = useState(false);
+  const [customerAction, setCustomerAction] = useState<ActionState>({
     status: "idle",
     message: null,
   });
@@ -1913,6 +2073,19 @@ export function DashboardCustomerDetail({
     }
   }
 
+  function openAddressEditor(address?: CustomerAddressRow) {
+    setAddressForm(
+      address
+        ? buildCustomerAddressForm(address)
+        : {
+            ...emptyCustomerAddressForm,
+            isPrimary: state.status === "ready" ? state.addresses.length === 0 : false,
+          },
+    );
+    setAddressAction({ status: "idle", message: null });
+    setIsAddressEditorOpen(true);
+  }
+
   async function saveProfile() {
     const supabase = getSupabaseBrowserClient();
     if (!supabase) {
@@ -1957,6 +2130,40 @@ export function DashboardCustomerDetail({
     }
 
     setProfileAction({ status: "success", message: "Customer profile saved." });
+    refreshCustomer();
+  }
+
+  async function saveAddress() {
+    if (!addressForm.streetAddress.trim() && !cleanZip(addressForm.zipCode)) {
+      setAddressAction({ status: "error", message: "Add a street address or ZIP before saving." });
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      setAddressAction({ status: "error", message: "Customer CRM is not configured." });
+      return;
+    }
+
+    setAddressAction({ status: "saving", message: "Saving address..." });
+
+    const { error } = await supabase.rpc("upsert_customer_address_rpc", {
+      p_customer_id: customerId,
+      p_address_id: addressForm.id,
+      p_payload: buildCustomerAddressPayload(addressForm),
+    });
+
+    if (error) {
+      setAddressAction({
+        status: "error",
+        message: formatCustomerCrmSaveError(error.message),
+      });
+      return;
+    }
+
+    setAddressAction({ status: "success", message: "Address saved." });
+    setIsAddressEditorOpen(false);
+    setAddressForm(emptyCustomerAddressForm);
     refreshCustomer();
   }
 
@@ -2146,17 +2353,17 @@ export function DashboardCustomerDetail({
     refreshCustomer();
   }
 
-  async function addCustomerNote() {
+  async function addCustomerNote(): Promise<boolean> {
     const body = noteBody.trim();
     if (!body) {
       setNoteAction({ status: "error", message: "Note cannot be empty." });
-      return;
+      return false;
     }
 
     const supabase = getSupabaseBrowserClient();
     if (!supabase) {
       setNoteAction({ status: "error", message: "Customer CRM is not configured." });
-      return;
+      return false;
     }
 
     setNoteAction({ status: "saving", message: "Saving note..." });
@@ -2169,12 +2376,55 @@ export function DashboardCustomerDetail({
 
     if (error) {
       setNoteAction({ status: "error", message: error.message });
-      return;
+      return false;
     }
 
     setNoteAction({ status: "success", message: "Customer note added." });
     setNoteBody("");
     refreshCustomer();
+    return true;
+  }
+
+  function openCustomerActions() {
+    setCustomerAction({ status: "idle", message: null });
+    setIsQuickNoteComposerOpen(false);
+    setIsCustomerActionsOpen(true);
+  }
+
+  async function copyToClipboard(value: string, successMessage: string): Promise<void> {
+    if (!value.trim()) {
+      setCustomerAction({ status: "error", message: "Nothing available to copy." });
+      return;
+    }
+
+    if (!navigator.clipboard?.writeText) {
+      setCustomerAction({
+        status: "error",
+        message: "Clipboard is not available in this browser.",
+      });
+      return;
+    }
+
+    setCustomerAction({ status: "saving", message: "Copying..." });
+
+    try {
+      await navigator.clipboard.writeText(value);
+      setCustomerAction({ status: "success", message: successMessage });
+      window.setTimeout(() => {
+        setIsCustomerActionsOpen(false);
+      }, 500);
+    } catch {
+      setCustomerAction({ status: "error", message: "Unable to copy right now." });
+    }
+  }
+
+  async function addQuickCustomerNote(): Promise<void> {
+    const saved = await addCustomerNote();
+
+    if (saved) {
+      setIsQuickNoteComposerOpen(false);
+      setIsCustomerActionsOpen(false);
+    }
   }
 
   if (state.status === "loading") {
@@ -2216,6 +2466,8 @@ export function DashboardCustomerDetail({
       : jobsFilter === "completed"
         ? pastJobs
         : state.serviceRequests;
+  const explicitPrimaryAddressRecord =
+    state.addresses.find((address) => address.is_primary) ?? null;
   const primaryAddressRecord = getCustomerPrimaryAddress(state.addresses);
   const primaryAddressStreet = primaryAddressRecord
     ? [primaryAddressRecord.street_address, primaryAddressRecord.unit]
@@ -2242,6 +2494,7 @@ export function DashboardCustomerDetail({
   const completedJobs = state.serviceRequests.filter((request) =>
     ["completed", "closed"].includes(request.status),
   );
+  const lastServiceDate = getLastServiceDate(state.serviceRequests);
   const lifetimeRevenue = state.invoices
     .filter((invoice) => invoice.invoice_status === "paid")
     .reduce((total, invoice) => total + Number(invoice.total ?? 0), 0);
@@ -2301,6 +2554,7 @@ export function DashboardCustomerDetail({
             <button
               aria-label="More customer actions"
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 text-slate-500 transition hover:bg-slate-100"
+              onClick={openCustomerActions}
               type="button"
             >
               <CustomerOverviewIcon className="h-4 w-4" name="more" />
@@ -2337,7 +2591,7 @@ export function DashboardCustomerDetail({
         <CustomerQuickAction href={customerPhoneHref} label="Call" />
         <CustomerQuickAction href={customerSmsHref} label="Text" />
         <CustomerQuickAction href={customerEmailHref} label="Email" />
-        <CustomerQuickAction label="More" />
+        <CustomerQuickAction label="More" onClick={openCustomerActions} />
       </section>
 
       <nav className="grid grid-cols-4 overflow-hidden rounded-xl border border-slate-200 bg-white p-1 text-center text-sm font-black text-slate-600">
@@ -2353,7 +2607,6 @@ export function DashboardCustomerDetail({
                 ? "bg-[#0F6BFF] text-white shadow-sm"
                 : "hover:bg-slate-50 hover:text-slate-950"
             }`}
-            disabled={tab.id === "more"}
             key={tab.id}
             onClick={() => selectWorkspaceTab(tab.id as CustomerWorkspaceTab)}
             type="button"
@@ -2362,6 +2615,176 @@ export function DashboardCustomerDetail({
           </button>
         ))}
       </nav>
+
+      {isCustomerActionsOpen ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/30 px-3 pb-3 sm:items-center sm:pb-0">
+          <button
+            aria-label="Close customer actions"
+            className="absolute inset-0 cursor-default"
+            onClick={() => {
+              setIsCustomerActionsOpen(false);
+              setIsQuickNoteComposerOpen(false);
+            }}
+            type="button"
+          />
+          <div className="relative w-full max-w-[430px] rounded-[22px] border border-slate-200 bg-white p-4 shadow-[0_24px_60px_rgba(15,23,42,0.22)]">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-black text-slate-950">Customer Actions</h2>
+                <p className="text-sm text-slate-500">{getCustomerName(customer)}</p>
+              </div>
+              <button
+                aria-label="Close customer actions"
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-slate-500 transition hover:bg-slate-50"
+                onClick={() => {
+                  setIsCustomerActionsOpen(false);
+                  setIsQuickNoteComposerOpen(false);
+                }}
+                type="button"
+              >
+                <CustomerOverviewIcon className="h-4 w-4" name="close" />
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-2">
+              <button
+                className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-3 text-left transition hover:border-[#0F6BFF] hover:bg-blue-50/40"
+                onClick={() =>
+                  void copyToClipboard(
+                    getCustomerInfoClipboardText(customer),
+                    "Customer info copied.",
+                  )
+                }
+                type="button"
+              >
+                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-50 text-[#0F6BFF]">
+                  <CustomerOverviewIcon className="h-4 w-4" name="user" />
+                </span>
+                <span>
+                  <span className="block text-sm font-black text-slate-950">
+                    Copy Customer Info
+                  </span>
+                  <span className="block text-xs font-semibold text-slate-500">
+                    Name, phone, and email
+                  </span>
+                </span>
+              </button>
+
+              <button
+                className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-3 text-left transition enabled:hover:border-[#0F6BFF] enabled:hover:bg-blue-50/40 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={!explicitPrimaryAddressRecord}
+                onClick={() => {
+                  if (!explicitPrimaryAddressRecord) {
+                    return;
+                  }
+
+                  void copyToClipboard(
+                    getCustomerAddressClipboardText(explicitPrimaryAddressRecord),
+                    "Primary address copied.",
+                  );
+                }}
+                type="button"
+              >
+                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-50 text-[#0F6BFF]">
+                  <CustomerOverviewIcon className="h-4 w-4" name="pin" />
+                </span>
+                <span>
+                  <span className="block text-sm font-black text-slate-950">
+                    Copy Primary Address
+                  </span>
+                  <span className="block text-xs font-semibold text-slate-500">
+                    {explicitPrimaryAddressRecord
+                      ? "Street, unit, city, state, and ZIP"
+                      : "No primary address saved"}
+                  </span>
+                </span>
+              </button>
+
+              <button
+                className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-3 text-left transition hover:border-[#0F6BFF] hover:bg-blue-50/40"
+                onClick={() => {
+                  setIsCustomerActionsOpen(false);
+                  router.push(
+                    `/dashboard/leads?newJob=1&customerId=${encodeURIComponent(customer.id)}`,
+                  );
+                }}
+                type="button"
+              >
+                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-50 text-[#0F6BFF]">
+                  <CustomerOverviewIcon className="h-4 w-4" name="briefcase" />
+                </span>
+                <span>
+                  <span className="block text-sm font-black text-slate-950">New Job</span>
+                  <span className="block text-xs font-semibold text-slate-500">
+                    Start a job for this customer
+                  </span>
+                </span>
+              </button>
+
+              <button
+                className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-3 text-left transition hover:border-[#0F6BFF] hover:bg-blue-50/40"
+                onClick={() => {
+                  setCustomerAction({ status: "idle", message: null });
+                  setIsQuickNoteComposerOpen(true);
+                }}
+                type="button"
+              >
+                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-50 text-[#0F6BFF]">
+                  <CustomerOverviewIcon className="h-4 w-4" name="edit" />
+                </span>
+                <span>
+                  <span className="block text-sm font-black text-slate-950">
+                    Add Internal Note
+                  </span>
+                  <span className="block text-xs font-semibold text-slate-500">
+                    Save a customer-level CRM note
+                  </span>
+                </span>
+              </button>
+            </div>
+
+            {isQuickNoteComposerOpen ? (
+              <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                <label className="grid gap-1.5 text-sm font-black text-slate-700">
+                  Internal note
+                  <textarea
+                    className="min-h-[92px] resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-950 outline-none transition focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
+                    onChange={(event) => setNoteBody(event.target.value)}
+                    placeholder="Add a private customer note..."
+                    value={noteBody}
+                  />
+                </label>
+                <div className="mt-3 flex gap-2">
+                  <button
+                    className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-700 transition hover:bg-slate-100"
+                    onClick={() => {
+                      setIsQuickNoteComposerOpen(false);
+                      setNoteAction({ status: "idle", message: null });
+                    }}
+                    type="button"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="flex-1 rounded-xl bg-[#0F6BFF] px-3 py-2 text-sm font-black text-white transition hover:bg-blue-700"
+                    onClick={() => void addQuickCustomerNote()}
+                    type="button"
+                  >
+                    Save Note
+                  </button>
+                </div>
+                <div className="mt-3">
+                  <ActionMessage actionState={noteAction} />
+                </div>
+              </div>
+            ) : null}
+
+            <div className="mt-3">
+              <ActionMessage actionState={customerAction} />
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {activeTab === "jobs" ? (
         <CustomerJobsWorkspace
@@ -2460,6 +2883,26 @@ export function DashboardCustomerDetail({
             requests={state.serviceRequests}
           />
         )
+      ) : null}
+
+      {activeTab === "more" ? (
+        <CustomerMoreWorkspace
+          addresses={state.addresses}
+          customer={customer}
+          customerNotes={state.customerNotes}
+          lastServiceDate={lastServiceDate}
+          noteAction={noteAction}
+          noteBody={noteBody}
+          onAddAddress={() => openAddressEditor()}
+          onAddNote={() => void addCustomerNote()}
+          onEditAddress={openAddressEditor}
+          onEditCustomer={() => {
+            setIsProfileEditorOpen(true);
+          }}
+          onNoteBodyChange={setNoteBody}
+          serviceRequestCount={state.serviceRequests.length}
+          totalAssets={state.appliances.length}
+        />
       ) : null}
 
       {activeTab === "overview" ? (
@@ -2608,6 +3051,43 @@ export function DashboardCustomerDetail({
               onChange={setProfileForm}
               onSubmit={() => void saveProfile()}
               submitLabel="Save Customer"
+            />
+          </div>
+        </div>
+      ) : null}
+
+      {isAddressEditorOpen ? (
+        <div
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/45 px-3 pb-3 lg:items-center"
+          role="dialog"
+        >
+          <button
+            aria-label="Close address editor"
+            className="absolute inset-0 cursor-default"
+            onClick={() => setIsAddressEditorOpen(false)}
+            type="button"
+          />
+          <div className="relative max-h-[88vh] w-full max-w-xl overflow-y-auto rounded-[22px] bg-white p-4 shadow-[0_24px_80px_rgba(15,23,42,0.22)]">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h2 className="text-lg font-black text-slate-950">
+                {addressForm.id ? "Edit Address" : "Add Address"}
+              </h2>
+              <button
+                aria-label="Close address editor"
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-slate-500 transition hover:bg-slate-100"
+                onClick={() => setIsAddressEditorOpen(false)}
+                type="button"
+              >
+                <CustomerOverviewIcon className="h-4 w-4" name="close" />
+              </button>
+            </div>
+            <CustomerAddressEditForm
+              actionState={addressAction}
+              form={addressForm}
+              onCancel={() => setIsAddressEditorOpen(false)}
+              onChange={setAddressForm}
+              onSubmit={() => void saveAddress()}
             />
           </div>
         </div>
@@ -2858,6 +3338,387 @@ function ActionMessage({ actionState }: { actionState: ActionState }) {
     >
       {actionState.message}
     </p>
+  );
+}
+
+function CustomerMoreWorkspace({
+  addresses,
+  customer,
+  customerNotes,
+  lastServiceDate,
+  noteAction,
+  noteBody,
+  onAddAddress,
+  onAddNote,
+  onEditAddress,
+  onEditCustomer,
+  onNoteBodyChange,
+  serviceRequestCount,
+  totalAssets,
+}: {
+  addresses: CustomerAddressRow[];
+  customer: CustomerRow;
+  customerNotes: CustomerInternalNoteRow[];
+  lastServiceDate: string | null;
+  noteAction: ActionState;
+  noteBody: string;
+  onAddAddress: () => void;
+  onAddNote: () => void;
+  onEditAddress: (address: CustomerAddressRow) => void;
+  onEditCustomer: () => void;
+  onNoteBodyChange: (value: string) => void;
+  serviceRequestCount: number;
+  totalAssets: number;
+}) {
+  return (
+    <main className="mt-3 grid min-w-0 gap-3 lg:grid-cols-2">
+      <MoreCard
+        actionLabel="Edit"
+        icon="user"
+        onAction={onEditCustomer}
+        title="Contact Information"
+      >
+        <MoreInfoRow label="Full Name" value={getCustomerName(customer)} />
+        <MoreInfoRow label="Phone" value={customer.phone || "No phone saved"} />
+        <MoreInfoRow label="Email" value={customer.email || "No email saved"} />
+      </MoreCard>
+
+      <MoreCard
+        actionLabel="+ Add Address"
+        icon="pin"
+        onAction={onAddAddress}
+        title="Addresses"
+      >
+        {addresses.length > 0 ? (
+          <div className="divide-y divide-slate-100">
+            {addresses.map((address) => (
+              <button
+                className="grid w-full grid-cols-[minmax(0,1fr)_18px] gap-3 py-3 text-left transition hover:text-[#0F6BFF]"
+                key={address.id}
+                onClick={() => onEditAddress(address)}
+                type="button"
+              >
+                <span className="min-w-0">
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-black text-slate-950">
+                      {normalizeCustomerAddressType(address.label)}
+                    </span>
+                    {address.is_primary ? (
+                      <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[0.68rem] font-black text-[#0F6BFF]">
+                        Primary
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="mt-1 block break-words text-sm font-semibold leading-5 text-slate-800">
+                    {[address.street_address, address.unit].filter(Boolean).join(", ") ||
+                      "No street saved"}
+                  </span>
+                  <span className="mt-0.5 block break-words text-sm text-slate-500">
+                    {[address.city, [address.state, address.zip_code].filter(Boolean).join(" ")]
+                      .filter(Boolean)
+                      .join(", ") || "No city saved"}
+                  </span>
+                </span>
+                <CustomerOverviewIcon className="mt-5 h-4 w-4 text-slate-400" name="chevron" />
+              </button>
+            ))}
+          </div>
+        ) : (
+          <EmptyMessage>No saved addresses</EmptyMessage>
+        )}
+      </MoreCard>
+
+      <MoreCard
+        actionLabel="Edit"
+        icon="status"
+        onAction={onEditCustomer}
+        title="Customer Preferences"
+      >
+        <MoreInfoRow
+          label="Preferred Contact Method"
+          value={formatPreferredContact(customer.preferred_contact_method)}
+        />
+      </MoreCard>
+
+      <MoreCard title="Internal Notes" icon="briefcase">
+        <CustomerNotesPanel
+          actionState={noteAction}
+          customerNotes={customerNotes}
+          jobNotes={[]}
+          noteBody={noteBody}
+          onNoteBodyChange={onNoteBodyChange}
+          onSubmit={onAddNote}
+          serviceRequests={[]}
+          showJobNotes={false}
+        />
+      </MoreCard>
+
+      <MoreCard title="Customer Information" icon="calendar">
+        <MoreInfoRow label="Customer Since" value={formatDate(customer.created_at, "—")} />
+        <MoreInfoRow label="Last Service" value={formatDate(lastServiceDate, "—")} />
+        <MoreInfoRow label="Total Jobs" value={serviceRequestCount.toString()} />
+        <MoreInfoRow label="Total Assets" value={totalAssets.toString()} />
+      </MoreCard>
+    </main>
+  );
+}
+
+function MoreCard({
+  actionLabel,
+  children,
+  icon,
+  onAction,
+  title,
+}: {
+  actionLabel?: string;
+  children: ReactNode;
+  icon: CustomerOverviewIconName;
+  onAction?: () => void;
+  title: string;
+}) {
+  return (
+    <section className="min-w-0 rounded-[18px] border border-slate-200 bg-white p-3 shadow-[0_8px_24px_rgba(15,23,42,0.045)]">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="flex min-w-0 items-center gap-2 text-sm font-black text-slate-950">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-50 text-[#0F6BFF]">
+            <CustomerOverviewIcon className="h-3.5 w-3.5" name={icon} />
+          </span>
+          <span className="truncate">{title}</span>
+        </h2>
+        {actionLabel && onAction ? (
+          <button
+            className="shrink-0 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-black text-[#0F6BFF] transition hover:bg-blue-50"
+            onClick={onAction}
+            type="button"
+          >
+            {actionLabel}
+          </button>
+        ) : null}
+      </div>
+      <div className="mt-3 grid gap-3">{children}</div>
+    </section>
+  );
+}
+
+function MoreInfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <p className="text-xs font-semibold text-slate-500">{label}</p>
+      <p className="mt-0.5 break-words text-sm font-bold leading-5 text-slate-950">
+        {value || "—"}
+      </p>
+    </div>
+  );
+}
+
+function CustomerAddressEditForm({
+  actionState,
+  form,
+  onCancel,
+  onChange,
+  onSubmit,
+}: {
+  actionState: ActionState;
+  form: CustomerAddressFormState;
+  onCancel: () => void;
+  onChange: (form: CustomerAddressFormState) => void;
+  onSubmit: () => void;
+}) {
+  const [addressSuggestions, setAddressSuggestions] = useState<AddressSuggestion[]>([]);
+  const [addressSearchState, setAddressSearchState] = useState<
+    "idle" | "searching" | "error"
+  >("idle");
+  const [isAddressSearchActive, setIsAddressSearchActive] = useState(false);
+  const addressAutocomplete = getAddressAutocompleteAdapter();
+
+  useEffect(() => {
+    if (!isAddressSearchActive || !addressAutocomplete.isConfigured) {
+      return;
+    }
+
+    const query = form.streetAddress.trim();
+    if (query.length < 3) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    const timeout = window.setTimeout(() => {
+      setAddressSearchState("searching");
+      addressAutocomplete
+        .search(query)
+        .then((suggestions) => {
+          if (!isCancelled) {
+            setAddressSuggestions(suggestions);
+            setAddressSearchState("idle");
+          }
+        })
+        .catch(() => {
+          if (!isCancelled) {
+            setAddressSuggestions([]);
+            setAddressSearchState("error");
+          }
+        });
+    }, 250);
+
+    return () => {
+      isCancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [addressAutocomplete, form.streetAddress, isAddressSearchActive]);
+
+  const update = <Key extends keyof CustomerAddressFormState>(
+    key: Key,
+    value: CustomerAddressFormState[Key],
+  ) => {
+    const shouldClearResolvedAddress = [
+      "streetAddress",
+      "unit",
+      "city",
+      "state",
+      "zipCode",
+      "country",
+    ].includes(key);
+
+    onChange({
+      ...form,
+      [key]: value,
+      ...(shouldClearResolvedAddress
+        ? { latitude: null, longitude: null, placeId: null }
+        : {}),
+    });
+  };
+
+  async function selectAddressSuggestion(suggestion: AddressSuggestion) {
+    setAddressSearchState("searching");
+
+    try {
+      const resolvedSuggestion = addressAutocomplete.resolve
+        ? await addressAutocomplete.resolve(suggestion)
+        : suggestion;
+
+      onChange({
+        ...form,
+        streetAddress: resolvedSuggestion.streetAddress,
+        unit: resolvedSuggestion.unit ?? "",
+        city: resolvedSuggestion.city,
+        state: resolvedSuggestion.state,
+        zipCode: cleanZip(resolvedSuggestion.zipCode),
+        country: resolvedSuggestion.country || "US",
+        latitude: resolvedSuggestion.latitude ?? null,
+        longitude: resolvedSuggestion.longitude ?? null,
+        placeId: resolvedSuggestion.placeId ?? null,
+      });
+      setAddressSuggestions([]);
+      setIsAddressSearchActive(false);
+      setAddressSearchState("idle");
+    } catch {
+      setAddressSearchState("error");
+    }
+  }
+
+  return (
+    <div className="grid gap-4">
+      <label className="grid gap-2 text-sm font-bold text-slate-700">
+        Address Type
+        <select
+          className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-950 outline-none focus:border-[#0F6BFF]"
+          onChange={(event) => update("label", event.target.value)}
+          value={normalizeCustomerAddressType(form.label)}
+        >
+          {CUSTOMER_ADDRESS_TYPE_OPTIONS.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-3 text-sm font-bold text-slate-700">
+        Set as Primary Address
+        <input
+          checked={form.isPrimary}
+          className="h-5 w-5 accent-[#0F6BFF]"
+          onChange={(event) => update("isPrimary", event.target.checked)}
+          type="checkbox"
+        />
+      </label>
+      <div className="relative grid gap-2 text-sm font-bold text-slate-700">
+        <label htmlFor="customer-more-address">Street Address</label>
+        <input
+          className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-950 outline-none transition focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
+          id="customer-more-address"
+          onBlur={() => {
+            window.setTimeout(() => setIsAddressSearchActive(false), 160);
+          }}
+          onChange={(event) => {
+            const value = event.target.value;
+            setIsAddressSearchActive(true);
+            if (value.trim().length < 3) {
+              setAddressSuggestions([]);
+              setAddressSearchState("idle");
+            }
+            update("streetAddress", value);
+          }}
+          onFocus={() => setIsAddressSearchActive(true)}
+          placeholder={
+            addressAutocomplete.isConfigured
+              ? "Start typing to search addresses"
+              : "Street address"
+          }
+          value={form.streetAddress}
+        />
+        {addressAutocomplete.isConfigured && isAddressSearchActive ? (
+          <div className="absolute left-0 right-0 top-[4.75rem] z-20 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_18px_48px_rgba(15,23,42,0.18)]">
+            {addressSuggestions.length > 0 ? (
+              addressSuggestions.map((suggestion) => (
+                <button
+                  className="block w-full border-b border-slate-100 px-4 py-3 text-left text-sm font-bold text-slate-800 last:border-b-0 hover:bg-blue-50"
+                  key={`${suggestion.provider}-${suggestion.placeId ?? suggestion.label}`}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => void selectAddressSuggestion(suggestion)}
+                  type="button"
+                >
+                  {suggestion.label}
+                </button>
+              ))
+            ) : (
+              <p className="px-4 py-3 text-sm font-semibold text-slate-500">
+                {addressSearchState === "searching"
+                  ? "Searching addresses..."
+                  : addressSearchState === "error"
+                    ? "Address search is unavailable. Enter the address manually."
+                    : "Type at least 3 characters to search."}
+              </p>
+            )}
+          </div>
+        ) : null}
+      </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        <TextInput label="Apt / Unit / Suite" value={form.unit} onChange={(value) => update("unit", value)} />
+        <TextInput label="City" value={form.city} onChange={(value) => update("city", value)} />
+        <TextInput label="State" maxLength={2} value={form.state} onChange={(value) => update("state", value.toUpperCase())} />
+        <TextInput label="ZIP" maxLength={5} value={form.zipCode} onChange={(value) => update("zipCode", cleanZip(value))} />
+        <TextInput label="Country" maxLength={2} value={form.country} onChange={(value) => update("country", value.toUpperCase())} />
+      </div>
+      <ActionMessage actionState={actionState} />
+      <div className="grid gap-2 sm:grid-cols-2">
+        <button
+          className="rounded-xl border border-slate-200 px-4 py-3 text-sm font-black text-slate-700 transition hover:bg-slate-50"
+          onClick={onCancel}
+          type="button"
+        >
+          Cancel
+        </button>
+        <button
+          className="rounded-xl bg-[#0F6BFF] px-4 py-3 text-sm font-black text-white transition hover:bg-[#0057D9] disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={actionState.status === "saving"}
+          onClick={onSubmit}
+          type="button"
+        >
+          {actionState.status === "saving" ? "Saving..." : "Save Address"}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -4603,6 +5464,7 @@ function CustomerNotesPanel({
   onNoteBodyChange,
   onSubmit,
   actionState,
+  showJobNotes = true,
 }: {
   customerNotes: CustomerInternalNoteRow[];
   jobNotes: ServiceRequestNoteRow[];
@@ -4611,6 +5473,7 @@ function CustomerNotesPanel({
   onNoteBodyChange: (value: string) => void;
   onSubmit: () => void;
   actionState: ActionState;
+  showJobNotes?: boolean;
 }) {
   return (
     <div className="grid gap-4">
@@ -4655,6 +5518,7 @@ function CustomerNotesPanel({
         )}
       </div>
 
+      {showJobNotes ? (
       <div>
         <h3 className="text-sm font-black uppercase tracking-[0.12em] text-slate-500">
           Job notes
@@ -4663,6 +5527,7 @@ function CustomerNotesPanel({
           <NotesList notes={jobNotes} serviceRequests={serviceRequests} />
         </div>
       </div>
+      ) : null}
     </div>
   );
 }
