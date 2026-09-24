@@ -153,7 +153,9 @@ export function decideUnifiedInboundRoute(
   if (
     event.eventType === "booking_request" &&
     (event.channel === "booking_widget" ||
-      source.inboundSource?.channel === "booking_widget")
+      source.inboundSource?.channel === "booking_widget" ||
+      (event.channel === "website_form" &&
+        source.inboundSource?.channel === "website_form"))
   ) {
     return {
       route: "trusted_booking_candidate",

@@ -18,6 +18,7 @@ export const runtime = "nodejs";
 const MAX_BODY_BYTES = 32_000;
 
 type PublicWebsiteInboundPayload = {
+  formId?: unknown;
   customer?: {
     name?: unknown;
     firstName?: unknown;
@@ -80,6 +81,12 @@ type PublicWebsiteInboundPayload = {
   submissionId?: unknown;
   providerMetadata?: unknown;
 };
+
+const FORM_ROUTING_EVENT_TYPES = [
+  "booking_request",
+  "lead",
+  "website_form_submission",
+] as const satisfies readonly UnifiedInboundEventType[];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -200,6 +207,47 @@ function eventTypeForChannel(channel: string): UnifiedInboundEventType {
   return "website_form_submission";
 }
 
+function resolveEventTypeForPayload(
+  payload: PublicWebsiteInboundPayload,
+  credentialMetadata: Json,
+  channel: string,
+):
+  | { ok: true; eventType: UnifiedInboundEventType; formId?: string }
+  | { ok: false; message: string } {
+  const formId = cleanText(payload.formId, 120);
+  if (!formId) {
+    return { ok: true, eventType: eventTypeForChannel(channel) };
+  }
+
+  const metadata = isRecord(credentialMetadata) ? credentialMetadata : {};
+  const formRouting = metadata.form_routing;
+  if (!isRecord(formRouting)) {
+    return {
+      ok: false,
+      message: "Inbound form is not configured for this source.",
+    };
+  }
+
+  const routedEventType = formRouting[formId];
+  if (
+    typeof routedEventType !== "string" ||
+    !FORM_ROUTING_EVENT_TYPES.includes(
+      routedEventType as (typeof FORM_ROUTING_EVENT_TYPES)[number],
+    )
+  ) {
+    return {
+      ok: false,
+      message: "Inbound form is not configured for this source.",
+    };
+  }
+
+  return {
+    ok: true,
+    eventType: routedEventType as UnifiedInboundEventType,
+    formId,
+  };
+}
+
 function validatePayload(payload: PublicWebsiteInboundPayload): string[] {
   const errors: string[] = [];
   const customerName = cleanText(payload.customer?.name, 255);
@@ -277,6 +325,18 @@ export async function POST(request: Request) {
 
   const payload = bodyResult.payload;
   const credential = authResult.credential;
+  const eventTypeResult = resolveEventTypeForPayload(
+    bodyResult.payload,
+    credential.metadata,
+    credential.channel,
+  );
+  if (!eventTypeResult.ok) {
+    return NextResponse.json(
+      { ok: false, accepted: false, message: eventTypeResult.message },
+      { status: 400 },
+    );
+  }
+
   const providerEventId =
     cleanText(payload.providerEventId, 255) ??
     cleanText(payload.submissionId, 255) ??
@@ -288,7 +348,7 @@ export async function POST(request: Request) {
 
   const event = createUnifiedInboundEvent({
     channel: credential.channel,
-    eventType: eventTypeForChannel(credential.channel),
+    eventType: eventTypeResult.eventType,
     direction: "inbound",
     occurredAt: cleanText(payload.occurredAt, 64) ?? new Date().toISOString(),
     providerName: credential.providerName ?? "website",
@@ -345,6 +405,7 @@ export async function POST(request: Request) {
     },
     providerMetadata: {
       com06Endpoint: "public_website_inbound",
+      formId: eventTypeResult.formId ?? null,
       submittedProviderMetadata: cleanJsonRecord(payload.providerMetadata) ?? {},
     },
   });
