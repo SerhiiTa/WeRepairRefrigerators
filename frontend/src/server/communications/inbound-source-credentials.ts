@@ -65,11 +65,11 @@ export type VerifyInboundSourceCredentialResult =
       reason: string;
     };
 
-function getCredentialPepper(): string | null {
+export function getCredentialPepper(): string | null {
   return process.env.WRA_INBOUND_SOURCE_CREDENTIAL_PEPPER?.trim() || null;
 }
 
-function hmacSha256Hex(secret: string, pepper: string): string {
+export function hmacSha256Hex(secret: string, pepper: string): string {
   return createHmac("sha256", pepper).update(secret, "utf8").digest("hex");
 }
 
