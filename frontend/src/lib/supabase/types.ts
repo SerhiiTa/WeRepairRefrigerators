@@ -390,6 +390,12 @@ export type Database = {
           source_identifier: string;
           display_name: string | null;
           is_active: boolean;
+          supports_inbound_voice?: boolean;
+          supports_outbound_voice?: boolean;
+          supports_inbound_sms?: boolean;
+          supports_outbound_sms?: boolean;
+          is_default_outbound_voice?: boolean;
+          is_default_outbound_sms?: boolean;
           metadata: Json;
           created_at: string;
           updated_at: string;
