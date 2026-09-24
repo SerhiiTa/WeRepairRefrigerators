@@ -87,6 +87,17 @@ export const dashboardNavigationItems: DashboardNavigationItem[] = [
       "Unified incoming request inbox for manual, website, phone, SMS, email, Retell, Yelp, and Google sources.",
   },
   {
+    label: "Communications",
+    href: "/dashboard/communications",
+    allowedRoles: TECHNICIAN_ROLES,
+    allowedStatuses: ACTIVE_PROFILE_STATUSES,
+    requiresCompletedOnboarding: true,
+    visibility: "real",
+    group: "operations",
+    description:
+      "Customer communication workspace.",
+  },
+  {
     label: "Schedule",
     href: "/dashboard/technician-schedule",
     allowedRoles: TECHNICIAN_ROLES,
@@ -146,16 +157,6 @@ export const dashboardNavigationItems: DashboardNavigationItem[] = [
     visibility: "real",
     group: "operations",
     description: "Manuals and technical reference workspace.",
-  },
-  {
-    label: "Calls & Messages",
-    href: "/dashboard/communications",
-    allowedRoles: TECHNICIAN_ROLES,
-    allowedStatuses: ACTIVE_PROFILE_STATUSES,
-    requiresCompletedOnboarding: true,
-    visibility: "real",
-    group: "operations",
-    description: "Customer communication workspace.",
   },
   {
     label: "Community",

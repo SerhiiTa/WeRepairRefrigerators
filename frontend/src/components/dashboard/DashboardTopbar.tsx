@@ -16,9 +16,11 @@ export function DashboardTopbar() {
   const [isGlobalSearchOpen, setIsGlobalSearchOpen] = useState(false);
   const isJobsCenter = pathname === "/dashboard/leads";
   const isJobWorkspace = /^\/dashboard\/leads\/[^/]+$/.test(pathname);
+  const isCommunicationsWorkspace = pathname === "/dashboard/communications";
   const isCustomersIndex = pathname === "/dashboard/customers";
   const isCustomerWorkspace = /^\/dashboard\/customers\/[^/]+$/.test(pathname);
-  const usesCompactMobileAppBar = isJobsCenter || isCustomersIndex;
+  const usesCompactMobileAppBar =
+    isJobsCenter || isCustomersIndex || isCommunicationsWorkspace;
 
   if (pathname === "/dashboard") {
     return null;
@@ -38,48 +40,54 @@ export function DashboardTopbar() {
 
   if (usesCompactMobileAppBar) {
     return (
-      <header className="border-b border-[#E5E7EB] bg-white px-4 py-3 shadow-[0_8px_24px_rgba(15,23,42,0.04)] sm:px-6 lg:px-8">
-        {isCustomersIndex ? (
+      <header
+        className={`border-b border-[#E5E7EB] bg-white px-4 py-3 shadow-[0_8px_24px_rgba(15,23,42,0.04)] sm:px-6 lg:px-8 ${
+          isCommunicationsWorkspace ? "lg:hidden" : ""
+        }`}
+      >
+        {isCustomersIndex || isCommunicationsWorkspace ? (
           <div className="flex min-h-12 items-center justify-between gap-3 lg:hidden">
             <div className="flex min-w-0 items-center gap-3">
               <DashboardMobileDrawer trigger="hamburger" />
               <h1 className="truncate text-xl font-medium tracking-normal text-[#0F172A]">
-                Customers
+                {isCustomersIndex ? "Customers" : "Communications"}
               </h1>
             </div>
-            <div className="flex shrink-0 items-center gap-3">
-              <button
-                aria-label="Create customer"
-                className="flex h-10 w-10 items-center justify-center rounded-full text-4xl font-light leading-none text-[#0F6BFF] transition hover:bg-blue-50"
-                onClick={() =>
-                  window.dispatchEvent(new CustomEvent("wra:create-customer"))
-                }
-                type="button"
-              >
-                +
-              </button>
-              <button
-                aria-label="Open global search"
-                className="flex h-10 w-10 items-center justify-center rounded-full text-[#1E293B] transition hover:bg-slate-100"
-                onClick={() => setIsGlobalSearchOpen(true)}
-                type="button"
-              >
-                <svg
-                  aria-hidden="true"
-                  className="h-7 w-7"
-                  fill="none"
-                  viewBox="0 0 24 24"
+            {isCustomersIndex ? (
+              <div className="flex shrink-0 items-center gap-3">
+                <button
+                  aria-label="Create customer"
+                  className="flex h-10 w-10 items-center justify-center rounded-full text-4xl font-light leading-none text-[#0F6BFF] transition hover:bg-blue-50"
+                  onClick={() =>
+                    window.dispatchEvent(new CustomEvent("wra:create-customer"))
+                  }
+                  type="button"
                 >
-                  <path
-                    d="m20 20-4.2-4.2M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4Z"
-                    stroke="currentColor"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="2"
-                  />
-                </svg>
-              </button>
-            </div>
+                  +
+                </button>
+                <button
+                  aria-label="Open global search"
+                  className="flex h-10 w-10 items-center justify-center rounded-full text-[#1E293B] transition hover:bg-slate-100"
+                  onClick={() => setIsGlobalSearchOpen(true)}
+                  type="button"
+                >
+                  <svg
+                    aria-hidden="true"
+                    className="h-7 w-7"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      d="m20 20-4.2-4.2M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4Z"
+                      stroke="currentColor"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="2"
+                    />
+                  </svg>
+                </button>
+              </div>
+            ) : null}
           </div>
         ) : (
           <div className="flex items-center justify-between gap-3 lg:hidden">
@@ -95,7 +103,7 @@ export function DashboardTopbar() {
             <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#0F6BFF]">
               Dashboard
             </p>
-              <h1 className="mt-1 text-2xl font-black tracking-tight text-[#0F172A]">
+            <h1 className="mt-1 text-2xl font-black tracking-tight text-[#0F172A]">
               {isCustomersIndex ? "Customers" : "Jobs command center"}
             </h1>
           </div>

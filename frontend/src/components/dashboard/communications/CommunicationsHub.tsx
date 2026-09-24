@@ -17,6 +17,7 @@ import type {
   DatabaseCommunicationSourceType,
   DatabaseCommunicationTimelineEventType,
   IntakeRequestRow,
+  Json,
   PublicSchema,
   ServiceRequestRow,
 } from "@/lib/supabase/types";
@@ -25,9 +26,9 @@ type MessageRow = PublicSchema["Tables"]["communication_messages"]["Row"];
 type TranscriptRow = PublicSchema["Tables"]["communication_transcripts"]["Row"];
 
 type HubState =
-  | { status: "loading"; conversations: CommunicationConversation[]; error: null }
-  | { status: "ready"; conversations: CommunicationConversation[]; error: null }
-  | { status: "error"; conversations: CommunicationConversation[]; error: string };
+  | { status: "loading"; conversations: HubConversation[]; error: null }
+  | { status: "ready"; conversations: HubConversation[]; error: null }
+  | { status: "error"; conversations: HubConversation[]; error: string };
 
 type DetailState =
   | { status: "idle"; data: ConversationDetailData; error: null }
@@ -82,8 +83,17 @@ type ConversationRow = {
   call_ended_at: string | null;
   intake_request_id: string | null;
   service_request_id: string | null;
+  source_account_id?: string | null;
+  inbound_source_id?: string | null;
+  attribution?: Json | null;
   created_at: string;
   updated_at: string;
+};
+
+type HubConversation = CommunicationConversation & {
+  sourceAccountId: string | null;
+  inboundSourceId: string | null;
+  attribution: Json | null;
 };
 
 type TimelineRow = {
@@ -108,7 +118,10 @@ const emptyDetailData: ConversationDetailData = {
   timelineEvents: [],
 };
 
-function mapConversation(row: ConversationRow): CommunicationConversation {
+type ContextTab = "customer" | "intake" | "job" | "activity";
+type ChannelFilter = "all" | "calls" | "texts" | "forms" | "booking";
+
+function mapConversation(row: ConversationRow): HubConversation {
   return {
     id: row.id,
     sourceType: row.primary_source_type,
@@ -126,6 +139,9 @@ function mapConversation(row: ConversationRow): CommunicationConversation {
     callEndedAt: row.call_ended_at,
     linkedIntakeRequestId: row.intake_request_id,
     linkedServiceRequestId: row.service_request_id,
+    sourceAccountId: row.source_account_id ?? null,
+    inboundSourceId: row.inbound_source_id ?? null,
+    attribution: row.attribution ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -160,6 +176,90 @@ function getSourceLabel(sourceType: DatabaseCommunicationSourceType): string {
   };
 
   return labels[sourceType];
+}
+
+function getChannelFilter(conversation: HubConversation): ChannelFilter {
+  if (conversation.sourceType === "phone") {
+    return "calls";
+  }
+  if (conversation.sourceType === "sms") {
+    return "texts";
+  }
+  if (conversation.sourceType === "website_form") {
+    return "forms";
+  }
+  if (getAttributionValue(conversation.attribution, "channel") === "booking_widget") {
+    return "booking";
+  }
+
+  return "all";
+}
+
+function getConversationTitle(conversation: HubConversation): string {
+  return (
+    conversation.customerDisplayName ??
+    conversation.customerPhone ??
+    conversation.customerEmail ??
+    "Unknown customer"
+  );
+}
+
+function getConversationPreview(conversation: HubConversation): string {
+  return conversation.summary ?? conversation.nextAction ?? "No message preview yet.";
+}
+
+function getAttributionRecord(value: Json | null | undefined): Record<string, Json> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, Json>)
+    : null;
+}
+
+function getAttributionValue(value: Json | null | undefined, key: string): string | null {
+  const record = getAttributionRecord(value);
+  const direct = record?.[key];
+
+  if (typeof direct === "string" && direct.trim()) {
+    return direct.trim();
+  }
+
+  const utm = getAttributionRecord(record?.utm);
+  const nested = utm?.[key.replace(/^utm_/, "")];
+
+  return typeof nested === "string" && nested.trim() ? nested.trim() : null;
+}
+
+function getAttributionRows(conversation: HubConversation) {
+  return [
+    ["Source", getAttributionValue(conversation.attribution, "source_name")],
+    ["Channel", getSourceLabel(conversation.sourceType)],
+    ["Website", getAttributionValue(conversation.attribution, "websiteDomain") ?? getAttributionValue(conversation.attribution, "website_domain")],
+    ["Campaign", getAttributionValue(conversation.attribution, "campaign") ?? getAttributionValue(conversation.attribution, "utm_campaign")],
+    ["Tracking #", getAttributionValue(conversation.attribution, "trackingPhoneNumber") ?? getAttributionValue(conversation.attribution, "tracking_phone_number")],
+    ["UTM source", getAttributionValue(conversation.attribution, "utm_source")],
+  ].filter((row): row is [string, string] => Boolean(row[1]));
+}
+
+function getInitialQueryParam(name: string): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  return new URLSearchParams(window.location.search).get(name);
+}
+
+function getInitialChannelFilter(): ChannelFilter {
+  const value = getInitialQueryParam("channel");
+  return value === "calls" ||
+    value === "texts" ||
+    value === "forms" ||
+    value === "booking"
+    ? value
+    : "all";
+}
+
+function getInitialInboxTab(): "inbox" | "assigned" | "archived" {
+  const value = getInitialQueryParam("box");
+  return value === "assigned" || value === "archived" ? value : "inbox";
 }
 
 function getStatusLabel(status: string): string {
@@ -235,54 +335,6 @@ function getHubReadError(message: string) {
   return "Communications Hub is unavailable right now.";
 }
 
-function getProblemSummary(conversation: CommunicationConversation, detail: ConversationDetailData) {
-  return (
-    detail.job?.issue_description ??
-    detail.intake?.problem_description ??
-    conversation.summary ??
-    "Not captured"
-  );
-}
-
-function getApplianceSummary(detail: ConversationDetailData) {
-  const applianceType =
-    detail.appliance?.appliance_type ??
-    detail.job?.appliance_type ??
-    detail.intake?.appliance_type;
-  const brand =
-    detail.appliance?.brand ?? detail.job?.appliance_brand ?? detail.intake?.brand;
-
-  return [brand, applianceType].filter(Boolean).join(" ") || "Not captured";
-}
-
-function getApplianceMatchStatus(detail: ConversationDetailData) {
-  if (detail.appliance) {
-    return "Matched";
-  }
-
-  if (
-    detail.job?.customer_appliance_id ||
-    detail.job?.appliance_type ||
-    detail.intake?.appliance_type
-  ) {
-    return "Possible match";
-  }
-
-  return "Not matched";
-}
-
-function getJobState(detail: ConversationDetailData) {
-  if (detail.job) {
-    return "Converted job exists";
-  }
-
-  if (detail.intake) {
-    return "No job yet";
-  }
-
-  return "No intake or job yet";
-}
-
 function getRequiredNextAction(detail: ConversationDetailData, conversation: CommunicationConversation) {
   if (!detail.intake) {
     return "Review conversation";
@@ -343,7 +395,9 @@ export function CommunicationsHub() {
     conversations: [],
     error: null,
   });
-  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(() =>
+    getInitialQueryParam("conversation"),
+  );
   const [detailState, setDetailState] = useState<DetailState>({
     status: "idle",
     data: emptyDetailData,
@@ -355,6 +409,17 @@ export function CommunicationsHub() {
     audioUrl: null,
     message: null,
   });
+  const [activeFilter, setActiveFilter] = useState<ChannelFilter>(getInitialChannelFilter);
+  const [inboxTab, setInboxTab] =
+    useState<"inbox" | "assigned" | "archived">(getInitialInboxTab);
+  const [searchQuery, setSearchQuery] = useState(() => getInitialQueryParam("q") ?? "");
+  const [contextTab, setContextTab] = useState<ContextTab>("customer");
+  const [mobileDetailOpen, setMobileDetailOpen] = useState(
+    () => getInitialQueryParam("view") === "detail" && Boolean(getInitialQueryParam("conversation")),
+  );
+  const [mobileDetailTab, setMobileDetailTab] = useState<
+    "conversation" | ContextTab
+  >("conversation");
 
   useEffect(() => {
     let isMounted = true;
@@ -376,7 +441,7 @@ export function CommunicationsHub() {
       const { data, error } = await supabase
         .from("communication_conversations")
         .select(
-          "id,primary_source_type,status,provider_name,customer_display_name,customer_id,customer_phone,customer_email,service_address,summary,next_action,last_event_at,call_started_at,call_ended_at,intake_request_id,service_request_id,created_at,updated_at",
+          "id,primary_source_type,status,provider_name,customer_display_name,customer_id,customer_phone,customer_email,service_address,summary,next_action,last_event_at,call_started_at,call_ended_at,intake_request_id,service_request_id,source_account_id,inbound_source_id,attribution,created_at,updated_at",
         )
         .order("updated_at", { ascending: false })
         .limit(50);
@@ -660,28 +725,136 @@ export function CommunicationsHub() {
       ) ?? null,
     [hubState.conversations, selectedConversationId],
   );
+  const filteredConversations = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+
+    return hubState.conversations.filter((conversation) => {
+      const matchesFilter =
+        activeFilter === "all" || getChannelFilter(conversation) === activeFilter;
+      const matchesInbox =
+        inboxTab === "archived"
+          ? conversation.status === "resolved"
+          : inboxTab === "assigned"
+            ? conversation.status !== "resolved"
+            : conversation.status !== "resolved";
+      const haystack = [
+        getConversationTitle(conversation),
+        conversation.customerPhone,
+        conversation.customerEmail,
+        conversation.serviceAddress,
+        conversation.summary,
+        conversation.nextAction,
+        getSourceLabel(conversation.sourceType),
+        formatProviderName(conversation.providerName),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return matchesFilter && matchesInbox && (!query || haystack.includes(query));
+    });
+  }, [activeFilter, hubState.conversations, inboxTab, searchQuery]);
+  const channelCounts = useMemo(
+    () => ({
+      all: hubState.conversations.length,
+      calls: hubState.conversations.filter((item) => getChannelFilter(item) === "calls").length,
+      texts: hubState.conversations.filter((item) => getChannelFilter(item) === "texts").length,
+      forms: hubState.conversations.filter((item) => getChannelFilter(item) === "forms").length,
+      booking: hubState.conversations.filter((item) => getChannelFilter(item) === "booking").length,
+    }),
+    [hubState.conversations],
+  );
   const detail = detailState.data;
-  const latestMessage = detail.messages[0] ?? null;
   const latestTranscript = detail.transcripts[0] ?? null;
+  const chronologicalMessages = [...detail.messages].reverse();
+  const chronologicalTimeline = [...detail.timelineEvents].reverse();
+  const visibleTimeline = chronologicalTimeline.filter((event) => {
+    const eventBody = event.body?.trim();
+    const summary = selectedConversation?.summary?.trim();
+
+    return !(
+      selectedConversation?.sourceType === "phone" &&
+      event.type === "incoming_call" &&
+      eventBody &&
+      summary &&
+      eventBody === summary
+    );
+  });
   const recordingAudioUrl = recordingState.status === "ready" ? recordingState.audioUrl : null;
   const requiredAction = selectedConversation
     ? getRequiredNextAction(detail, selectedConversation)
     : "Select conversation";
+  const buildCommunicationsReturnTo = (conversationId = selectedConversationId) => {
+    const params = new URLSearchParams();
+    if (conversationId) {
+      params.set("conversation", conversationId);
+      params.set("view", "detail");
+    }
+    if (activeFilter !== "all") {
+      params.set("channel", activeFilter);
+    }
+    if (inboxTab !== "inbox") {
+      params.set("box", inboxTab);
+    }
+    if (searchQuery.trim()) {
+      params.set("q", searchQuery.trim());
+    }
+
+    const query = params.toString();
+    return query ? `/dashboard/communications?${query}` : "/dashboard/communications";
+  };
+  const openConversation = (conversationId: string) => {
+    setSelectedConversationId(conversationId);
+    setMobileDetailOpen(true);
+    setMobileDetailTab("conversation");
+    if (typeof window !== "undefined") {
+      window.history.pushState(null, "", buildCommunicationsReturnTo(conversationId));
+    }
+  };
+  const destinationReturnTo = buildCommunicationsReturnTo();
+  const withReturnTo = (href: string) =>
+    `${href}${href.includes("?") ? "&" : "?"}returnTo=${encodeURIComponent(
+      destinationReturnTo,
+    )}`;
+  const intakeHref = detail.intake
+    ? `/dashboard/intake?selected=${encodeURIComponent(detail.intake.id)}`
+    : "/dashboard/intake";
 
   return (
     <main className="space-y-5">
-      <section className="rounded-2xl border border-[#E5E7EB] bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
-        <div className="flex flex-col gap-2">
-          <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
-            Communications Hub
+      <section className="flex flex-col gap-4 rounded-2xl border border-[#E5E7EB] bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.06)] lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <h1 className="text-3xl font-semibold text-[#0F172A]">Communications</h1>
+          <p className="mt-2 text-sm font-medium leading-6 text-[#475569]">
+            All incoming calls, texts, website forms and booking requests in one place.
           </p>
-          <h1 className="text-2xl font-black text-[#0F172A]">
-            Calls, Messages, and Intake
-          </h1>
-          <p className="max-w-3xl text-sm font-semibold leading-6 text-[#64748B]">
-            Decide what happened after a customer contact: who called, what they said,
-            whether the customer/intake/job exists, and what action is required next.
-          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {([
+            ["all", "All"],
+            ["calls", "Calls"],
+            ["texts", "Texts"],
+            ["forms", "Forms"],
+            ["booking", "Booking"],
+          ] as Array<[ChannelFilter, string]>).map(([value, label]) => (
+            <button
+              className={`rounded-lg border px-3 py-2 text-sm font-semibold transition ${
+                activeFilter === value
+                  ? "border-[#0F6BFF] bg-blue-50 text-[#0F6BFF]"
+                  : "border-[#E5E7EB] bg-white text-[#475569] hover:border-blue-200"
+              }`}
+              key={value}
+              onClick={() => setActiveFilter(value)}
+              type="button"
+            >
+              {label}
+              {channelCounts[value] > 0 ? (
+                <span className="ml-2 rounded-md bg-[#E2E8F0] px-1.5 py-0.5 text-xs">
+                  {channelCounts[value]}
+                </span>
+              ) : null}
+            </button>
+          ))}
         </div>
       </section>
 
@@ -691,64 +864,350 @@ export function CommunicationsHub() {
         </section>
       ) : null}
 
-      <section className="grid gap-5 xl:grid-cols-[0.8fr_1.1fr_0.9fr]">
-        <aside className="rounded-2xl border border-[#E5E7EB] bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-lg font-black text-[#0F172A]">Conversations</h2>
-              <p className="mt-1 text-sm font-semibold text-[#64748B]">
-                Calls and future messages needing review.
-              </p>
+      <section className="xl:hidden">
+        {!mobileDetailOpen ? (
+          <aside className="overflow-hidden rounded-2xl border border-[#E5E7EB] bg-white shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
+            <div className="border-b border-[#E5E7EB] p-4">
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {([
+                  ["inbox", "Inbox"],
+                  ["assigned", "Assigned"],
+                  ["archived", "Archived"],
+                ] as Array<[typeof inboxTab, string]>).map(([value, label]) => (
+                  <button
+                    className={`shrink-0 rounded-lg px-3 py-2 text-sm font-semibold ${
+                      inboxTab === value
+                        ? "bg-blue-50 text-[#0F6BFF]"
+                        : "text-[#64748B] hover:bg-[#F8FAFC]"
+                    }`}
+                    key={value}
+                    onClick={() => setInboxTab(value)}
+                    type="button"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <input
+                className="mt-3 w-full rounded-lg border border-[#E5E7EB] px-3 py-2 text-sm font-medium text-[#0F172A] outline-none placeholder:text-[#94A3B8] focus:border-[#0F6BFF]"
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search conversations..."
+                type="search"
+                value={searchQuery}
+              />
             </div>
-            <span className="rounded-full bg-[#F8FAFC] px-3 py-1 text-xs font-black text-[#64748B]">
-              {hubState.conversations.length}
-            </span>
+
+            <div className="max-h-[calc(100vh-280px)] overflow-y-auto">
+              {hubState.status === "loading" ? (
+                <p className="m-4 rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-4 text-sm font-semibold text-[#64748B]">
+                  Loading conversations...
+                </p>
+              ) : filteredConversations.length === 0 ? (
+                <EmptyState
+                  title="No conversations yet"
+                  body="Calls and future messages appear here when they match this view."
+                />
+              ) : (
+                filteredConversations.map((conversation) => {
+                  const flags = getConversationFlags(conversation);
+
+                  return (
+                    <button
+                      className="w-full border-b border-[#E5E7EB] bg-white p-4 text-left transition hover:bg-[#F8FAFC]"
+                      key={conversation.id}
+                      onClick={() => openConversation(conversation.id)}
+                      type="button"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="min-w-0 truncate text-sm font-black text-[#0F172A]">
+                          {getConversationTitle(conversation)}
+                        </p>
+                        <p className="shrink-0 text-xs font-bold text-[#0F6BFF]">
+                          {formatActivity(conversation)}
+                        </p>
+                      </div>
+                      <p className="mt-1 line-clamp-2 text-sm font-medium leading-5 text-[#334155]">
+                        {getConversationPreview(conversation)}
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <Badge tone="blue">{getSourceLabel(conversation.sourceType)}</Badge>
+                        <Badge tone="purple">{formatProviderName(conversation.providerName)}</Badge>
+                        <Badge tone="amber">{getStatusLabel(conversation.status)}</Badge>
+                        {flags.slice(0, 1).map((flag) => (
+                          <Badge key={flag.label} tone={flag.tone}>
+                            {flag.label}
+                          </Badge>
+                        ))}
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </aside>
+        ) : selectedConversation ? (
+          <section className="overflow-hidden rounded-2xl border border-[#E5E7EB] bg-white shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
+            <div className="border-b border-[#E5E7EB] p-4">
+              <button
+                className="mb-3 text-sm font-semibold text-[#0F6BFF]"
+                onClick={() => setMobileDetailOpen(false)}
+                type="button"
+              >
+                ‹ Communications
+              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-xl font-semibold text-[#0F172A]">
+                  {getConversationTitle(selectedConversation)}
+                </h2>
+                <Badge tone="blue">{getSourceLabel(selectedConversation.sourceType)}</Badge>
+                <Badge>{getStatusLabel(selectedConversation.status)}</Badge>
+              </div>
+              <p className="mt-2 text-sm font-medium text-[#64748B]">
+                {formatProviderName(selectedConversation.providerName)} ·{" "}
+                {formatActivity(selectedConversation)}
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  className="rounded-lg border border-[#E5E7EB] px-3 py-2 text-sm font-semibold text-[#64748B]"
+                  disabled
+                  type="button"
+                >
+                  Assign
+                </button>
+                <button
+                  className="rounded-lg border border-[#E5E7EB] px-3 py-2 text-sm font-semibold text-[#64748B]"
+                  disabled
+                  type="button"
+                >
+                  Create Job
+                </button>
+                {detail.intake ? (
+                  <ActionLink href={withReturnTo(intakeHref)} label="Open Intake" />
+                ) : (
+                  <ActionLink href={withReturnTo(intakeHref)} label="Create Intake" />
+                )}
+              </div>
+            </div>
+
+            <div className="flex overflow-x-auto border-b border-[#E5E7EB]">
+              {([
+                ["conversation", "Conversation"],
+                ["customer", "Customer"],
+                ["intake", "Intake"],
+                ["job", "Job"],
+                ["activity", "Activity"],
+              ] as Array<[typeof mobileDetailTab, string]>).map(([value, label]) => (
+                <button
+                  className={`shrink-0 px-4 py-3 text-sm font-semibold ${
+                    mobileDetailTab === value
+                      ? "border-b-2 border-[#0F6BFF] text-[#0F6BFF]"
+                      : "text-[#64748B]"
+                  }`}
+                  key={value}
+                  onClick={() => setMobileDetailTab(value)}
+                  type="button"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div className="space-y-4 bg-[#F8FAFC] p-4">
+              {detailState.status === "loading" ? (
+                <p className="rounded-xl border border-[#E5E7EB] bg-white p-4 text-sm font-semibold text-[#64748B]">
+                  Loading conversation...
+                </p>
+              ) : detailState.status === "error" ? (
+                <p className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-900">
+                  {detailState.error}
+                </p>
+              ) : mobileDetailTab === "conversation" ? (
+                <>
+                  {selectedConversation.sourceType === "phone" ? (
+                    <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
+                      <p className="text-sm font-semibold text-[#0F172A]">Inbound call</p>
+                      <p className="mt-1 text-xs font-medium text-[#64748B]">
+                        {selectedConversation.customerPhone ?? "No phone captured"}
+                        {recordingState.status === "ready" &&
+                        recordingState.recording?.durationMs
+                          ? ` · ${formatDuration(recordingState.recording.durationMs)}`
+                          : ""}
+                      </p>
+                      {latestTranscript?.transcript_text ? (
+                        <div className="mt-4">
+                          <p className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
+                            Transcript
+                          </p>
+                          <p className="mt-2 whitespace-pre-line text-sm font-medium leading-6 text-[#334155]">
+                            {latestTranscript.transcript_text}
+                          </p>
+                        </div>
+                      ) : null}
+                      <div className="mt-3">
+                        <RecordingPlayer
+                          audioUrl={recordingAudioUrl}
+                          recordingState={recordingState}
+                        />
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {chronologicalMessages.map((message) => {
+                    const outbound = message.direction === "outbound";
+                    return (
+                      <div
+                        className={`flex ${outbound ? "justify-end" : "justify-start"}`}
+                        key={message.id}
+                      >
+                        <div
+                          className={`max-w-[88%] rounded-2xl px-4 py-3 ${
+                            outbound
+                              ? "bg-[#0F6BFF] text-white"
+                              : "bg-white text-[#0F172A]"
+                          }`}
+                        >
+                          <p className="text-sm font-medium leading-6">
+                            {message.body ?? "Message body unavailable."}
+                          </p>
+                          <p
+                            className={`mt-1 text-xs font-medium ${
+                              outbound ? "text-blue-100" : "text-[#64748B]"
+                            }`}
+                          >
+                            {formatServiceRequestDate(message.occurred_at)}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {visibleTimeline.slice(-6).map((event) => (
+                    <PreviewBlock
+                      key={event.id}
+                      label={event.title || getTimelineEventLabel(event.type)}
+                      timestamp={event.eventTime}
+                      value={event.body ?? "No details captured."}
+                    />
+                  ))}
+
+                  <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
+                    <div className="mb-3 flex gap-4 text-sm font-semibold">
+                      <span className="text-[#0F6BFF]">Message</span>
+                      <span className="text-[#64748B]">Note</span>
+                      <span className="text-[#64748B]">Internal</span>
+                    </div>
+                    <textarea
+                      className="h-24 w-full resize-none rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3 text-sm font-medium text-[#64748B]"
+                      disabled
+                      placeholder="Outbound messaging is not connected yet."
+                    />
+                    <div className="mt-3 flex justify-end">
+                      <button
+                        className="rounded-lg bg-blue-200 px-5 py-2 text-sm font-semibold text-white"
+                        disabled
+                        type="button"
+                      >
+                        Send
+                      </button>
+                    </div>
+                  </div>
+                </>
+              ) : mobileDetailTab === "customer" ? (
+                <MobileCustomerPanel
+                  conversation={selectedConversation}
+                  detail={detail}
+                  returnTo={destinationReturnTo}
+                />
+              ) : mobileDetailTab === "intake" ? (
+                <MobileIntakePanel
+                  detail={detail}
+                  requiredAction={requiredAction}
+                  returnTo={destinationReturnTo}
+                />
+              ) : mobileDetailTab === "job" ? (
+                <MobileJobPanel detail={detail} returnTo={destinationReturnTo} />
+              ) : (
+                <MobileActivityPanel events={detail.timelineEvents} />
+              )}
+            </div>
+          </section>
+        ) : null}
+      </section>
+
+      <section className="hidden min-h-[720px] gap-4 xl:grid xl:grid-cols-[360px_minmax(0,1fr)_340px]">
+        <aside className="overflow-hidden rounded-2xl border border-[#E5E7EB] bg-white shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
+          <div className="border-b border-[#E5E7EB] p-4">
+            <div className="flex gap-2">
+              {([
+                ["inbox", "Inbox"],
+                ["assigned", "Assigned"],
+                ["archived", "Archived"],
+              ] as Array<[typeof inboxTab, string]>).map(([value, label]) => (
+                <button
+                  className={`rounded-lg px-3 py-2 text-sm font-semibold ${
+                    inboxTab === value
+                      ? "bg-blue-50 text-[#0F6BFF]"
+                      : "text-[#64748B] hover:bg-[#F8FAFC]"
+                  }`}
+                  key={value}
+                  onClick={() => setInboxTab(value)}
+                  type="button"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <input
+              className="mt-3 w-full rounded-lg border border-[#E5E7EB] px-3 py-2 text-sm font-medium text-[#0F172A] outline-none placeholder:text-[#94A3B8] focus:border-[#0F6BFF]"
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search conversations..."
+              type="search"
+              value={searchQuery}
+            />
           </div>
 
-          <div className="mt-4 max-h-[72rem] space-y-2 overflow-y-auto pr-1">
+          <div className="max-h-[680px] overflow-y-auto">
             {hubState.status === "loading" ? (
-              <p className="rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-4 text-sm font-semibold text-[#64748B]">
+              <p className="m-4 rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-4 text-sm font-semibold text-[#64748B]">
                 Loading conversations...
               </p>
-            ) : hubState.conversations.length === 0 ? (
+            ) : filteredConversations.length === 0 ? (
               <EmptyState
                 title="No conversations yet"
-                body="Phone calls and future messages appear here when they are available."
+                body="Calls and future messages appear here when they match this view."
               />
             ) : (
-              hubState.conversations.map((conversation) => {
+              filteredConversations.map((conversation) => {
                 const selected = conversation.id === selectedConversationId;
                 const flags = getConversationFlags(conversation);
 
                 return (
                   <button
-                    className={`w-full rounded-xl border p-3 text-left transition ${
+                    className={`w-full border-b border-[#E5E7EB] p-4 text-left transition ${
                       selected
-                        ? "border-[#0F6BFF] bg-blue-50"
-                        : "border-[#E5E7EB] bg-white hover:border-blue-200 hover:bg-[#F8FAFC]"
+                        ? "bg-blue-50 shadow-[inset_3px_0_0_#0F6BFF]"
+                        : "bg-white hover:bg-[#F8FAFC]"
                     }`}
                     key={conversation.id}
-                    onClick={() => setSelectedConversationId(conversation.id)}
+                    onClick={() => openConversation(conversation.id)}
                     type="button"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <p className="truncate text-sm font-black text-[#0F172A]">
-                          {conversation.customerDisplayName ?? "Unknown customer"}
-                        </p>
-                        <p className="mt-1 truncate text-xs font-bold text-[#64748B]">
-                          {[conversation.customerPhone, conversation.customerEmail]
-                            .filter(Boolean)
-                            .join(" · ") || "No contact captured"}
+                          {getConversationTitle(conversation)}
                         </p>
                       </div>
-                      <Badge tone="blue">{getSourceLabel(conversation.sourceType)}</Badge>
+                      <p className="shrink-0 text-xs font-bold text-[#0F6BFF]">
+                        {formatActivity(conversation)}
+                      </p>
                     </div>
-                    <p className="mt-2 line-clamp-2 text-xs font-semibold leading-5 text-[#64748B]">
-                      {conversation.summary ?? conversation.nextAction ?? "No summary yet."}
+                    <p className="mt-1 line-clamp-2 text-sm font-medium leading-5 text-[#334155]">
+                      {getConversationPreview(conversation)}
                     </p>
                     <div className="mt-2 flex flex-wrap gap-2">
-                      <Badge>{formatProviderName(conversation.providerName)}</Badge>
+                      <Badge tone="blue">{getSourceLabel(conversation.sourceType)}</Badge>
+                      <Badge tone="purple">{formatProviderName(conversation.providerName)}</Badge>
                       <Badge tone="amber">{getStatusLabel(conversation.status)}</Badge>
                       {flags.slice(0, 2).map((flag) => (
                         <Badge key={flag.label} tone={flag.tone}>
@@ -756,9 +1215,6 @@ export function CommunicationsHub() {
                         </Badge>
                       ))}
                     </div>
-                    <p className="mt-2 text-[11px] font-bold text-[#64748B]">
-                      {formatActivity(conversation)}
-                    </p>
                   </button>
                 );
               })
@@ -766,210 +1222,464 @@ export function CommunicationsHub() {
           </div>
         </aside>
 
-        <section className="rounded-2xl border border-[#E5E7EB] bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
+        <section className="flex min-h-[720px] flex-col overflow-hidden rounded-2xl border border-[#E5E7EB] bg-white shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
           {selectedConversation ? (
-            <div className="space-y-4">
-              <div>
-                <p className="text-xs font-black uppercase tracking-[0.16em] text-[#0F6BFF]">
-                  Decision Card
-                </p>
-                <h2 className="mt-1 text-xl font-black text-[#0F172A]">
-                  {requiredAction}
-                </h2>
-                <p className="mt-1 text-sm font-semibold leading-6 text-[#64748B]">
-                  This card answers the post-call workflow questions. Use the
-                  existing action links below when the decision is clear.
-                </p>
+            <>
+              <div className="flex flex-col gap-3 border-b border-[#E5E7EB] p-5 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="text-2xl font-semibold text-[#0F172A]">
+                      {getConversationTitle(selectedConversation)}
+                    </h2>
+                    <Badge tone="blue">{getSourceLabel(selectedConversation.sourceType)}</Badge>
+                    <Badge>{getStatusLabel(selectedConversation.status)}</Badge>
+                  </div>
+                  <p className="mt-2 text-sm font-medium text-[#64748B]">
+                    Started {formatActivity(selectedConversation)}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    className="rounded-lg border border-[#E5E7EB] px-3 py-2 text-sm font-semibold text-[#64748B]"
+                    disabled
+                    type="button"
+                  >
+                    Assign
+                  </button>
+                  <button
+                    className="rounded-lg border border-[#E5E7EB] px-3 py-2 text-sm font-semibold text-[#64748B]"
+                    disabled
+                    type="button"
+                  >
+                    Create Job
+                  </button>
+                  {detail.intake ? (
+                    <ActionLink href={withReturnTo(intakeHref)} label="Open Intake" />
+                  ) : (
+                    <ActionLink href={withReturnTo(intakeHref)} label="Create Intake" />
+                  )}
+                </div>
               </div>
 
               {detailState.status === "loading" ? (
-                <p className="rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-4 text-sm font-semibold text-[#64748B]">
-                  Loading decision context...
+                <p className="m-5 rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-4 text-sm font-semibold text-[#64748B]">
+                  Loading conversation...
                 </p>
               ) : detailState.status === "error" ? (
-                <p className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-900">
+                <p className="m-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-900">
                   {detailState.error}
                 </p>
               ) : (
                 <>
-                  <div className="grid gap-3">
-                    <DecisionRow
-                      label="Who contacted us?"
-                      value={
-                        detail.customer?.full_name ??
-                        selectedConversation.customerDisplayName ??
-                        "Unknown customer"
-                      }
-                      helper={
-                        [detail.customer?.phone ?? selectedConversation.customerPhone,
-                        detail.customer?.email ?? selectedConversation.customerEmail]
-                          .filter(Boolean)
-                          .join(" · ") || "Contact details not captured"
-                      }
-                    />
-                    <DecisionRow
-                      label="What did they say?"
-                      value={getProblemSummary(selectedConversation, detail)}
-                      helper={formatServiceAddress(detail, selectedConversation)}
-                    />
-                    <DecisionRow
-                      label="Existing customer?"
-                      value={detail.customer ? "Matched" : "Not matched"}
-                      helper={
-                        detail.customer
-                          ? "Customer object opens the Customer CRM."
-                          : "Use Intake to create or match the customer."
-                      }
-                    />
-                    <DecisionRow
-                      label="Intake?"
-                      value={detail.intake ? getStatusLabel(detail.intake.status) : "No intake"}
-                      helper={
-                        detail.intake
-                          ? "Review or convert from the Intake Inbox."
-                          : "No intake is linked to this conversation yet."
-                      }
-                    />
-                    <DecisionRow
-                      label="Appliance?"
-                      value={getApplianceMatchStatus(detail)}
-                      helper={getApplianceSummary(detail)}
-                    />
-                    <DecisionRow
-                      label="Job?"
-                      value={getJobState(detail)}
-                      helper={
-                        detail.job
-                          ? `${getStatusLabel(detail.job.status)} · ${detail.job.customer_name}`
-                          : "Convert the intake to a job when ready."
-                      }
-                    />
+                  <div className="flex-1 space-y-4 overflow-y-auto bg-[#F8FAFC] p-5">
+                    {selectedConversation.sourceType === "phone" ? (
+                      <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold text-[#0F172A]">
+                              Inbound call
+                            </p>
+                            <p className="mt-1 text-xs font-medium text-[#64748B]">
+                              {selectedConversation.customerPhone ?? "No phone captured"}
+                              {recordingState.status === "ready" &&
+                              recordingState.recording?.durationMs
+                                ? ` · ${formatDuration(recordingState.recording.durationMs)}`
+                                : ""}
+                            </p>
+                          </div>
+                          <Badge tone="blue">Call</Badge>
+                        </div>
+                        {latestTranscript?.transcript_text ? (
+                          <div className="mt-4 rounded-xl bg-[#F8FAFC] p-4">
+                            <p className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
+                              Transcript
+                            </p>
+                            <p className="mt-2 whitespace-pre-line text-sm font-medium leading-6 text-[#334155]">
+                              {latestTranscript.transcript_text}
+                            </p>
+                          </div>
+                        ) : null}
+                        <div className="mt-3">
+                          <RecordingPlayer
+                            audioUrl={recordingAudioUrl}
+                            recordingState={recordingState}
+                          />
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {chronologicalMessages.length === 0 &&
+                    visibleTimeline.length === 0 &&
+                    !latestTranscript ? (
+                      <EmptyState
+                        title="No conversation events yet"
+                        body="Messages, call events and internal timeline entries will appear here."
+                      />
+                    ) : null}
+
+                    {chronologicalMessages.map((message) => {
+                      const outbound = message.direction === "outbound";
+                      return (
+                        <div
+                          className={`flex ${outbound ? "justify-end" : "justify-start"}`}
+                          key={message.id}
+                        >
+                          <div
+                            className={`max-w-[78%] rounded-2xl px-4 py-3 ${
+                              outbound
+                                ? "bg-[#0F6BFF] text-white"
+                                : "bg-white text-[#0F172A]"
+                            }`}
+                          >
+                            <p className="text-sm font-medium leading-6">
+                              {message.body ?? "Message body unavailable."}
+                            </p>
+                            <p
+                              className={`mt-1 text-xs font-medium ${
+                                outbound ? "text-blue-100" : "text-[#64748B]"
+                              }`}
+                            >
+                              {formatServiceRequestDate(message.occurred_at)}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {visibleTimeline.slice(-6).map((event) => (
+                      <div
+                        className="rounded-xl border border-[#E5E7EB] bg-white p-3"
+                        key={event.id}
+                      >
+                        <p className="text-sm font-semibold text-[#0F172A]">
+                          {event.title || getTimelineEventLabel(event.type)}
+                        </p>
+                        {event.body ? (
+                          <p className="mt-1 text-sm font-medium leading-6 text-[#64748B]">
+                            {event.body}
+                          </p>
+                        ) : null}
+                        <p className="mt-2 text-xs font-medium text-[#64748B]">
+                          {formatServiceRequestDate(event.eventTime)}
+                        </p>
+                      </div>
+                    ))}
                   </div>
 
-                  <div className="rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3">
-                    <p className="text-[11px] font-black uppercase tracking-[0.14em] text-[#64748B]">
-                      Required next action
-                    </p>
-                    <p className="mt-1 text-lg font-black text-[#0F172A]">
-                      {requiredAction}
-                    </p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {detail.intake ? (
-                        <ActionLink href="/dashboard/intake" label="Review Intake" />
-                      ) : null}
-                      {detail.intake && !detail.customer ? (
-                        <ActionLink href="/dashboard/intake" label="Create / Match Customer" />
-                      ) : null}
-                      {detail.intake && !detail.appliance && getApplianceMatchStatus(detail) !== "Not matched" ? (
-                        <ActionLink href="/dashboard/intake" label="Create / Match Appliance" />
-                      ) : null}
-                      {detail.intake && !detail.job ? (
-                        <ActionLink href="/dashboard/intake" label="Convert to Job" />
-                      ) : null}
-                      {detail.customer ? (
-                        <ActionLink
-                          href={`/dashboard/customers/${detail.customer.id}`}
-                          label="Open Customer"
-                        />
-                      ) : null}
-                      {detail.job ? (
-                        <ActionLink href={`/dashboard/leads/${detail.job.id}`} label="Open Job" />
-                      ) : null}
-                      {!detail.intake && !detail.customer && !detail.job ? (
-                        <span className="rounded-full bg-white px-3 py-2 text-xs font-black text-[#64748B]">
-                          No action link yet
-                        </span>
-                      ) : null}
+                  <div className="border-t border-[#E5E7EB] p-4">
+                    <div className="mb-3 flex gap-4 text-sm font-semibold">
+                      <span className="text-[#0F6BFF]">Message</span>
+                      <span className="text-[#64748B]">Note</span>
+                      <span className="text-[#64748B]">Internal</span>
+                    </div>
+                    <textarea
+                      className="h-24 w-full resize-none rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3 text-sm font-medium text-[#64748B]"
+                      disabled
+                      placeholder="Outbound messaging is not connected yet."
+                    />
+                    <div className="mt-3 flex justify-end">
+                      <button
+                        className="rounded-lg bg-blue-200 px-5 py-2 text-sm font-semibold text-white"
+                        disabled
+                        type="button"
+                      >
+                        Send
+                      </button>
                     </div>
                   </div>
                 </>
               )}
-            </div>
+            </>
           ) : (
             <EmptyState
               title="Select a conversation"
-              body="The decision card appears after selecting a conversation."
+              body="Conversation details appear after selecting an inbox item."
             />
           )}
         </section>
 
-        <aside className="space-y-5">
-          <Panel title="Transcript / Messages">
-            {latestMessage ? (
-              <PreviewBlock
-                label={`${getStatusLabel(latestMessage.direction)} message`}
-                value={latestMessage.body ?? "Message body unavailable."}
-                timestamp={latestMessage.occurred_at}
-              />
-            ) : latestTranscript ? (
-              <PreviewBlock
-                label="Latest transcript"
-                value={latestTranscript.transcript_text ?? "Transcript text unavailable."}
-                timestamp={latestTranscript.created_at}
-              />
-            ) : (
-              <EmptyState
-                title="No transcript yet"
-                body="Transcript or message text will appear here when available."
-              />
-            )}
-          </Panel>
-
-          <Panel title="Call Recording">
-            <RecordingPlayer audioUrl={recordingAudioUrl} recordingState={recordingState} />
-          </Panel>
-
-          <Panel title="Timeline">
-            <div className="space-y-3">
-              {detail.timelineEvents.length === 0 ? (
-                <EmptyState
-                  title="No business timeline yet"
-                  body="Incoming call, intake, job, estimate, invoice, and repair events will appear here."
-                />
-              ) : (
-                detail.timelineEvents.map((event) => (
-                  <div
-                    className="rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3"
-                    key={event.id}
-                  >
-                    <p className="text-sm font-black text-[#0F172A]">
-                      {event.title || getTimelineEventLabel(event.type)}
-                    </p>
-                    {event.body ? (
-                      <p className="mt-1 text-sm font-semibold leading-6 text-[#64748B]">
-                        {event.body}
+        <aside className="overflow-hidden rounded-2xl border border-[#E5E7EB] bg-white shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
+          <div className="flex border-b border-[#E5E7EB]">
+            {([
+              ["customer", "Customer"],
+              ["intake", "Intake"],
+              ["job", "Job"],
+              ["activity", "Activity"],
+            ] as Array<[ContextTab, string]>).map(([value, label]) => (
+              <button
+                className={`flex-1 px-3 py-3 text-sm font-semibold ${
+                  contextTab === value
+                    ? "border-b-2 border-[#0F6BFF] text-[#0F6BFF]"
+                    : "text-[#64748B]"
+                }`}
+                key={value}
+                onClick={() => setContextTab(value)}
+                type="button"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="max-h-[680px] space-y-4 overflow-y-auto p-4">
+            {selectedConversation && contextTab === "customer" ? (
+              <>
+                <Panel title="Customer">
+                  {detail.customer ? (
+                    <div className="space-y-2 text-sm font-medium text-[#334155]">
+                      <p className="text-base font-semibold text-[#0F172A]">
+                        {detail.customer.full_name}
                       </p>
-                    ) : null}
-                    <p className="mt-2 text-xs font-bold text-[#64748B]">
-                      {formatServiceRequestDate(event.eventTime)}
-                    </p>
+                      <p>{detail.customer.phone ?? selectedConversation.customerPhone}</p>
+                      <p>{detail.customer.email ?? "No email available"}</p>
+                      <p>{formatServiceAddress(detail, selectedConversation)}</p>
+                      <ActionLink
+                        href={withReturnTo(`/dashboard/customers/${detail.customer.id}`)}
+                        label="Open Customer"
+                      />
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <EmptyState
+                        title="Unknown customer"
+                        body="Not linked to a customer yet."
+                      />
+                      <ActionLink href={withReturnTo(intakeHref)} label="Link to customer" />
+                    </div>
+                  )}
+                </Panel>
+                <Panel title="Source & Attribution">
+                  {getAttributionRows(selectedConversation).length > 0 ? (
+                    <div className="space-y-2">
+                      {getAttributionRows(selectedConversation).map(([label, value]) => (
+                        <ContextRow key={label} label={label} value={value} />
+                      ))}
+                    </div>
+                  ) : (
+                    <EmptyState
+                      title="No attribution captured"
+                      body="Source details will appear here when present on the conversation."
+                    />
+                  )}
+                </Panel>
+              </>
+            ) : null}
+
+            {contextTab === "intake" ? (
+              <Panel title="Intake">
+                {detail.intake ? (
+                  <div className="space-y-2">
+                    <ContextRow label="Status" value={getStatusLabel(detail.intake.status)} />
+                    <ContextRow
+                      label="Problem"
+                      value={detail.intake.problem_description ?? "Not captured"}
+                    />
+                    <ActionLink href={withReturnTo(intakeHref)} label="Review Intake" />
                   </div>
-                ))
-              )}
-            </div>
-          </Panel>
+                ) : (
+                  <div className="space-y-3">
+                    <EmptyState title="No intake created yet" body={requiredAction} />
+                    <ActionLink href={withReturnTo(intakeHref)} label="Create intake request" />
+                  </div>
+                )}
+              </Panel>
+            ) : null}
+
+            {contextTab === "job" ? (
+              <Panel title="Job">
+                {detail.job ? (
+                  <div className="space-y-2">
+                    <ContextRow label="Status" value={getStatusLabel(detail.job.status)} />
+                    <ContextRow label="Customer" value={detail.job.customer_name} />
+                    <ContextRow label="Problem" value={detail.job.issue_description} />
+                    <ActionLink href={withReturnTo(`/dashboard/leads/${detail.job.id}`)} label="Open Job" />
+                  </div>
+                ) : (
+                  <EmptyState
+                    title="No job linked"
+                    body="Create Job is reserved for a later backend workflow."
+                  />
+                )}
+              </Panel>
+            ) : null}
+
+            {contextTab === "activity" ? (
+              <Panel title="Recent Activity">
+                <div className="space-y-3">
+                  {detail.timelineEvents.length === 0 ? (
+                    <EmptyState
+                      title="No activity yet"
+                      body="Communication activity appears here when available."
+                    />
+                  ) : (
+                    detail.timelineEvents.slice(0, 8).map((event) => (
+                      <PreviewBlock
+                        key={event.id}
+                        label={event.title || getTimelineEventLabel(event.type)}
+                        timestamp={event.eventTime}
+                        value={event.body ?? "No details captured."}
+                      />
+                    ))
+                  )}
+                </div>
+              </Panel>
+            ) : null}
+          </div>
         </aside>
       </section>
     </main>
   );
 }
 
-function DecisionRow({
-  label,
-  value,
-  helper,
+function MobileCustomerPanel({
+  conversation,
+  detail,
+  returnTo,
 }: {
-  label: string;
-  value: string;
-  helper: string;
+  conversation: HubConversation;
+  detail: ConversationDetailData;
+  returnTo: string;
 }) {
+  const withReturnTo = (href: string) =>
+    `${href}${href.includes("?") ? "&" : "?"}returnTo=${encodeURIComponent(returnTo)}`;
+  const intakeHref = detail.intake
+    ? `/dashboard/intake?selected=${encodeURIComponent(detail.intake.id)}`
+    : "/dashboard/intake";
+
   return (
-    <div className="rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3">
-      <p className="text-[11px] font-black uppercase tracking-[0.14em] text-[#64748B]">
-        {label}
-      </p>
-      <p className="mt-1 text-sm font-black text-[#0F172A]">{value}</p>
-      <p className="mt-1 text-sm font-semibold leading-6 text-[#64748B]">{helper}</p>
+    <>
+      <Panel title="Customer">
+        {detail.customer ? (
+          <div className="space-y-2 text-sm font-medium text-[#334155]">
+            <p className="text-base font-semibold text-[#0F172A]">
+              {detail.customer.full_name}
+            </p>
+            <p>{detail.customer.phone ?? conversation.customerPhone}</p>
+            <p>{detail.customer.email ?? "No email available"}</p>
+            <p>{formatServiceAddress(detail, conversation)}</p>
+            <ActionLink
+              href={withReturnTo(`/dashboard/customers/${detail.customer.id}`)}
+              label="Open Customer"
+            />
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <EmptyState title="Unknown customer" body="Not linked to a customer yet." />
+            <ActionLink href={withReturnTo(intakeHref)} label="Link to customer" />
+          </div>
+        )}
+      </Panel>
+      <Panel title="Source & Attribution">
+        {getAttributionRows(conversation).length > 0 ? (
+          <div className="space-y-2">
+            {getAttributionRows(conversation).map(([label, value]) => (
+              <ContextRow key={label} label={label} value={value} />
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            title="No attribution captured"
+            body="Source details will appear here when present on the conversation."
+          />
+        )}
+      </Panel>
+    </>
+  );
+}
+
+function MobileIntakePanel({
+  detail,
+  requiredAction,
+  returnTo,
+}: {
+  detail: ConversationDetailData;
+  requiredAction: string;
+  returnTo: string;
+}) {
+  const withReturnTo = (href: string) =>
+    `${href}${href.includes("?") ? "&" : "?"}returnTo=${encodeURIComponent(returnTo)}`;
+  const intakeHref = detail.intake
+    ? `/dashboard/intake?selected=${encodeURIComponent(detail.intake.id)}`
+    : "/dashboard/intake";
+
+  return (
+    <Panel title="Intake">
+      {detail.intake ? (
+        <div className="space-y-2">
+          <ContextRow label="Status" value={getStatusLabel(detail.intake.status)} />
+          <ContextRow
+            label="Problem"
+            value={detail.intake.problem_description ?? "Not captured"}
+          />
+          <ActionLink href={withReturnTo(intakeHref)} label="Review Intake" />
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <EmptyState title="No intake created yet" body={requiredAction} />
+          <ActionLink href={withReturnTo(intakeHref)} label="Create intake request" />
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function MobileJobPanel({
+  detail,
+  returnTo,
+}: {
+  detail: ConversationDetailData;
+  returnTo: string;
+}) {
+  const withReturnTo = (href: string) =>
+    `${href}${href.includes("?") ? "&" : "?"}returnTo=${encodeURIComponent(returnTo)}`;
+
+  return (
+    <Panel title="Job">
+      {detail.job ? (
+        <div className="space-y-2">
+          <ContextRow label="Status" value={getStatusLabel(detail.job.status)} />
+          <ContextRow label="Customer" value={detail.job.customer_name} />
+          <ContextRow label="Problem" value={detail.job.issue_description} />
+          <ActionLink href={withReturnTo(`/dashboard/leads/${detail.job.id}`)} label="Open Job" />
+        </div>
+      ) : (
+        <EmptyState
+          title="No job linked"
+          body="Create Job is reserved for a later backend workflow."
+        />
+      )}
+    </Panel>
+  );
+}
+
+function MobileActivityPanel({ events }: { events: CommunicationTimelineEvent[] }) {
+  return (
+    <Panel title="Recent Activity">
+      <div className="space-y-3">
+        {events.length === 0 ? (
+          <EmptyState
+            title="No activity yet"
+            body="Communication activity appears here when available."
+          />
+        ) : (
+          events.slice(0, 8).map((event) => (
+            <PreviewBlock
+              key={event.id}
+              label={event.title || getTimelineEventLabel(event.type)}
+              timestamp={event.eventTime}
+              value={event.body ?? "No details captured."}
+            />
+          ))
+        )}
+      </div>
+    </Panel>
+  );
+}
+
+function ContextRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="grid grid-cols-[96px_minmax(0,1fr)] gap-3 text-sm">
+      <p className="font-medium text-[#64748B]">{label}</p>
+      <p className="min-w-0 font-semibold text-[#0F172A]">{value}</p>
     </div>
   );
 }

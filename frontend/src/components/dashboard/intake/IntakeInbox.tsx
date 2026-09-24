@@ -420,13 +420,21 @@ async function getAccessToken() {
   return data.session.access_token;
 }
 
-export function IntakeInbox() {
+export function IntakeInbox({
+  returnTo,
+  selectedRequestId,
+}: {
+  returnTo?: string | null;
+  selectedRequestId?: string | null;
+}) {
   const [state, setState] = useState<IntakeState>({
     status: "loading",
     requests: [],
     error: null,
   });
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(
+    selectedRequestId ?? null,
+  );
   const [form, setForm] = useState<IntakeFormState>(emptyForm);
   const [statusFilter, setStatusFilter] = useState<IntakeStatusFilter>("active");
   const [sourceFilter, setSourceFilter] =
@@ -478,6 +486,12 @@ export function IntakeInbox() {
         )
         .slice(0, 8)
     : [];
+  const withReturnTo = (href: string) =>
+    returnTo
+      ? `${href}${href.includes("?") ? "&" : "?"}returnTo=${encodeURIComponent(
+          returnTo,
+        )}`
+      : href;
 
   const filteredRequests = useMemo(
     () =>
@@ -524,9 +538,14 @@ export function IntakeInbox() {
 
       setState({ status: "ready", requests, error: null });
 
-      if (!selectedId && requests[0]) {
-        setSelectedId(requests[0].id);
-        setForm(buildFormFromRequest(requests[0]));
+      const requestedSelection = selectedRequestId
+        ? requests.find((request) => request.id === selectedRequestId) ?? null
+        : null;
+      const nextSelection = requestedSelection ?? (!selectedId ? requests[0] : null);
+
+      if (nextSelection) {
+        setSelectedId(nextSelection.id);
+        setForm(buildFormFromRequest(nextSelection));
       }
     } catch (error) {
       setState({
@@ -1061,6 +1080,14 @@ export function IntakeInbox() {
       <div className="rounded-2xl border border-[#E5E7EB] bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
+            {returnTo ? (
+              <Link
+                className="mb-3 inline-flex text-sm font-black text-[#0F6BFF]"
+                href={returnTo}
+              >
+                Back to previous context
+              </Link>
+            ) : null}
             <p className="text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF]">
               Unified intake
             </p>
@@ -1237,7 +1264,7 @@ export function IntakeInbox() {
               {selectedRequest?.linkedCustomerId ? (
                 <Link
                   className="rounded-[10px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-center text-sm font-black text-emerald-800 transition hover:bg-emerald-100"
-                  href={`/dashboard/customers/${selectedRequest.linkedCustomerId}`}
+                  href={withReturnTo(`/dashboard/customers/${selectedRequest.linkedCustomerId}`)}
                 >
                   Open Customer
                 </Link>
@@ -1256,7 +1283,7 @@ export function IntakeInbox() {
               {selectedRequest?.linkedServiceRequestId ? (
                 <Link
                   className="rounded-[10px] border border-blue-200 bg-blue-50 px-4 py-3 text-center text-sm font-black text-[#0F6BFF] transition hover:bg-blue-100"
-                  href={`/dashboard/leads/${selectedRequest.linkedServiceRequestId}`}
+                  href={withReturnTo(`/dashboard/leads/${selectedRequest.linkedServiceRequestId}`)}
                 >
                   Open Job
                 </Link>
@@ -1536,7 +1563,7 @@ export function IntakeInbox() {
               selectedRequest.linkedServiceRequestId ? (
                 <Link
                   className="rounded-[10px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-center text-sm font-black text-emerald-800 transition hover:bg-emerald-100"
-                  href={`/dashboard/leads/${selectedRequest.linkedServiceRequestId}`}
+                  href={withReturnTo(`/dashboard/leads/${selectedRequest.linkedServiceRequestId}`)}
                 >
                   Open Job
                 </Link>

@@ -340,7 +340,7 @@ function NavigationIcon({ label }: { label: string }) {
     Invoices: "M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6M9 16h3",
     "Parts & Inventory": "M4 7h16v13H4zM7 4h10v3H7zM8 12h8",
     "Manuals Library": "M5 4h7a3 3 0 0 1 3 3v17a3 3 0 0 0-3-3H5zM15 7h4v17a3 3 0 0 0-3-3h-1",
-    "Calls & Messages": "M5 5h14v10H8l-3 3zM8 8h8M8 12h5",
+    Communications: "M5 5h14v10H8l-3 3zM8 8h8M8 12h5",
     Community: "M12 5a4 4 0 1 0 0 8 4 4 0 0 0 0-8ZM4 21a8 8 0 0 1 16 0",
     Vendors: "M4 9h16l-2-5H6zM5 9v12h14V9M9 13h6",
     Technicians: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4 21a8 8 0 0 1 16 0",
