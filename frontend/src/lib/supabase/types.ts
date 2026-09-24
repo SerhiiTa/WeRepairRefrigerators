@@ -179,6 +179,17 @@ export type DatabaseCommunicationSourceType =
   | "manual"
   | "other";
 
+export type DatabaseInboundSourceChannel =
+  | "phone"
+  | "sms"
+  | "website_form"
+  | "booking_widget"
+  | "lead_generator"
+  | "email"
+  | "social"
+  | "manual"
+  | "other";
+
 export type DatabaseCommunicationConversationStatus =
   | "open"
   | "needs_action"
@@ -295,9 +306,36 @@ export type Database = {
           converted_at: string | null;
           created_at: string;
           updated_at: string;
+          inbound_source_id?: string | null;
+          source_account_id?: string | null;
+          provider_lead_id?: string | null;
+          provider_event_id?: string | null;
+          attribution?: Json;
         };
         Insert: Partial<Database["public"]["Tables"]["intake_requests"]["Row"]>;
         Update: Partial<Database["public"]["Tables"]["intake_requests"]["Row"]>;
+        Relationships: [];
+      };
+      inbound_sources: {
+        Row: {
+          id: string;
+          company_id: string;
+          source_key: string;
+          channel: DatabaseInboundSourceChannel;
+          source_name: string;
+          provider_name: string | null;
+          domain: string | null;
+          allowed_domains: string[];
+          campaign: string | null;
+          default_service_type: string | null;
+          communication_source_account_id: string | null;
+          is_active: boolean;
+          metadata: Json;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Partial<Database["public"]["Tables"]["inbound_sources"]["Row"]>;
+        Update: Partial<Database["public"]["Tables"]["inbound_sources"]["Row"]>;
         Relationships: [];
       };
       communication_conversations: {
@@ -328,6 +366,8 @@ export type Database = {
           call_started_at: string | null;
           call_ended_at: string | null;
           provider_metadata: Json;
+          inbound_source_id?: string | null;
+          attribution?: Json;
           created_by: string | null;
           updated_by: string | null;
           created_at: string;
@@ -912,6 +952,9 @@ export type Database = {
           status: DatabaseServiceRequestStatus;
           job_client_avatar_storage_path?: string | null;
           job_client_avatar_updated_at?: string | null;
+          inbound_source_id?: string | null;
+          source_account_id?: string | null;
+          attribution?: Json;
           created_at: string;
           updated_at: string;
         };
