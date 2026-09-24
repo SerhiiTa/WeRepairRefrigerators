@@ -316,6 +316,32 @@ export type Database = {
         Update: Partial<Database["public"]["Tables"]["intake_requests"]["Row"]>;
         Relationships: [];
       };
+      inbound_source_credentials: {
+        Row: {
+          id: string;
+          inbound_source_id: string;
+          public_key: string;
+          secret_hash: string;
+          secret_hash_algorithm: string;
+          label: string | null;
+          is_active: boolean;
+          last_used_at: string | null;
+          last_used_ip: string | null;
+          created_at: string;
+          created_by: string | null;
+          revoked_at: string | null;
+          revoked_by: string | null;
+          revocation_reason: string | null;
+          metadata: Json;
+        };
+        Insert: Partial<
+          Database["public"]["Tables"]["inbound_source_credentials"]["Row"]
+        >;
+        Update: Partial<
+          Database["public"]["Tables"]["inbound_source_credentials"]["Row"]
+        >;
+        Relationships: [];
+      };
       inbound_sources: {
         Row: {
           id: string;
