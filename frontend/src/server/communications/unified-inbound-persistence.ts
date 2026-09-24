@@ -357,12 +357,17 @@ async function createMessageIfMissing(
     throw new Error("Server Supabase service client is not configured.");
   }
 
-  if (event.externalMessageId) {
+  const messageIdentity =
+    nullableText(event.externalMessageId) ??
+    gateway.idempotency.providerEventId ??
+    gateway.idempotency.providerLeadId;
+
+  if (messageIdentity) {
     const { data: existing, error: lookupError } = await supabase
       .from("communication_messages")
       .select("id")
       .eq("conversation_id", conversationId)
-      .eq("external_message_id", event.externalMessageId)
+      .eq("external_message_id", messageIdentity)
       .limit(1)
       .maybeSingle();
 
@@ -388,13 +393,27 @@ async function createMessageIfMissing(
       sender_role: "customer",
       sender_display_name: event.customer?.name ?? null,
       body,
-      external_message_id: event.externalMessageId ?? null,
+      external_message_id: messageIdentity,
       occurred_at: event.occurredAt,
     })
     .select("id")
     .single();
 
   if (error) {
+    if (error.code === "23505" && messageIdentity) {
+      const { data: existing, error: duplicateLookupError } = await supabase
+        .from("communication_messages")
+        .select("id")
+        .eq("conversation_id", conversationId)
+        .eq("external_message_id", messageIdentity)
+        .limit(1)
+        .maybeSingle();
+
+      if (!duplicateLookupError && existing?.id) {
+        return existing.id;
+      }
+    }
+
     console.warn("Unified inbound message insert failed", {
       code: error.code,
       message: error.message,
