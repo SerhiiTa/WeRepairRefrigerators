@@ -139,7 +139,7 @@ type CustomerSectionKey =
 
 type CustomerStatusFilter = "all" | "active" | "inactive";
 type CustomerExtraFilter = "all" | "hasOpenJobs" | "hasAssets" | "hasAddress" | "noAddress";
-type CustomerWorkspaceTab = "overview" | "jobs" | "assets" | "more";
+type CustomerWorkspaceTab = "overview" | "jobs" | "assets" | "more" | "activity";
 type CustomerJobsFilter = "all" | "open" | "completed";
 type CustomerSortOption =
   | "lastJobNewest"
@@ -1704,7 +1704,7 @@ export function DashboardCustomerDetail({
 
     const tab = new URLSearchParams(window.location.search).get("tab");
 
-    return tab === "jobs" || tab === "assets" || tab === "more"
+    return tab === "jobs" || tab === "assets" || tab === "more" || tab === "activity"
       ? tab
       : "overview";
   });
@@ -1978,7 +1978,9 @@ export function DashboardCustomerDetail({
       const params = new URLSearchParams(window.location.search);
       const tab = params.get("tab");
       const nextTab =
-        tab === "jobs" || tab === "assets" || tab === "more" ? tab : "overview";
+        tab === "jobs" || tab === "assets" || tab === "more" || tab === "activity"
+          ? tab
+          : "overview";
 
       setActiveTab(nextTab);
       setSelectedAssetId(nextTab === "assets" ? params.get("asset") : null);
@@ -2034,6 +2036,16 @@ export function DashboardCustomerDetail({
         : `/dashboard/customers/${customerId}?tab=${tab}`;
 
     window.history.replaceState(null, "", nextUrl);
+  }
+
+  function openCustomerActivity() {
+    setActiveTab("activity");
+    setSelectedAssetId(null);
+    setIsProfileEditorOpen(false);
+
+    if (typeof window !== "undefined") {
+      window.history.pushState(null, "", `/dashboard/customers/${customerId}?tab=activity`);
+    }
   }
 
   function openAssetDetail(assetId: string) {
@@ -2504,6 +2516,7 @@ export function DashboardCustomerDetail({
   const averageTicket = completedJobs.length > 0 ? lifetimeRevenue / completedJobs.length : 0;
   const ownerCanViewMetrics = canViewOwnerMetrics(state.currentRole);
   const timeline = buildCustomerTimeline(state);
+  const customerActivityTimeline = [...timeline].reverse();
   const recentActivity = [...timeline]
     .sort((left, right) => Date.parse(right.at) - Date.parse(left.at))
     .slice(0, 3);
@@ -2905,6 +2918,13 @@ export function DashboardCustomerDetail({
         />
       ) : null}
 
+      {activeTab === "activity" ? (
+        <CustomerActivityWorkspace
+          items={customerActivityTimeline}
+          onBack={() => selectWorkspaceTab("overview")}
+        />
+      ) : null}
+
       {activeTab === "overview" ? (
       <main className="mt-3 grid gap-2.5">
         <section className="grid grid-cols-4 overflow-hidden rounded-[18px] border border-slate-200 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.045)]">
@@ -2977,10 +2997,7 @@ export function DashboardCustomerDetail({
             </h2>
             <button
               className="text-sm font-black text-[#0F6BFF]"
-              onClick={() => {
-                setIsProfileEditorOpen(false);
-                setExpandedSections((current) => ({ ...current, timeline: true }));
-              }}
+              onClick={openCustomerActivity}
               type="button"
             >
               View all
@@ -5615,6 +5632,39 @@ function TimelineList({ items }: { items: TimelineItem[] }) {
   );
 }
 
+function CustomerActivityWorkspace({
+  items,
+  onBack,
+}: {
+  items: TimelineItem[];
+  onBack: () => void;
+}) {
+  return (
+    <main className="mt-3 grid gap-3">
+      <section className="rounded-[18px] border border-slate-200 bg-white p-3 shadow-[0_8px_24px_rgba(15,23,42,0.045)]">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <button
+              className="inline-flex items-center gap-1 text-sm font-black text-[#0F6BFF]"
+              onClick={onBack}
+              type="button"
+            >
+              <CustomerOverviewIcon className="h-4 w-4" name="back" />
+              Overview
+            </button>
+            <h2 className="mt-3 text-xl font-black text-slate-950">Customer Activity</h2>
+            <p className="mt-1 text-sm font-semibold text-slate-500">
+              Complete customer timeline, newest first.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <TimelineList items={items} />
+    </main>
+  );
+}
+
 function EmptyMessage({ children }: { children: ReactNode }) {
   return (
     <p className="rounded-2xl border border-dashed border-slate-300 bg-[#F7F9FC] p-4 text-sm text-slate-600">
@@ -5688,7 +5738,9 @@ function buildCustomerTimeline(state: Extract<CustomerDetailState, { status: "re
         title: "Estimate sent",
         body: `${estimate.estimate_number || "Estimate"} · ${formatMoney(estimate.total)}`,
         category: "estimate",
-        href: `/dashboard/leads/${estimate.service_request_id}`,
+        href: `/dashboard/leads/${estimate.service_request_id}?tab=finance&estimateId=${encodeURIComponent(
+          estimate.id,
+        )}`,
       });
     }
 
@@ -5702,7 +5754,9 @@ function buildCustomerTimeline(state: Extract<CustomerDetailState, { status: "re
             : "Estimate response received",
         body: `${estimate.estimate_number || "Estimate"} · ${estimate.estimate_status}`,
         category: "estimate",
-        href: `/dashboard/leads/${estimate.service_request_id}`,
+        href: `/dashboard/leads/${estimate.service_request_id}?tab=finance&estimateId=${encodeURIComponent(
+          estimate.id,
+        )}`,
       });
     }
   }
@@ -5715,7 +5769,7 @@ function buildCustomerTimeline(state: Extract<CustomerDetailState, { status: "re
         title: "Invoice sent",
         body: `${invoice.invoice_number} · ${formatMoney(invoice.total)}`,
         category: "invoice",
-        href: `/dashboard/leads/${invoice.service_request_id}`,
+        href: `/dashboard/leads/${invoice.service_request_id}?tab=finance`,
       });
     }
 
@@ -5726,7 +5780,7 @@ function buildCustomerTimeline(state: Extract<CustomerDetailState, { status: "re
         title: "Payment received",
         body: `${invoice.invoice_number} · ${formatMoney(invoice.total)}`,
         category: "payment",
-        href: `/dashboard/leads/${invoice.service_request_id}`,
+        href: `/dashboard/leads/${invoice.service_request_id}?tab=finance`,
       });
     }
   }
@@ -5738,7 +5792,7 @@ function buildCustomerTimeline(state: Extract<CustomerDetailState, { status: "re
       title: "Internal note added",
       body: note.body,
       category: "note",
-      href: `/dashboard/leads/${note.service_request_id}`,
+      href: `/dashboard/leads/${note.service_request_id}?tab=timeline`,
     });
   }
 

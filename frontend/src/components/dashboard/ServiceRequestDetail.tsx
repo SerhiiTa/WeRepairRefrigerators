@@ -1958,6 +1958,19 @@ export function ServiceRequestDetail({
         return;
       }
 
+      if (
+        tab === "overview" ||
+        tab === "timeline" ||
+        tab === "notes" ||
+        tab === "photos" ||
+        tab === "appointment"
+      ) {
+        setActiveJobTab(tab);
+        setManualEstimateId(null);
+        setFinanceEstimateMode("home");
+        return;
+      }
+
       setManualEstimateId(null);
       setFinanceEstimateMode("home");
     }
