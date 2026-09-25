@@ -4,6 +4,7 @@ import type {
   DatabaseCommunicationSourceType,
   DatabaseIntakeSourceType,
   Json,
+  PublicSchema,
 } from "@/lib/supabase/types";
 import type { UnifiedIntakeGatewayAcceptedResult } from "@/server/communications/unified-intake-gateway";
 
@@ -26,6 +27,30 @@ type IntakeInsertResult = {
 type ConversationResult = {
   id: string;
   created: boolean;
+};
+
+type CommunicationConversationUpdate =
+  PublicSchema["Tables"]["communication_conversations"]["Update"];
+
+type ExistingCustomerMatch = {
+  id: string;
+  full_name: string;
+  phone: string | null;
+  email: string | null;
+};
+
+type InboundCustomerResolverClient = {
+  rpc: (
+    functionName: "resolve_existing_customer_for_inbound_rpc",
+    args: {
+      p_company_id: string;
+      p_phone?: string | null;
+      p_email?: string | null;
+    },
+  ) => Promise<{
+    data: ExistingCustomerMatch[] | null;
+    error: { code?: string; message: string } | null;
+  }>;
 };
 
 function nullableText(value: string | null | undefined): string | null {
@@ -89,6 +114,64 @@ function buildExtractedData(event: UnifiedInboundEvent): Record<string, Json> {
     requested_service: jsonRecord(event.requestedService),
     requested_appointment: jsonRecord(event.requestedAppointment),
   };
+}
+
+async function resolveExistingCustomerForIntake(
+  gateway: UnifiedIntakeGatewayAcceptedResult,
+  intakeRequestId: string,
+): Promise<ExistingCustomerMatch | null> {
+  const supabase = getSupabaseServiceRoleClient();
+  if (!supabase) {
+    throw new Error("Server Supabase service client is not configured.");
+  }
+
+  const event = gateway.event;
+  if (!event.customer?.phone && !event.customer?.email) {
+    return null;
+  }
+
+  const { data, error } = await (supabase as unknown as InboundCustomerResolverClient).rpc(
+    "resolve_existing_customer_for_inbound_rpc",
+    {
+      p_company_id: gateway.companyId,
+      p_phone: event.customer?.phone ?? null,
+      p_email: event.customer?.email ?? null,
+    },
+  );
+
+  if (error) {
+    console.warn("Unified inbound customer resolver failed", {
+      code: error.code,
+      message: error.message,
+    });
+    throw new Error("Inbound customer lookup failed.");
+  }
+
+  const customer = data?.[0] ?? null;
+  if (!customer) {
+    return null;
+  }
+
+  const { error: updateError } = await supabase
+    .from("intake_requests")
+    .update({
+      linked_customer_id: customer.id,
+      status: "customer_matched",
+      updated_by: null,
+    })
+    .eq("id", intakeRequestId)
+    .eq("company_id", gateway.companyId)
+    .is("linked_customer_id", null);
+
+  if (updateError) {
+    console.warn("Unified inbound intake customer link update failed", {
+      code: updateError.code,
+      message: updateError.message,
+    });
+    throw new Error("Inbound intake customer update failed.");
+  }
+
+  return customer;
 }
 
 function idempotencyFilters(gateway: UnifiedIntakeGatewayAcceptedResult):
@@ -225,6 +308,7 @@ async function createOrReuseIntake(
 async function createOrReuseConversation(
   gateway: UnifiedIntakeGatewayAcceptedResult,
   intakeRequestId: string,
+  customer: ExistingCustomerMatch | null,
 ): Promise<ConversationResult | null> {
   const event = gateway.event;
   const supabase = getSupabaseServiceRoleClient();
@@ -238,7 +322,7 @@ async function createOrReuseConversation(
   if (externalConversationId && gateway.source.inboundSourceId) {
     const { data: existing, error: lookupError } = await supabase
       .from("communication_conversations")
-      .select("id,intake_request_id")
+      .select("id,intake_request_id,customer_id")
       .eq("company_id", gateway.companyId)
       .eq("inbound_source_id", gateway.source.inboundSourceId)
       .eq("external_conversation_id", externalConversationId)
@@ -254,10 +338,21 @@ async function createOrReuseConversation(
     }
 
     if (existing?.id) {
+      const updates: CommunicationConversationUpdate = {};
       if (!existing.intake_request_id) {
+        updates.intake_request_id = intakeRequestId;
+      }
+      if (!existing.customer_id && customer?.id) {
+        updates.customer_id = customer.id;
+        updates.customer_display_name = customer.full_name;
+        updates.customer_phone = customer.phone ?? event.customer?.phone ?? null;
+        updates.customer_email = customer.email ?? event.customer?.email ?? null;
+      }
+
+      if (Object.keys(updates).length > 0) {
         const { error: updateError } = await supabase
           .from("communication_conversations")
-          .update({ intake_request_id: intakeRequestId })
+          .update(updates)
           .eq("id", existing.id);
 
         if (updateError) {
@@ -284,9 +379,10 @@ async function createOrReuseConversation(
       primary_source_type: toCommunicationSourceType(event),
       status: "needs_action",
       intake_request_id: intakeRequestId,
-      customer_display_name: event.customer?.name ?? null,
-      customer_phone: event.customer?.phone ?? null,
-      customer_email: event.customer?.email ?? null,
+      customer_id: customer?.id ?? null,
+      customer_display_name: customer?.full_name ?? event.customer?.name ?? null,
+      customer_phone: customer?.phone ?? event.customer?.phone ?? null,
+      customer_email: customer?.email ?? event.customer?.email ?? null,
       service_address: event.serviceAddress?.formatted ?? null,
       summary,
       next_action: "Review inbound request",
@@ -304,7 +400,7 @@ async function createOrReuseConversation(
     if (error.code === "23505" && externalConversationId && gateway.source.inboundSourceId) {
       const { data: existing, error: duplicateLookupError } = await supabase
         .from("communication_conversations")
-        .select("id,intake_request_id")
+        .select("id,intake_request_id,customer_id")
         .eq("company_id", gateway.companyId)
         .eq("inbound_source_id", gateway.source.inboundSourceId)
         .eq("external_conversation_id", externalConversationId)
@@ -312,12 +408,23 @@ async function createOrReuseConversation(
         .maybeSingle();
 
       if (!duplicateLookupError && existing?.id) {
+        const updates: CommunicationConversationUpdate = {};
         if (!existing.intake_request_id) {
+          updates.intake_request_id = intakeRequestId;
+        }
+        if (!existing.customer_id && customer?.id) {
+          updates.customer_id = customer.id;
+          updates.customer_display_name = customer.full_name;
+          updates.customer_phone = customer.phone ?? event.customer?.phone ?? null;
+          updates.customer_email = customer.email ?? event.customer?.email ?? null;
+        }
+
+        if (Object.keys(updates).length > 0) {
           const { error: updateError } = await supabase
             .from("communication_conversations")
-            .update({ intake_request_id: intakeRequestId })
+            .update(updates)
             .eq("id", existing.id)
-            .is("intake_request_id", null);
+            .is(existing.intake_request_id ? "customer_id" : "intake_request_id", null);
 
           if (updateError) {
             console.warn("Unified inbound duplicate conversation link update failed", {
@@ -483,7 +590,8 @@ export async function persistUnifiedInboundEvent(
   gateway: UnifiedIntakeGatewayAcceptedResult,
 ): Promise<PersistUnifiedInboundEventResult> {
   const intake = await createOrReuseIntake(gateway);
-  const conversation = await createOrReuseConversation(gateway, intake.id);
+  const customer = await resolveExistingCustomerForIntake(gateway, intake.id);
+  const conversation = await createOrReuseConversation(gateway, intake.id, customer);
   const messageId = conversation
     ? await createMessageIfMissing(gateway, conversation.id)
     : null;

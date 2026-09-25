@@ -47,6 +47,12 @@ type RecordingState =
     }
   | { status: "error"; recording: null; audioUrl: null; message: string };
 
+type CreateJobState =
+  | { status: "idle"; message: null }
+  | { status: "saving"; message: string }
+  | { status: "success"; message: string }
+  | { status: "error"; message: string };
+
 type ConversationDetailData = {
   intake: IntakeRequestRow | null;
   customer: CustomerRow | null;
@@ -239,6 +245,50 @@ function getAttributionRows(conversation: HubConversation) {
   ].filter((row): row is [string, string] => Boolean(row[1]));
 }
 
+function getJsonObject(value: Json | null | undefined): Record<string, Json> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, Json>)
+    : null;
+}
+
+function getJsonString(value: Json | null | undefined, key: string): string | null {
+  const record = getJsonObject(value);
+  const entry = record?.[key];
+
+  return typeof entry === "string" && entry.trim() ? entry.trim() : null;
+}
+
+function isTrustedWebsiteBooking(detail: ConversationDetailData, conversation: HubConversation) {
+  return (
+    conversation.sourceType === "website_form" &&
+    getJsonString(detail.intake?.raw_payload, "event_type") === "booking_request" &&
+    Boolean(detail.intake?.id)
+  );
+}
+
+function getRequestDetailRows(
+  detail: ConversationDetailData,
+  conversation: HubConversation,
+): Array<[string, string]> {
+  const intake = detail.intake;
+  if (!intake) {
+    return [];
+  }
+
+  return [
+    ["Customer", intake.customer_name ?? conversation.customerDisplayName],
+    ["Phone", intake.customer_phone ?? conversation.customerPhone],
+    ["Service Address", intake.service_address ?? conversation.serviceAddress],
+    ["ZIP", intake.zip_code],
+    ["Appliance", intake.appliance_type],
+    ["Brand", intake.brand],
+    ["Problem", intake.problem_description ?? conversation.summary],
+    ["Requested Date", intake.appointment_date],
+    ["Preferred Window", intake.preferred_appointment_window],
+    ["Source", intake.source_name ?? getAttributionValue(conversation.attribution, "websiteDomain")],
+  ].filter((row): row is [string, string] => Boolean(row[1]));
+}
+
 function getInitialQueryParam(name: string): string | null {
   if (typeof window === "undefined") {
     return null;
@@ -420,6 +470,11 @@ export function CommunicationsHub() {
   const [mobileDetailTab, setMobileDetailTab] = useState<
     "conversation" | ContextTab
   >("conversation");
+  const [detailReloadToken, setDetailReloadToken] = useState(0);
+  const [createJobState, setCreateJobState] = useState<CreateJobState>({
+    status: "idle",
+    message: null,
+  });
 
   useEffect(() => {
     let isMounted = true;
@@ -596,7 +651,7 @@ export function CommunicationsHub() {
     return () => {
       isMounted = false;
     };
-  }, [hubState.conversations, selectedConversationId]);
+  }, [detailReloadToken, hubState.conversations, selectedConversationId]);
 
   useEffect(() => {
     let isMounted = true;
@@ -805,6 +860,7 @@ export function CommunicationsHub() {
   };
   const openConversation = (conversationId: string) => {
     setSelectedConversationId(conversationId);
+    setCreateJobState({ status: "idle", message: null });
     setMobileDetailOpen(true);
     setMobileDetailTab("conversation");
     if (typeof window !== "undefined") {
@@ -819,6 +875,108 @@ export function CommunicationsHub() {
   const intakeHref = detail.intake
     ? `/dashboard/intake?selected=${encodeURIComponent(detail.intake.id)}`
     : "/dashboard/intake";
+  const canCreateJobFromConversation = Boolean(
+    selectedConversation &&
+      detail.intake &&
+      isTrustedWebsiteBooking(detail, selectedConversation) &&
+      !detail.job &&
+      !detail.intake.linked_service_request_id,
+  );
+  const linkedJobId =
+    detail.job?.id ??
+    detail.intake?.linked_service_request_id ??
+    selectedConversation?.linkedServiceRequestId ??
+    null;
+  const requestDetailRows = selectedConversation
+    ? getRequestDetailRows(detail, selectedConversation)
+    : [];
+
+  async function handleCreateJobFromConversation() {
+    if (!selectedConversation || !detail.intake) {
+      return;
+    }
+
+    if (linkedJobId) {
+      window.location.assign(withReturnTo(`/dashboard/leads/${linkedJobId}`));
+      return;
+    }
+
+    setCreateJobState({ status: "saving", message: "Creating job..." });
+
+    try {
+      const supabase = getSupabaseBrowserClient();
+      if (!supabase) {
+        throw new Error("Communications is not configured for job creation.");
+      }
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        throw new Error("Log in again to create this job.");
+      }
+
+      const response = await fetch(`/api/intake/${detail.intake.id}/convert`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ allowPossibleDuplicate: true }),
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        conversion?: { serviceRequestId?: string | null; alreadyConverted?: boolean };
+        message?: string;
+        ok?: boolean;
+      } | null;
+
+      if (!response.ok || !payload?.ok || !payload.conversion?.serviceRequestId) {
+        throw new Error(payload?.message ?? "Could not create this job.");
+      }
+
+      const serviceRequestId = payload.conversion.serviceRequestId;
+      const { data: jobData } = await supabase
+        .from("service_requests")
+        .select("*")
+        .eq("id", serviceRequestId)
+        .maybeSingle();
+
+      setHubState((current) => ({
+        ...current,
+        conversations: current.conversations.map((conversation) =>
+          conversation.id === selectedConversation.id
+            ? { ...conversation, linkedServiceRequestId: serviceRequestId }
+            : conversation,
+        ),
+      }));
+      setDetailState((current) => ({
+        ...current,
+        data: {
+          ...current.data,
+          job: (jobData ?? current.data.job) as ServiceRequestRow | null,
+          intake: current.data.intake
+            ? {
+                ...current.data.intake,
+                linked_service_request_id: serviceRequestId,
+              }
+            : current.data.intake,
+        },
+      }));
+      setDetailReloadToken((value) => value + 1);
+      setCreateJobState({
+        status: "success",
+        message: payload.conversion.alreadyConverted
+          ? "Job already existed. Opening link is available below."
+          : "Job created and linked to this conversation.",
+      });
+    } catch (error) {
+      setCreateJobState({
+        status: "error",
+        message: error instanceof Error ? error.message : "Could not create this job.",
+      });
+    }
+  }
 
   return (
     <main className="space-y-5">
@@ -975,11 +1133,23 @@ export function CommunicationsHub() {
                   Assign
                 </button>
                 <button
-                  className="rounded-lg border border-[#E5E7EB] px-3 py-2 text-sm font-semibold text-[#64748B]"
-                  disabled
+                  className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                    canCreateJobFromConversation || linkedJobId
+                      ? "border-[#0F6BFF] bg-[#0F6BFF] text-white"
+                      : "border-[#E5E7EB] text-[#64748B]"
+                  }`}
+                  disabled={
+                    createJobState.status === "saving" ||
+                    (!canCreateJobFromConversation && !linkedJobId)
+                  }
+                  onClick={() => void handleCreateJobFromConversation()}
                   type="button"
                 >
-                  Create Job
+                  {createJobState.status === "saving"
+                    ? "Creating..."
+                    : linkedJobId
+                      ? "Open Job"
+                      : "Create Job"}
                 </button>
                 {detail.intake ? (
                   <ActionLink href={withReturnTo(intakeHref)} label="Open Intake" />
@@ -987,6 +1157,17 @@ export function CommunicationsHub() {
                   <ActionLink href={withReturnTo(intakeHref)} label="Create Intake" />
                 )}
               </div>
+              {createJobState.message ? (
+                <p
+                  className={`mt-3 text-sm font-semibold ${
+                    createJobState.status === "error"
+                      ? "text-amber-700"
+                      : "text-emerald-700"
+                  }`}
+                >
+                  {createJobState.message}
+                </p>
+              ) : null}
             </div>
 
             <div className="flex overflow-x-auto border-b border-[#E5E7EB]">
@@ -1050,6 +1231,10 @@ export function CommunicationsHub() {
                         />
                       </div>
                     </div>
+                  ) : null}
+
+                  {requestDetailRows.length > 0 ? (
+                    <RequestDetailsCard rows={requestDetailRows} />
                   ) : null}
 
                   {chronologicalMessages.map((message) => {
@@ -1121,6 +1306,7 @@ export function CommunicationsHub() {
               ) : mobileDetailTab === "intake" ? (
                 <MobileIntakePanel
                   detail={detail}
+                  requestDetailRows={requestDetailRows}
                   requiredAction={requiredAction}
                   returnTo={destinationReturnTo}
                 />
@@ -1247,11 +1433,23 @@ export function CommunicationsHub() {
                     Assign
                   </button>
                   <button
-                    className="rounded-lg border border-[#E5E7EB] px-3 py-2 text-sm font-semibold text-[#64748B]"
-                    disabled
+                    className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                      canCreateJobFromConversation || linkedJobId
+                        ? "border-[#0F6BFF] bg-[#0F6BFF] text-white"
+                        : "border-[#E5E7EB] text-[#64748B]"
+                    }`}
+                    disabled={
+                      createJobState.status === "saving" ||
+                      (!canCreateJobFromConversation && !linkedJobId)
+                    }
+                    onClick={() => void handleCreateJobFromConversation()}
                     type="button"
                   >
-                    Create Job
+                    {createJobState.status === "saving"
+                      ? "Creating..."
+                      : linkedJobId
+                        ? "Open Job"
+                        : "Create Job"}
                   </button>
                   {detail.intake ? (
                     <ActionLink href={withReturnTo(intakeHref)} label="Open Intake" />
@@ -1259,6 +1457,17 @@ export function CommunicationsHub() {
                     <ActionLink href={withReturnTo(intakeHref)} label="Create Intake" />
                   )}
                 </div>
+                {createJobState.message ? (
+                  <p
+                    className={`text-sm font-semibold ${
+                      createJobState.status === "error"
+                        ? "text-amber-700"
+                        : "text-emerald-700"
+                    }`}
+                  >
+                    {createJobState.message}
+                  </p>
+                ) : null}
               </div>
 
               {detailState.status === "loading" ? (
@@ -1306,6 +1515,10 @@ export function CommunicationsHub() {
                           />
                         </div>
                       </div>
+                    ) : null}
+
+                    {requestDetailRows.length > 0 ? (
+                      <RequestDetailsCard rows={requestDetailRows} />
                     ) : null}
 
                     {chronologicalMessages.length === 0 &&
@@ -1468,6 +1681,9 @@ export function CommunicationsHub() {
               <Panel title="Intake">
                 {detail.intake ? (
                   <div className="space-y-2">
+                    {requestDetailRows.length > 0 ? (
+                      <RequestDetailsList rows={requestDetailRows} />
+                    ) : null}
                     <ContextRow label="Status" value={getStatusLabel(detail.intake.status)} />
                     <ContextRow
                       label="Problem"
@@ -1588,10 +1804,12 @@ function MobileCustomerPanel({
 
 function MobileIntakePanel({
   detail,
+  requestDetailRows,
   requiredAction,
   returnTo,
 }: {
   detail: ConversationDetailData;
+  requestDetailRows: Array<[string, string]>;
   requiredAction: string;
   returnTo: string;
 }) {
@@ -1610,6 +1828,9 @@ function MobileIntakePanel({
             label="Problem"
             value={detail.intake.problem_description ?? "Not captured"}
           />
+          {requestDetailRows.length > 0 ? (
+            <RequestDetailsList rows={requestDetailRows} />
+          ) : null}
           <ActionLink href={withReturnTo(intakeHref)} label="Review Intake" />
         </div>
       ) : (
@@ -1680,6 +1901,30 @@ function ContextRow({ label, value }: { label: string; value: string }) {
     <div className="grid grid-cols-[96px_minmax(0,1fr)] gap-3 text-sm">
       <p className="font-medium text-[#64748B]">{label}</p>
       <p className="min-w-0 font-semibold text-[#0F172A]">{value}</p>
+    </div>
+  );
+}
+
+function RequestDetailsList({ rows }: { rows: Array<[string, string]> }) {
+  return (
+    <div className="space-y-2">
+      {rows.map(([label, value]) => (
+        <ContextRow key={label} label={label} value={value} />
+      ))}
+    </div>
+  );
+}
+
+function RequestDetailsCard({ rows }: { rows: Array<[string, string]> }) {
+  return (
+    <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm font-semibold text-[#0F172A]">Request details</p>
+        <Badge tone="purple">Website</Badge>
+      </div>
+      <div className="mt-4">
+        <RequestDetailsList rows={rows} />
+      </div>
     </div>
   );
 }
