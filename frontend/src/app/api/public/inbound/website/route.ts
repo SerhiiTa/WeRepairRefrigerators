@@ -250,7 +250,14 @@ function resolveEventTypeForPayload(
 
 function validatePayload(payload: PublicWebsiteInboundPayload): string[] {
   const errors: string[] = [];
-  const customerName = cleanText(payload.customer?.name, 255);
+  const derivedCustomerName = [
+    cleanText(payload.customer?.firstName, 120),
+    cleanText(payload.customer?.lastName, 120),
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const customerName =
+    cleanText(payload.customer?.name, 255) ?? derivedCustomerName;
   const customerPhone = cleanText(payload.customer?.phone, 40);
   const customerEmail = cleanText(payload.customer?.email, 320);
   const formattedAddress = cleanText(payload.serviceAddress?.formatted, 500);
@@ -260,7 +267,7 @@ function validatePayload(payload: PublicWebsiteInboundPayload): string[] {
     2_000,
   );
 
-  if (!customerName) {
+  if (!customerName.trim()) {
     errors.push("customer.name is required.");
   }
   if (!customerPhone && !customerEmail) {
@@ -341,6 +348,13 @@ export async function POST(request: Request) {
     cleanText(payload.providerEventId, 255) ??
     cleanText(payload.submissionId, 255) ??
     cleanText(payload.idempotencyKey, 255);
+  const customerFirstName = cleanText(payload.customer?.firstName, 120);
+  const customerLastName = cleanText(payload.customer?.lastName, 120);
+  const derivedCustomerName = [customerFirstName, customerLastName]
+    .filter(Boolean)
+    .join(" ");
+  const customerName =
+    cleanText(payload.customer?.name, 255) ?? (derivedCustomerName || undefined);
   const problemDescription = cleanText(
     payload.requestedService?.problemDescription,
     2_000,
@@ -365,9 +379,9 @@ export async function POST(request: Request) {
     },
     attribution: buildAttribution(payload.attribution),
     customer: {
-      name: cleanText(payload.customer?.name, 255),
-      firstName: cleanText(payload.customer?.firstName, 120),
-      lastName: cleanText(payload.customer?.lastName, 120),
+      name: customerName,
+      firstName: customerFirstName,
+      lastName: customerLastName,
       phone: cleanText(payload.customer?.phone, 40),
       email: cleanText(payload.customer?.email, 320),
     },
