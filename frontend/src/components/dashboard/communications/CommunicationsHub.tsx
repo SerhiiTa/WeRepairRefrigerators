@@ -23,7 +23,11 @@ import type {
 } from "@/lib/supabase/types";
 
 type MessageRow = PublicSchema["Tables"]["communication_messages"]["Row"];
+type MessageAttachmentRow =
+  PublicSchema["Tables"]["communication_message_attachments"]["Row"];
 type TranscriptRow = PublicSchema["Tables"]["communication_transcripts"]["Row"];
+type CommunicationLeadRow = PublicSchema["Tables"]["communication_leads"]["Row"];
+type SourceAccountRow = PublicSchema["Tables"]["communication_source_accounts"]["Row"];
 
 type HubState =
   | { status: "loading"; conversations: HubConversation[]; error: null }
@@ -53,14 +57,33 @@ type CreateJobState =
   | { status: "success"; message: string }
   | { status: "error"; message: string };
 
+type ActionState =
+  | { status: "idle"; message: null }
+  | { status: "saving"; message: string }
+  | { status: "success"; message: string }
+  | { status: "error"; message: string };
+
+type PendingMmsAttachment = {
+  id: string;
+  file: File;
+  previewUrl: string;
+};
+
 type ConversationDetailData = {
   intake: IntakeRequestRow | null;
+  lead: CommunicationLeadRow | null;
+  sourceAccount: SourceAccountRow | null;
   customer: CustomerRow | null;
   appliance: CustomerApplianceRow | null;
   job: ServiceRequestRow | null;
   messages: MessageRow[];
+  attachmentsByMessageId: Record<string, SignedMessageAttachment[]>;
   transcripts: TranscriptRow[];
   timelineEvents: CommunicationTimelineEvent[];
+};
+
+type SignedMessageAttachment = MessageAttachmentRow & {
+  signedUrl: string | null;
 };
 
 type RetellRecording = {
@@ -127,15 +150,18 @@ type TimelineRow = {
 
 const emptyDetailData: ConversationDetailData = {
   intake: null,
+  lead: null,
+  sourceAccount: null,
   customer: null,
   appliance: null,
   job: null,
   messages: [],
+  attachmentsByMessageId: {},
   transcripts: [],
   timelineEvents: [],
 };
 
-type ContextTab = "customer" | "intake" | "job" | "activity";
+type ContextTab = "customer" | "intake" | "lead" | "job" | "activity";
 type ChannelFilter = "all" | "calls" | "texts" | "forms" | "booking";
 
 function mapConversation(row: ConversationRow): HubConversation {
@@ -369,6 +395,45 @@ async function hydrateLatestMessagePreviews(
   }));
 }
 
+async function loadSignedMessageAttachments(messageIds: string[]) {
+  const supabase = getSupabaseBrowserClient();
+  if (!supabase || messageIds.length === 0) {
+    return {};
+  }
+
+  const { data, error } = await supabase
+    .from("communication_message_attachments")
+    .select("*")
+    .in("communication_message_id", messageIds)
+    .order("created_at", { ascending: true });
+
+  if (error || !data) {
+    return {};
+  }
+
+  const attachments: SignedMessageAttachment[] = [];
+  for (const attachment of data as MessageAttachmentRow[]) {
+    const { data: signedData } = await supabase.storage
+      .from(attachment.storage_bucket)
+      .createSignedUrl(attachment.storage_path, 60 * 30);
+    attachments.push({
+      ...attachment,
+      signedUrl: signedData?.signedUrl ?? null,
+    });
+  }
+
+  return attachments.reduce<Record<string, SignedMessageAttachment[]>>(
+    (groups, attachment) => {
+      groups[attachment.communication_message_id] = [
+        ...(groups[attachment.communication_message_id] ?? []),
+        attachment,
+      ];
+      return groups;
+    },
+    {},
+  );
+}
+
 function getAttributionRecord(value: Json | null | undefined): Record<string, Json> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, Json>)
@@ -413,10 +478,10 @@ function getJsonString(value: Json | null | undefined, key: string): string | nu
   return typeof entry === "string" && entry.trim() ? entry.trim() : null;
 }
 
-function isTrustedWebsiteBooking(detail: ConversationDetailData, conversation: HubConversation) {
+function isTrustedWebsiteIntake(detail: ConversationDetailData, conversation: HubConversation) {
   return (
     conversation.sourceType === "website_form" &&
-    conversation.authoritativeEventType === "booking_request" &&
+    Boolean(conversation.inboundSourceId) &&
     Boolean(detail.intake?.id)
   );
 }
@@ -434,8 +499,8 @@ function getCreateJobBlockedReason(
     return "A linked Intake is required before creating a Job.";
   }
 
-  if (!isTrustedWebsiteBooking(detail, conversation)) {
-    return "Only trusted online booking requests can be converted from Communications.";
+  if (!isTrustedWebsiteIntake(detail, conversation)) {
+    return "A trusted website Intake is required before creating a Job.";
   }
 
   if (detail.job || intake.linked_service_request_id) {
@@ -454,19 +519,19 @@ function getCreateJobBlockedReason(
   }
 
   if (!intake.service_address?.trim()) {
-    return "Service address is required before creating a Job.";
+    return "Add service address to create Job.";
   }
 
   if (!intake.zip_code?.trim()) {
-    return "ZIP code is required before creating a Job.";
+    return "Add ZIP code to create Job.";
   }
 
   if (!intake.appliance_type?.trim()) {
-    return "Appliance type is required before creating a Job.";
+    return "Add appliance or service type to create Job.";
   }
 
   if (!intake.problem_description?.trim()) {
-    return "Problem description is required before creating a Job.";
+    return "Add problem description to create Job.";
   }
 
   return null;
@@ -501,6 +566,14 @@ function getInitialQueryParam(name: string): string | null {
   }
 
   return new URLSearchParams(window.location.search).get(name);
+}
+
+function randomClientId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+
+  return Math.random().toString(36).slice(2);
 }
 
 function getInitialChannelFilter(): ChannelFilter {
@@ -716,7 +789,24 @@ export function CommunicationsHub() {
     "conversation" | ContextTab
   >("conversation");
   const [detailReloadToken, setDetailReloadToken] = useState(0);
+  const [createdLeadId, setCreatedLeadId] = useState<string | null>(null);
   const [createJobState, setCreateJobState] = useState<CreateJobState>({
+    status: "idle",
+    message: null,
+  });
+  const [createLeadState, setCreateLeadState] = useState<ActionState>({
+    status: "idle",
+    message: null,
+  });
+  const [updateIntakeState, setUpdateIntakeState] = useState<ActionState>({
+    status: "idle",
+    message: null,
+  });
+  const [smsDraft, setSmsDraft] = useState("");
+  const [pendingAttachments, setPendingAttachments] = useState<PendingMmsAttachment[]>([]);
+  const [previewAttachment, setPreviewAttachment] =
+    useState<SignedMessageAttachment | null>(null);
+  const [sendMessageState, setSendMessageState] = useState<ActionState>({
     status: "idle",
     message: null,
   });
@@ -862,6 +952,9 @@ export function CommunicationsHub() {
               messages: mergeMessageRows(current.data.messages, message),
             },
           }));
+          window.setTimeout(() => {
+            setDetailReloadToken((value) => value + 1);
+          }, 600);
         },
       )
       .subscribe();
@@ -901,7 +994,14 @@ export function CommunicationsHub() {
 
       setDetailState({ status: "loading", data: emptyDetailData, error: null });
 
-      const [messagesResult, transcriptsResult, timelineResult, intakeResult] =
+      const [
+        messagesResult,
+        transcriptsResult,
+        timelineResult,
+        intakeResult,
+        leadResult,
+        sourceAccountResult,
+      ] =
         await Promise.all([
           supabase
             .from("communication_messages")
@@ -930,13 +1030,42 @@ export function CommunicationsHub() {
                 .eq("id", conversation.linkedIntakeRequestId)
                 .maybeSingle()
             : Promise.resolve({ data: null, error: null }),
+          supabase
+            .from("communication_leads")
+            .select("*")
+            .or(
+              [
+                `conversation_id.eq.${selectedConversationId}`,
+                conversation.linkedIntakeRequestId
+                  ? `intake_request_id.eq.${conversation.linkedIntakeRequestId}`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(","),
+            )
+            .order("created_at", { ascending: true })
+            .limit(1)
+            .maybeSingle(),
+          conversation.sourceAccountId
+            ? supabase
+                .from("communication_source_accounts")
+                .select("*")
+                .eq("id", conversation.sourceAccountId)
+                .maybeSingle()
+            : Promise.resolve({ data: null, error: null }),
         ]);
 
       if (!isMounted) {
         return;
       }
 
-      if (messagesResult.error || transcriptsResult.error || timelineResult.error) {
+      if (
+        messagesResult.error ||
+        transcriptsResult.error ||
+        timelineResult.error ||
+        leadResult.error ||
+        sourceAccountResult.error
+      ) {
         setDetailState({
           status: "error",
           data: emptyDetailData,
@@ -946,6 +1075,11 @@ export function CommunicationsHub() {
       }
 
       const intake = (intakeResult.data ?? null) as IntakeRequestRow | null;
+      const lead = (leadResult.data ?? null) as CommunicationLeadRow | null;
+      const messages = (messagesResult.data ?? []) as MessageRow[];
+      const attachmentsByMessageId = await loadSignedMessageAttachments(
+        messages.map((message) => message.id),
+      );
       const jobId = conversation.linkedServiceRequestId ?? intake?.linked_service_request_id ?? null;
       const jobResult = jobId
         ? await supabase.from("service_requests").select("*").eq("id", jobId).maybeSingle()
@@ -977,10 +1111,13 @@ export function CommunicationsHub() {
         status: "ready",
         data: {
           intake,
+          lead,
+          sourceAccount: (sourceAccountResult.data ?? null) as SourceAccountRow | null,
           customer: (customerResult.data ?? null) as CustomerRow | null,
           appliance: (applianceResult.data ?? null) as CustomerApplianceRow | null,
           job,
-          messages: (messagesResult.data ?? []) as MessageRow[],
+          messages,
+          attachmentsByMessageId,
           transcripts: (transcriptsResult.data ?? []) as TranscriptRow[],
           timelineEvents: filterBusinessTimelineEvents(
             ((timelineResult.data ?? []) as TimelineRow[]).map(mapTimelineEvent),
@@ -1125,7 +1262,6 @@ export function CommunicationsHub() {
     [hubState.conversations, selectedConversationId],
   );
 
-
   useEffect(() => {
     if (
       !selectedConversationId ||
@@ -1255,7 +1391,12 @@ export function CommunicationsHub() {
   };
   const openConversation = (conversationId: string) => {
     setSelectedConversationId(conversationId);
+    setCreatedLeadId(null);
     setCreateJobState({ status: "idle", message: null });
+    setCreateLeadState({ status: "idle", message: null });
+    setUpdateIntakeState({ status: "idle", message: null });
+    setSmsDraft("");
+    setSendMessageState({ status: "idle", message: null });
     setMobileDetailOpen(true);
     setMobileDetailTab("conversation");
     if (typeof window !== "undefined") {
@@ -1278,6 +1419,27 @@ export function CommunicationsHub() {
       !detail.intake.linked_service_request_id &&
       !createJobBlockedReason,
   );
+  const linkedLeadId = detail.lead?.id ?? createdLeadId;
+  const canCreateLeadFromConversation = Boolean(
+    selectedConversation && detail.intake && !linkedLeadId,
+  );
+  const smsSourceAccount = detail.sourceAccount;
+  const canSendSmsFromConversation = Boolean(
+    selectedConversation &&
+      selectedConversation.customerPhone &&
+      smsSourceAccount?.provider_name === "telnyx" &&
+      smsSourceAccount.supports_outbound_sms === true,
+  );
+  const sendMessageBlockedReason = !selectedConversation
+    ? "Select a conversation before sending."
+    : !selectedConversation.customerPhone
+      ? "This conversation does not have a customer phone number."
+      : !smsSourceAccount
+        ? "This conversation is not connected to an SMS source account."
+        : smsSourceAccount.provider_name !== "telnyx" ||
+            smsSourceAccount.supports_outbound_sms !== true
+          ? "Outbound SMS is not enabled for this conversation source."
+          : null;
   const linkedJobId =
     detail.job?.id ??
     detail.intake?.linked_service_request_id ??
@@ -1286,6 +1448,228 @@ export function CommunicationsHub() {
   const requestDetailRows = selectedConversation
     ? getRequestDetailRows(detail, selectedConversation)
     : [];
+
+  function handleSelectMessageAttachments(files: FileList | null) {
+    if (!files) {
+      return;
+    }
+
+    const supportedTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
+    const selectedFiles = Array.from(files)
+      .filter((file) => supportedTypes.has(file.type) && file.size <= 5 * 1024 * 1024)
+      .slice(0, Math.max(0, 5 - pendingAttachments.length));
+
+    if (selectedFiles.length === 0) {
+      setSendMessageState({
+        status: "error",
+        message: "Attach JPEG, PNG, or WebP images up to 5 MB each.",
+      });
+      return;
+    }
+
+    setPendingAttachments((current) => [
+      ...current,
+      ...selectedFiles.map((file) => ({
+        id: `${file.name}-${file.lastModified}-${randomClientId()}`,
+        file,
+        previewUrl: URL.createObjectURL(file),
+      })),
+    ]);
+    setSendMessageState({ status: "idle", message: null });
+  }
+
+  function removePendingAttachment(id: string) {
+    setPendingAttachments((current) => {
+      const removed = current.find((attachment) => attachment.id === id);
+      if (removed) {
+        URL.revokeObjectURL(removed.previewUrl);
+      }
+      return current.filter((attachment) => attachment.id !== id);
+    });
+  }
+
+  async function handleCreateLeadFromConversation() {
+    if (!selectedConversation) {
+      return;
+    }
+
+    if (linkedLeadId) {
+      window.location.assign(withReturnTo(`/dashboard/communication-leads/${linkedLeadId}`));
+      return;
+    }
+
+    setCreateJobState({ status: "idle", message: null });
+    setCreateLeadState({ status: "saving", message: "Creating lead..." });
+
+    try {
+      const supabase = getSupabaseBrowserClient();
+      if (!supabase) {
+        throw new Error("Communications is not configured for lead creation.");
+      }
+
+      const { data, error } = await supabase.rpc("create_communication_lead_rpc", {
+        p_conversation_id: selectedConversation.id,
+      });
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      const result =
+        data && typeof data === "object" && !Array.isArray(data)
+          ? (data as Record<string, unknown>)
+          : {};
+      const leadId = typeof result.lead_id === "string" ? result.lead_id : null;
+
+      if (!leadId) {
+        throw new Error("Lead creation did not return a Lead id.");
+      }
+
+      setDetailReloadToken((value) => value + 1);
+      setCreatedLeadId(leadId);
+      setContextTab("lead");
+      setMobileDetailTab("lead");
+      setCreateLeadState({
+        status: "success",
+        message:
+          result.already_created === true
+            ? "Lead already existed. Open it from this conversation."
+            : "Lead created and linked to this conversation.",
+      });
+    } catch (error) {
+      setCreateLeadState({
+        status: "error",
+        message: error instanceof Error ? error.message : "Could not create this lead.",
+      });
+    }
+  }
+
+  async function handleSaveIntakeDetails(formData: FormData) {
+    if (!detail.intake) {
+      return;
+    }
+
+    setUpdateIntakeState({ status: "saving", message: "Saving request details..." });
+
+    try {
+      const supabase = getSupabaseBrowserClient();
+      if (!supabase) {
+        throw new Error("Communications is not configured for intake updates.");
+      }
+
+      const payload = {
+        customer_name: String(formData.get("customer_name") ?? ""),
+        customer_phone: String(formData.get("customer_phone") ?? ""),
+        customer_email: String(formData.get("customer_email") ?? ""),
+        service_address: String(formData.get("service_address") ?? ""),
+        unit: String(formData.get("unit") ?? ""),
+        city: String(formData.get("city") ?? ""),
+        state: String(formData.get("state") ?? ""),
+        zip_code: String(formData.get("zip_code") ?? ""),
+        appliance_type: String(formData.get("appliance_type") ?? ""),
+        brand: String(formData.get("brand") ?? ""),
+        problem_description: String(formData.get("problem_description") ?? ""),
+        preferred_appointment_window: String(
+          formData.get("preferred_appointment_window") ?? "",
+        ),
+      };
+
+      const { error } = await supabase.rpc("update_intake_operational_details_rpc", {
+        p_intake_request_id: detail.intake.id,
+        p_payload: payload,
+      });
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      setDetailReloadToken((value) => value + 1);
+      setUpdateIntakeState({
+        status: "success",
+        message: "Request details updated.",
+      });
+    } catch (error) {
+      setUpdateIntakeState({
+        status: "error",
+        message: error instanceof Error ? error.message : "Could not update request details.",
+      });
+    }
+  }
+
+  async function handleSendMessage() {
+    if (
+      !selectedConversation ||
+      (!smsDraft.trim() && pendingAttachments.length === 0) ||
+      !canSendSmsFromConversation
+    ) {
+      return;
+    }
+
+    setSendMessageState({ status: "saving", message: "Sending message..." });
+
+    try {
+      const supabase = getSupabaseBrowserClient();
+      if (!supabase) {
+        throw new Error("Communications is not configured for messaging.");
+      }
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        throw new Error("Log in again to send this message.");
+      }
+
+      const bodyText = smsDraft.trim();
+      const hasAttachments = pendingAttachments.length > 0;
+      const requestBody = hasAttachments ? new FormData() : JSON.stringify({ body: bodyText });
+
+      if (requestBody instanceof FormData) {
+        requestBody.set("body", bodyText);
+        pendingAttachments.forEach((attachment) => {
+          requestBody.append("attachments", attachment.file, attachment.file.name);
+        });
+      }
+
+      const response = await fetch(
+        `/api/communications/conversations/${selectedConversation.id}/messages`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+            ...(hasAttachments ? {} : { "Content-Type": "application/json" }),
+          },
+          body: requestBody,
+        },
+      );
+      const payload = (await response.json().catch(() => null)) as {
+        ok?: boolean;
+        message?: string;
+      } | null;
+
+      if (!response.ok || payload?.ok !== true) {
+        throw new Error(payload?.message ?? "Could not send this message.");
+      }
+
+      setSmsDraft("");
+      pendingAttachments.forEach((attachment) => {
+        URL.revokeObjectURL(attachment.previewUrl);
+      });
+      setPendingAttachments([]);
+      setDetailReloadToken((value) => value + 1);
+      setSendMessageState({
+        status: "success",
+        message: "Message sent.",
+      });
+    } catch (error) {
+      setSendMessageState({
+        status: "error",
+        message: error instanceof Error ? error.message : "Could not send this message.",
+      });
+      setDetailReloadToken((value) => value + 1);
+    }
+  }
 
   async function handleCreateJobFromConversation() {
     if (!selectedConversation || !detail.intake) {
@@ -1297,6 +1681,7 @@ export function CommunicationsHub() {
       return;
     }
 
+    setCreateLeadState({ status: "idle", message: null });
     setCreateJobState({ status: "saving", message: "Creating job..." });
 
     try {
@@ -1539,6 +1924,25 @@ export function CommunicationsHub() {
                 </button>
                 <button
                   className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                    canCreateLeadFromConversation || linkedLeadId
+                      ? "border-[#0F6BFF] bg-white text-[#0F6BFF]"
+                      : "border-[#E5E7EB] text-[#64748B]"
+                  }`}
+                  disabled={
+                    createLeadState.status === "saving" ||
+                    (!canCreateLeadFromConversation && !linkedLeadId)
+                  }
+                  onClick={() => void handleCreateLeadFromConversation()}
+                  type="button"
+                >
+                  {createLeadState.status === "saving"
+                    ? "Creating..."
+                    : linkedLeadId
+                      ? "Open Lead"
+                      : "Create Lead"}
+                </button>
+                <button
+                  className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
                     canCreateJobFromConversation || linkedJobId
                       ? "border-[#0F6BFF] bg-[#0F6BFF] text-white"
                       : "border-[#E5E7EB] text-[#64748B]"
@@ -1562,7 +1966,17 @@ export function CommunicationsHub() {
                   <ActionLink href={withReturnTo(intakeHref)} label="Create Intake" />
                 )}
               </div>
-              {createJobState.message ? (
+              {createLeadState.message ? (
+                <p
+                  className={`mt-3 text-sm font-semibold ${
+                    createLeadState.status === "error"
+                      ? "text-amber-700"
+                      : "text-emerald-700"
+                  }`}
+                >
+                  {createLeadState.message}
+                </p>
+              ) : createJobState.message ? (
                 <p
                   className={`mt-3 text-sm font-semibold ${
                     createJobState.status === "error"
@@ -1584,6 +1998,7 @@ export function CommunicationsHub() {
                 ["conversation", "Conversation"],
                 ["customer", "Customer"],
                 ["intake", "Intake"],
+                ["lead", "Lead"],
                 ["job", "Job"],
                 ["activity", "Activity"],
               ] as Array<[typeof mobileDetailTab, string]>).map(([value, label]) => (
@@ -1648,6 +2063,7 @@ export function CommunicationsHub() {
 
                   {chronologicalMessages.map((message) => {
                     const outbound = message.direction === "outbound";
+                    const attachments = detail.attachmentsByMessageId[message.id] ?? [];
                     return (
                       <div
                         className={`flex ${outbound ? "justify-end" : "justify-start"}`}
@@ -1660,9 +2076,19 @@ export function CommunicationsHub() {
                               : "bg-white text-[#0F172A]"
                           }`}
                         >
-                          <p className="text-sm font-medium leading-6">
-                            {message.body ?? "Message body unavailable."}
-                          </p>
+                          {message.body ? (
+                            <p className="text-sm font-medium leading-6">
+                              {message.body}
+                            </p>
+                          ) : attachments.length === 0 ? (
+                            <p className="text-sm font-medium leading-6">
+                              Message body unavailable.
+                            </p>
+                          ) : null}
+                          <MessageAttachments
+                            attachments={attachments}
+                            onPreview={setPreviewAttachment}
+                          />
                           <p
                             className={`mt-1 text-xs font-medium ${
                               outbound ? "text-blue-100" : "text-[#64748B]"
@@ -1691,17 +2117,63 @@ export function CommunicationsHub() {
                       <span className="text-[#64748B]">Internal</span>
                     </div>
                     <textarea
-                      className="h-24 w-full resize-none rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3 text-sm font-medium text-[#64748B]"
-                      disabled
-                      placeholder="Outbound messaging is not connected yet."
+                      className="h-24 w-full resize-none rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3 text-sm font-medium text-[#0F172A] placeholder:text-[#94A3B8]"
+                      disabled={
+                        !canSendSmsFromConversation ||
+                        sendMessageState.status === "saving"
+                      }
+                      onChange={(event) => setSmsDraft(event.target.value)}
+                      placeholder={
+                        sendMessageBlockedReason ?? "Type a customer-facing SMS..."
+                      }
+                      value={smsDraft}
                     />
+                    <PendingAttachmentsPreview
+                      attachments={pendingAttachments}
+                      onRemove={removePendingAttachment}
+                    />
+                    {sendMessageState.message ? (
+                      <p
+                        className={`mt-2 text-xs font-semibold ${
+                          sendMessageState.status === "error"
+                            ? "text-red-600"
+                            : "text-[#64748B]"
+                        }`}
+                      >
+                        {sendMessageState.message}
+                      </p>
+                    ) : null}
                     <div className="mt-3 flex justify-end">
+                      <label className="mr-2 inline-flex cursor-pointer items-center justify-center rounded-lg border border-[#E5E7EB] bg-white px-3 py-2 text-sm font-semibold text-[#0F6BFF]">
+                        Photo
+                        <input
+                          accept="image/jpeg,image/png,image/webp"
+                          className="sr-only"
+                          multiple
+                          onChange={(event) => {
+                            handleSelectMessageAttachments(event.target.files);
+                            event.currentTarget.value = "";
+                          }}
+                          type="file"
+                        />
+                      </label>
                       <button
-                        className="rounded-lg bg-blue-200 px-5 py-2 text-sm font-semibold text-white"
-                        disabled
+                        className={`rounded-lg px-5 py-2 text-sm font-semibold text-white ${
+                          canSendSmsFromConversation &&
+                          (smsDraft.trim() || pendingAttachments.length > 0) &&
+                          sendMessageState.status !== "saving"
+                            ? "bg-[#0F6BFF]"
+                            : "bg-blue-200"
+                        }`}
+                        disabled={
+                          !canSendSmsFromConversation ||
+                          (!smsDraft.trim() && pendingAttachments.length === 0) ||
+                          sendMessageState.status === "saving"
+                        }
+                        onClick={handleSendMessage}
                         type="button"
                       >
-                        Send
+                        {sendMessageState.status === "saving" ? "Sending..." : "Send"}
                       </button>
                     </div>
                   </div>
@@ -1715,10 +2187,14 @@ export function CommunicationsHub() {
               ) : mobileDetailTab === "intake" ? (
                 <MobileIntakePanel
                   detail={detail}
+                  onSave={handleSaveIntakeDetails}
                   requestDetailRows={requestDetailRows}
                   requiredAction={requiredAction}
                   returnTo={destinationReturnTo}
+                  updateState={updateIntakeState}
                 />
+              ) : mobileDetailTab === "lead" ? (
+                <MobileLeadPanel detail={detail} onCreate={() => void handleCreateLeadFromConversation()} state={createLeadState} />
               ) : mobileDetailTab === "job" ? (
                 <MobileJobPanel detail={detail} returnTo={destinationReturnTo} />
               ) : (
@@ -1848,6 +2324,25 @@ export function CommunicationsHub() {
                   </button>
                   <button
                     className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                      canCreateLeadFromConversation || linkedLeadId
+                        ? "border-[#0F6BFF] bg-white text-[#0F6BFF]"
+                        : "border-[#E5E7EB] text-[#64748B]"
+                    }`}
+                    disabled={
+                      createLeadState.status === "saving" ||
+                      (!canCreateLeadFromConversation && !linkedLeadId)
+                    }
+                    onClick={() => void handleCreateLeadFromConversation()}
+                    type="button"
+                  >
+                    {createLeadState.status === "saving"
+                      ? "Creating..."
+                      : linkedLeadId
+                        ? "Open Lead"
+                        : "Create Lead"}
+                  </button>
+                  <button
+                    className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
                       canCreateJobFromConversation || linkedJobId
                         ? "border-[#0F6BFF] bg-[#0F6BFF] text-white"
                         : "border-[#E5E7EB] text-[#64748B]"
@@ -1871,7 +2366,17 @@ export function CommunicationsHub() {
                     <ActionLink href={withReturnTo(intakeHref)} label="Create Intake" />
                   )}
                 </div>
-                {createJobState.message ? (
+                {createLeadState.message ? (
+                  <p
+                    className={`text-sm font-semibold ${
+                      createLeadState.status === "error"
+                        ? "text-amber-700"
+                        : "text-emerald-700"
+                    }`}
+                  >
+                    {createLeadState.message}
+                  </p>
+                ) : createJobState.message ? (
                   <p
                     className={`text-sm font-semibold ${
                       createJobState.status === "error"
@@ -1946,6 +2451,7 @@ export function CommunicationsHub() {
 
                     {chronologicalMessages.map((message) => {
                       const outbound = message.direction === "outbound";
+                      const attachments = detail.attachmentsByMessageId[message.id] ?? [];
                       return (
                         <div
                           className={`flex ${outbound ? "justify-end" : "justify-start"}`}
@@ -1958,9 +2464,19 @@ export function CommunicationsHub() {
                                 : "bg-white text-[#0F172A]"
                             }`}
                           >
-                            <p className="text-sm font-medium leading-6">
-                              {message.body ?? "Message body unavailable."}
-                            </p>
+                            {message.body ? (
+                              <p className="text-sm font-medium leading-6">
+                                {message.body}
+                              </p>
+                            ) : attachments.length === 0 ? (
+                              <p className="text-sm font-medium leading-6">
+                                Message body unavailable.
+                              </p>
+                            ) : null}
+                            <MessageAttachments
+                              attachments={attachments}
+                              onPreview={setPreviewAttachment}
+                            />
                             <p
                               className={`mt-1 text-xs font-medium ${
                                 outbound ? "text-blue-100" : "text-[#64748B]"
@@ -2000,17 +2516,63 @@ export function CommunicationsHub() {
                       <span className="text-[#64748B]">Internal</span>
                     </div>
                     <textarea
-                      className="h-24 w-full resize-none rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3 text-sm font-medium text-[#64748B]"
-                      disabled
-                      placeholder="Outbound messaging is not connected yet."
+                      className="h-24 w-full resize-none rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3 text-sm font-medium text-[#0F172A] placeholder:text-[#94A3B8]"
+                      disabled={
+                        !canSendSmsFromConversation ||
+                        sendMessageState.status === "saving"
+                      }
+                      onChange={(event) => setSmsDraft(event.target.value)}
+                      placeholder={
+                        sendMessageBlockedReason ?? "Type a customer-facing SMS..."
+                      }
+                      value={smsDraft}
                     />
+                    <PendingAttachmentsPreview
+                      attachments={pendingAttachments}
+                      onRemove={removePendingAttachment}
+                    />
+                    {sendMessageState.message ? (
+                      <p
+                        className={`mt-2 text-xs font-semibold ${
+                          sendMessageState.status === "error"
+                            ? "text-red-600"
+                            : "text-[#64748B]"
+                        }`}
+                      >
+                        {sendMessageState.message}
+                      </p>
+                    ) : null}
                     <div className="mt-3 flex justify-end">
+                      <label className="mr-2 inline-flex cursor-pointer items-center justify-center rounded-lg border border-[#E5E7EB] bg-white px-3 py-2 text-sm font-semibold text-[#0F6BFF]">
+                        Photo
+                        <input
+                          accept="image/jpeg,image/png,image/webp"
+                          className="sr-only"
+                          multiple
+                          onChange={(event) => {
+                            handleSelectMessageAttachments(event.target.files);
+                            event.currentTarget.value = "";
+                          }}
+                          type="file"
+                        />
+                      </label>
                       <button
-                        className="rounded-lg bg-blue-200 px-5 py-2 text-sm font-semibold text-white"
-                        disabled
+                        className={`rounded-lg px-5 py-2 text-sm font-semibold text-white ${
+                          canSendSmsFromConversation &&
+                          (smsDraft.trim() || pendingAttachments.length > 0) &&
+                          sendMessageState.status !== "saving"
+                            ? "bg-[#0F6BFF]"
+                            : "bg-blue-200"
+                        }`}
+                        disabled={
+                          !canSendSmsFromConversation ||
+                          (!smsDraft.trim() && pendingAttachments.length === 0) ||
+                          sendMessageState.status === "saving"
+                        }
+                        onClick={handleSendMessage}
                         type="button"
                       >
-                        Send
+                        {sendMessageState.status === "saving" ? "Sending..." : "Send"}
                       </button>
                     </div>
                   </div>
@@ -2030,6 +2592,7 @@ export function CommunicationsHub() {
             {([
               ["customer", "Customer"],
               ["intake", "Intake"],
+              ["lead", "Lead"],
               ["job", "Job"],
               ["activity", "Activity"],
             ] as Array<[ContextTab, string]>).map(([value, label]) => (
@@ -2103,6 +2666,11 @@ export function CommunicationsHub() {
                       label="Problem"
                       value={detail.intake.problem_description ?? "Not captured"}
                     />
+                    <IntakeDetailsEditor
+                      intake={detail.intake}
+                      onSave={handleSaveIntakeDetails}
+                      state={updateIntakeState}
+                    />
                     <ActionLink href={withReturnTo(intakeHref)} label="Review Intake" />
                   </div>
                 ) : (
@@ -2112,6 +2680,14 @@ export function CommunicationsHub() {
                   </div>
                 )}
               </Panel>
+            ) : null}
+
+            {contextTab === "lead" ? (
+              <LeadPanel
+                detail={detail}
+                onCreate={() => void handleCreateLeadFromConversation()}
+                state={createLeadState}
+              />
             ) : null}
 
             {contextTab === "job" ? (
@@ -2129,7 +2705,7 @@ export function CommunicationsHub() {
                       title="No job linked"
                       body={
                         canCreateJobFromConversation
-                          ? "Create a Job from this trusted booking request."
+                          ? "Create a Job from this trusted website request."
                           : createJobBlockedReason ?? "Open Intake to review missing information before creating a Job."
                       }
                     />
@@ -2174,7 +2750,114 @@ export function CommunicationsHub() {
           </div>
         </aside>
       </section>
+      {previewAttachment ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0F172A]/80 p-4">
+          <button
+            aria-label="Close photo preview"
+            className="absolute inset-0"
+            onClick={() => setPreviewAttachment(null)}
+            type="button"
+          />
+          <div className="relative max-h-full max-w-4xl overflow-hidden rounded-2xl bg-white p-3 shadow-2xl">
+            <button
+              className="absolute right-4 top-4 z-10 rounded-full bg-white/90 px-3 py-1 text-sm font-black text-[#0F172A]"
+              onClick={() => setPreviewAttachment(null)}
+              type="button"
+            >
+              Close
+            </button>
+            {previewAttachment.signedUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                alt={previewAttachment.original_filename ?? "Communication attachment"}
+                className="max-h-[82vh] max-w-full rounded-xl object-contain"
+                src={previewAttachment.signedUrl}
+              />
+            ) : (
+              <p className="p-8 text-sm font-semibold text-[#64748B]">
+                Photo preview is unavailable.
+              </p>
+            )}
+          </div>
+        </div>
+      ) : null}
     </main>
+  );
+}
+
+function MessageAttachments({
+  attachments,
+  onPreview,
+}: {
+  attachments: SignedMessageAttachment[];
+  onPreview: (attachment: SignedMessageAttachment) => void;
+}) {
+  if (attachments.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+      {attachments.map((attachment) => (
+        <button
+          className="overflow-hidden rounded-xl border border-white/30 bg-white/10"
+          key={attachment.id}
+          onClick={() => onPreview(attachment)}
+          type="button"
+        >
+          {attachment.signedUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              alt={attachment.original_filename ?? "Communication attachment"}
+              className="aspect-square w-full object-cover"
+              src={attachment.signedUrl}
+            />
+          ) : (
+            <span className="flex aspect-square items-center justify-center px-2 text-xs font-semibold">
+              Photo unavailable
+            </span>
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function PendingAttachmentsPreview({
+  attachments,
+  onRemove,
+}: {
+  attachments: PendingMmsAttachment[];
+  onRemove: (id: string) => void;
+}) {
+  if (attachments.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="mt-3 flex flex-wrap gap-2">
+      {attachments.map((attachment) => (
+        <div
+          className="relative overflow-hidden rounded-xl border border-[#E5E7EB] bg-white"
+          key={attachment.id}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            alt={attachment.file.name || "Selected attachment"}
+            className="h-20 w-20 object-cover"
+            src={attachment.previewUrl}
+          />
+          <button
+            aria-label="Remove photo"
+            className="absolute right-1 top-1 rounded-full bg-white/90 px-1.5 py-0.5 text-xs font-black text-[#0F172A]"
+            onClick={() => onRemove(attachment.id)}
+            type="button"
+          >
+            ×
+          </button>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -2236,14 +2919,18 @@ function MobileCustomerPanel({
 
 function MobileIntakePanel({
   detail,
+  onSave,
   requestDetailRows,
   requiredAction,
   returnTo,
+  updateState,
 }: {
   detail: ConversationDetailData;
+  onSave: (formData: FormData) => void;
   requestDetailRows: Array<[string, string]>;
   requiredAction: string;
   returnTo: string;
+  updateState: ActionState;
 }) {
   const withReturnTo = (href: string) =>
     `${href}${href.includes("?") ? "&" : "?"}returnTo=${encodeURIComponent(returnTo)}`;
@@ -2263,6 +2950,11 @@ function MobileIntakePanel({
           {requestDetailRows.length > 0 ? (
             <RequestDetailsList rows={requestDetailRows} />
           ) : null}
+          <IntakeDetailsEditor
+            intake={detail.intake}
+            onSave={onSave}
+            state={updateState}
+          />
           <ActionLink href={withReturnTo(intakeHref)} label="Review Intake" />
         </div>
       ) : (
@@ -2272,6 +2964,174 @@ function MobileIntakePanel({
         </div>
       )}
     </Panel>
+  );
+}
+
+function LeadPanel({
+  detail,
+  onCreate,
+  state,
+}: {
+  detail: ConversationDetailData;
+  onCreate: () => void;
+  state: ActionState;
+}) {
+  if (!detail.lead) {
+    return (
+      <Panel title="Lead">
+        <div className="space-y-3">
+          <EmptyState
+            title="No lead created"
+            body="Create a Lead to keep this opportunity open without creating a Customer or Job."
+          />
+          <button
+            className="rounded-lg bg-[#0F6BFF] px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={state.status === "saving"}
+            onClick={onCreate}
+            type="button"
+          >
+            {state.status === "saving" ? "Creating..." : "Create Lead"}
+          </button>
+          {state.message ? (
+            <p
+              className={`text-sm font-semibold ${
+                state.status === "error" ? "text-amber-700" : "text-emerald-700"
+              }`}
+            >
+              {state.message}
+            </p>
+          ) : null}
+        </div>
+      </Panel>
+    );
+  }
+
+  const leadName =
+    [detail.lead.customer_first_name, detail.lead.customer_last_name]
+      .filter(Boolean)
+      .join(" ") ||
+    detail.lead.customer_name ||
+    "Unknown contact";
+
+  return (
+    <Panel title="Lead">
+      <div className="space-y-2">
+        <ContextRow label="Status" value={getStatusLabel(detail.lead.status)} />
+        <ContextRow label="Name" value={leadName} />
+        <ContextRow label="Phone" value={detail.lead.customer_phone ?? "Not captured"} />
+        <ContextRow label="Email" value={detail.lead.customer_email ?? "Not captured"} />
+        <ContextRow label="Address" value={detail.lead.service_address ?? "Not captured"} />
+        <ContextRow
+          label="Service"
+          value={
+            [detail.lead.brand, detail.lead.appliance_type].filter(Boolean).join(" ") ||
+            "Not captured"
+          }
+        />
+        <ContextRow
+          label="Problem"
+          value={detail.lead.problem_description ?? "Not captured"}
+        />
+      </div>
+    </Panel>
+  );
+}
+
+function MobileLeadPanel({
+  detail,
+  onCreate,
+  state,
+}: {
+  detail: ConversationDetailData;
+  onCreate: () => void;
+  state: ActionState;
+}) {
+  return <LeadPanel detail={detail} onCreate={onCreate} state={state} />;
+}
+
+function IntakeDetailsEditor({
+  intake,
+  onSave,
+  state,
+}: {
+  intake: IntakeRequestRow;
+  onSave: (formData: FormData) => void;
+  state: ActionState;
+}) {
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSave(new FormData(event.currentTarget));
+      }}
+      className="mt-4 space-y-3 rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3"
+    >
+      <p className="text-sm font-semibold text-[#0F172A]">Complete Request Details</p>
+      <FieldInput label="Customer name" name="customer_name" value={intake.customer_name} />
+      <FieldInput label="Phone" name="customer_phone" value={intake.customer_phone} />
+      <FieldInput label="Email" name="customer_email" value={intake.customer_email} />
+      <FieldInput label="Service address" name="service_address" value={intake.service_address} />
+      <div className="grid grid-cols-2 gap-2">
+        <FieldInput label="Unit" name="unit" value={intake.unit} />
+        <FieldInput label="ZIP" name="zip_code" value={intake.zip_code} />
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <FieldInput label="City" name="city" value={intake.city} />
+        <FieldInput label="State" name="state" value={intake.state} />
+      </div>
+      <FieldInput label="Appliance / service type" name="appliance_type" value={intake.appliance_type} />
+      <FieldInput label="Brand" name="brand" value={intake.brand} />
+      <label className="block text-xs font-bold uppercase tracking-[0.12em] text-[#64748B]">
+        Problem description
+        <textarea
+          className="mt-1 min-h-24 w-full resize-y rounded-lg border border-[#E5E7EB] bg-white px-3 py-2 text-sm font-semibold normal-case tracking-normal text-[#0F172A] outline-none focus:border-[#0F6BFF]"
+          defaultValue={intake.problem_description ?? ""}
+          name="problem_description"
+        />
+      </label>
+      <FieldInput
+        label="Preferred appointment window"
+        name="preferred_appointment_window"
+        value={intake.preferred_appointment_window}
+      />
+      <button
+        className="w-full rounded-lg bg-[#0F6BFF] px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+        disabled={state.status === "saving"}
+        type="submit"
+      >
+        {state.status === "saving" ? "Saving..." : "Save Request Details"}
+      </button>
+      {state.message ? (
+        <p
+          className={`text-sm font-semibold ${
+            state.status === "error" ? "text-amber-700" : "text-emerald-700"
+          }`}
+        >
+          {state.message}
+        </p>
+      ) : null}
+    </form>
+  );
+}
+
+function FieldInput({
+  label,
+  name,
+  value,
+}: {
+  label: string;
+  name: string;
+  value: string | null;
+}) {
+  return (
+    <label className="block text-xs font-bold uppercase tracking-[0.12em] text-[#64748B]">
+      {label}
+      <input
+        className="mt-1 w-full rounded-lg border border-[#E5E7EB] bg-white px-3 py-2 text-sm font-semibold normal-case tracking-normal text-[#0F172A] outline-none focus:border-[#0F6BFF]"
+        defaultValue={value ?? ""}
+        name={name}
+      />
+    </label>
   );
 }
 

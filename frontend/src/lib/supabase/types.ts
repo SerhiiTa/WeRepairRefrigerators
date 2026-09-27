@@ -524,6 +524,30 @@ export type Database = {
         >;
         Relationships: [];
       };
+      communication_message_attachments: {
+        Row: {
+          id: string;
+          company_id: string | null;
+          communication_message_id: string;
+          attachment_type: "image";
+          media_type: "mms";
+          mime_type: "image/jpeg" | "image/png" | "image/webp";
+          storage_bucket: string;
+          storage_path: string;
+          original_provider_url: string | null;
+          original_filename: string | null;
+          size_bytes: number | null;
+          provider_metadata: Json;
+          created_at: string;
+        };
+        Insert: Partial<
+          Database["public"]["Tables"]["communication_message_attachments"]["Row"]
+        >;
+        Update: Partial<
+          Database["public"]["Tables"]["communication_message_attachments"]["Row"]
+        >;
+        Relationships: [];
+      };
       communication_messages: {
         Row: {
           id: string;

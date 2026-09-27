@@ -1,4 +1,4 @@
-import { createPublicKey, verify } from "node:crypto";
+import { createPublicKey, randomUUID, verify } from "node:crypto";
 
 import { getSupabaseServiceRoleClient } from "@/lib/supabase/service-role";
 import type {
@@ -11,9 +11,17 @@ import { resolveCommunicationPhoneIdentity } from "./phone-identity";
 
 type ConversationRow = PublicSchema["Tables"]["communication_conversations"]["Row"];
 type SourceAccountRow = PublicSchema["Tables"]["communication_source_accounts"]["Row"];
+type SupportedMmsMimeType = "image/jpeg" | "image/png" | "image/webp";
 
 const TELNYX_MESSAGES_URL = "https://api.telnyx.com/v2/messages";
 const SIGNATURE_MAX_AGE_SECONDS = 5 * 60;
+const COMMUNICATIONS_MEDIA_BUCKET = "communications-media";
+const MAX_MMS_ATTACHMENTS = 5;
+const MAX_MMS_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const SUPPORTED_MMS_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const TELNYX_MEDIA_HOSTS = new Set([
+  "tlnx-mms-media.s3.us-east-1.amazonaws.com",
+]);
 
 type TelnyxMessagePayload = {
   id?: unknown;
@@ -26,6 +34,7 @@ type TelnyxMessagePayload = {
     | null;
   text?: unknown;
   media?: unknown;
+  media_urls?: unknown;
   received_at?: unknown;
   sent_at?: unknown;
   completed_at?: unknown;
@@ -45,6 +54,21 @@ type SendSmsResult =
   | { ok: true; messageId: string; providerMessageId: string | null }
   | { ok: false; status: number; message: string; messageId?: string | null };
 
+export type OutboundMmsAttachment = {
+  bytes: Buffer;
+  mimeType: string;
+  filename: string | null;
+  sizeBytes: number;
+};
+
+type TelnyxMediaAttachment = {
+  url: string;
+  mimeType: string | null;
+  filename: string | null;
+  sizeBytes: number | null;
+  metadata: Record<string, Json>;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -53,6 +77,129 @@ function cleanText(value: unknown, maxLength = 2_000): string | null {
   return typeof value === "string" && value.trim()
     ? value.trim().slice(0, maxLength)
     : null;
+}
+
+function getStringFromRecord(
+  record: Record<string, unknown>,
+  keys: string[],
+  maxLength = 2_000,
+): string | null {
+  for (const key of keys) {
+    const value = cleanText(record[key], maxLength);
+    if (value) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function getNumberFromRecord(record: Record<string, unknown>, keys: string[]): number | null {
+  for (const key of keys) {
+    const value = record[key];
+    const numberValue =
+      typeof value === "number"
+        ? value
+        : typeof value === "string"
+          ? Number(value)
+          : Number.NaN;
+
+    if (Number.isFinite(numberValue) && numberValue > 0) {
+      return Math.floor(numberValue);
+    }
+  }
+
+  return null;
+}
+
+function sanitizeFilename(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const sanitized = value
+    .replace(/[^\w.\- ]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 180);
+
+  return sanitized || null;
+}
+
+function getImageExtension(mimeType: string): string {
+  if (mimeType === "image/png") {
+    return "png";
+  }
+
+  if (mimeType === "image/webp") {
+    return "webp";
+  }
+
+  return "jpg";
+}
+
+function isSupportedMmsImage(mimeType: string | null): mimeType is SupportedMmsMimeType {
+  return Boolean(mimeType && SUPPORTED_MMS_IMAGE_TYPES.has(mimeType.toLowerCase()));
+}
+
+function getUrlFromMediaItem(item: unknown): string | null {
+  if (typeof item === "string") {
+    return cleanText(item, 4_000);
+  }
+
+  if (!isRecord(item)) {
+    return null;
+  }
+
+  const directUrl = getStringFromRecord(
+    item,
+    ["url", "media_url", "mediaUrl", "href"],
+    4_000,
+  );
+  if (directUrl) {
+    return directUrl;
+  }
+
+  const nestedImageUrl = getStringFromRecord(item, ["img", "image"], 4_000);
+  return nestedImageUrl;
+}
+
+function getTelnyxMediaAttachments(media: unknown): TelnyxMediaAttachment[] {
+  const mediaItems = Array.isArray(media) ? media : media ? [media] : [];
+
+  return mediaItems
+    .map((item): TelnyxMediaAttachment | null => {
+      const url = getUrlFromMediaItem(item);
+      const record = isRecord(item) ? item : {};
+      const mimeType =
+        getStringFromRecord(record, ["content_type", "mime_type", "mimeType"], 120)
+          ?.toLowerCase() ?? null;
+
+      if (!url) {
+        return null;
+      }
+
+      return {
+        url,
+        mimeType,
+        filename: sanitizeFilename(
+          getStringFromRecord(record, ["filename", "file_name", "name"], 180),
+        ),
+        sizeBytes: getNumberFromRecord(record, ["size", "size_bytes", "content_length"]),
+        metadata: isRecord(item) ? (item as Record<string, Json>) : { url },
+      };
+    })
+    .filter((item): item is TelnyxMediaAttachment => Boolean(item))
+    .slice(0, MAX_MMS_ATTACHMENTS);
+}
+
+function getTelnyxPayloadMediaAttachments(
+  payload: TelnyxMessagePayload | undefined,
+): TelnyxMediaAttachment[] {
+  const mediaAttachments = getTelnyxMediaAttachments(payload?.media);
+  return mediaAttachments.length > 0
+    ? mediaAttachments
+    : getTelnyxMediaAttachments(payload?.media_urls);
 }
 
 function getPhone(value: unknown): string | null {
@@ -399,7 +546,231 @@ function getOccurredAt(payload: TelnyxWebhookPayload): string {
 
 function hasMedia(payload: TelnyxMessagePayload | undefined): boolean {
   const media = payload?.media;
-  return Array.isArray(media) ? media.length > 0 : Boolean(media);
+  const mediaUrls = payload?.media_urls;
+  return (
+    (Array.isArray(media) ? media.length > 0 : Boolean(media)) ||
+    (Array.isArray(mediaUrls) ? mediaUrls.length > 0 : Boolean(mediaUrls))
+  );
+}
+
+function isAllowedTelnyxMediaUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+
+  if (url.protocol !== "https:") {
+    return false;
+  }
+
+  const hostname = url.hostname.toLowerCase();
+  return (
+    hostname === "telnyx.com" ||
+    hostname.endsWith(".telnyx.com") ||
+    TELNYX_MEDIA_HOSTS.has(hostname)
+  );
+}
+
+async function readLimitedResponseBytes(response: Response): Promise<Buffer | null> {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength && Number(contentLength) > MAX_MMS_ATTACHMENT_BYTES) {
+    return null;
+  }
+
+  if (!response.body) {
+    const bytes = Buffer.from(await response.arrayBuffer());
+    return bytes.length <= MAX_MMS_ATTACHMENT_BYTES ? bytes : null;
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+
+    totalBytes += value.byteLength;
+    if (totalBytes > MAX_MMS_ATTACHMENT_BYTES) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+
+  return Buffer.concat(chunks);
+}
+
+async function insertMessageAttachment({
+  companyId,
+  messageId,
+  bytes,
+  mimeType,
+  filename,
+  originalProviderUrl,
+  providerMetadata,
+}: {
+  companyId: string;
+  messageId: string;
+  bytes: Buffer;
+  mimeType: string;
+  filename: string | null;
+  originalProviderUrl: string | null;
+  providerMetadata: Record<string, Json>;
+}): Promise<{ ok: true; storagePath: string } | { ok: false; message: string }> {
+  const supabase = getSupabaseServiceRoleClient();
+  if (!supabase) {
+    return { ok: false, message: "Supabase service role is not configured." };
+  }
+
+  if (!isSupportedMmsImage(mimeType)) {
+    return { ok: false, message: "Unsupported MMS image type." };
+  }
+
+  if (bytes.length === 0 || bytes.length > MAX_MMS_ATTACHMENT_BYTES) {
+    return { ok: false, message: "MMS image size is not supported." };
+  }
+
+  const storagePath = `${companyId}/messages/${messageId}/${randomUUID()}.${getImageExtension(
+    mimeType,
+  )}`;
+  const { error: uploadError } = await supabase.storage
+    .from(COMMUNICATIONS_MEDIA_BUCKET)
+    .upload(storagePath, bytes, {
+      contentType: mimeType,
+      upsert: false,
+    });
+
+  if (uploadError) {
+    console.error("[telnyx-mms-storage-upload-error]", {
+      message: uploadError.message,
+    });
+    return { ok: false, message: "Unable to store MMS media." };
+  }
+
+  const { error: insertError } = await supabase
+    .from("communication_message_attachments")
+    .insert({
+      company_id: companyId,
+      communication_message_id: messageId,
+      attachment_type: "image",
+      media_type: "mms",
+      mime_type: mimeType,
+      storage_bucket: COMMUNICATIONS_MEDIA_BUCKET,
+      storage_path: storagePath,
+      original_provider_url: originalProviderUrl,
+      original_filename: filename,
+      size_bytes: bytes.length,
+      provider_metadata: providerMetadata,
+    });
+
+  if (insertError) {
+    console.error("[telnyx-mms-attachment-insert-error]", {
+      message: insertError.message,
+      code: insertError.code,
+    });
+    await supabase.storage.from(COMMUNICATIONS_MEDIA_BUCKET).remove([storagePath]);
+    return { ok: false, message: "Unable to persist MMS attachment metadata." };
+  }
+
+  return { ok: true, storagePath };
+}
+
+async function persistInboundMmsAttachments({
+  companyId,
+  messageId,
+  attachments,
+}: {
+  companyId: string;
+  messageId: string;
+  attachments: TelnyxMediaAttachment[];
+}) {
+  for (const attachment of attachments) {
+    if (!isAllowedTelnyxMediaUrl(attachment.url)) {
+      console.error("[telnyx-mms-media-url-rejected]");
+      continue;
+    }
+
+    const response = await fetch(attachment.url, {
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) {
+      console.error("[telnyx-mms-media-fetch-error]", {
+        status: response.status,
+      });
+      continue;
+    }
+
+    const responseMimeType =
+      response.headers.get("content-type")?.split(";")[0]?.toLowerCase() ?? null;
+    const mimeType = isSupportedMmsImage(responseMimeType)
+      ? responseMimeType
+      : attachment.mimeType;
+    if (!isSupportedMmsImage(mimeType)) {
+      continue;
+    }
+
+    const bytes = await readLimitedResponseBytes(response);
+    if (!bytes) {
+      console.error("[telnyx-mms-media-size-error]");
+      continue;
+    }
+
+    await insertMessageAttachment({
+      companyId,
+      messageId,
+      bytes,
+      mimeType,
+      filename: attachment.filename,
+      originalProviderUrl: attachment.url,
+      providerMetadata: attachment.metadata,
+    });
+  }
+}
+
+async function persistOutboundMmsAttachments({
+  companyId,
+  messageId,
+  attachments,
+}: {
+  companyId: string;
+  messageId: string;
+  attachments: OutboundMmsAttachment[];
+}) {
+  const supabase = getSupabaseServiceRoleClient();
+  if (!supabase) {
+    return [] as string[];
+  }
+
+  const mediaUrls: string[] = [];
+  for (const attachment of attachments.slice(0, MAX_MMS_ATTACHMENTS)) {
+    const result = await insertMessageAttachment({
+      companyId,
+      messageId,
+      bytes: attachment.bytes,
+      mimeType: attachment.mimeType,
+      filename: attachment.filename,
+      originalProviderUrl: null,
+      providerMetadata: {},
+    });
+
+    if (!result.ok) {
+      continue;
+    }
+
+    const { data, error } = await supabase.storage
+      .from(COMMUNICATIONS_MEDIA_BUCKET)
+      .createSignedUrl(result.storagePath, 60 * 60);
+    if (!error && data?.signedUrl) {
+      mediaUrls.push(data.signedUrl);
+    }
+  }
+
+  return mediaUrls;
 }
 
 function formatTelnyxFailure(payload: TelnyxWebhookPayload): string | null {
@@ -491,6 +862,7 @@ export async function handleTelnyxMessagingWebhook(payload: unknown) {
     const fromPhone = getPhone(messagePayload?.from);
     const toPhone = getToPhone(messagePayload?.to);
     const body = cleanText(messagePayload?.text, 4_000);
+    const mediaAttachments = getTelnyxPayloadMediaAttachments(messagePayload);
     const occurredAt = getOccurredAt(telnyxPayload);
 
     if (!fromPhone || !toPhone) {
@@ -530,24 +902,27 @@ export async function handleTelnyxMessagingWebhook(payload: unknown) {
     }
 
     if (!existingMessage) {
-      const messageBody = hasMedia(messagePayload)
-        ? [body, "[Unsupported MMS media received. Media storage is not enabled yet.]"]
-            .filter(Boolean)
-            .join("\n")
+      const hasUnsupportedMedia = hasMedia(messagePayload) && mediaAttachments.length === 0;
+      const messageBody = hasUnsupportedMedia
+        ? [body, "[Unsupported MMS media received.]"].filter(Boolean).join("\n")
         : body;
 
-      const { error: insertError } = await supabase.from("communication_messages").insert({
-        conversation_id: conversation.id,
-        source_type: "sms",
-        direction: "inbound",
-        sender_role: "customer",
-        sender_display_name: conversation.customer_display_name ?? fromPhone,
-        body: messageBody,
-        external_message_id: externalMessageId,
-        provider_message_id: providerMessageId,
-        delivery_status: "delivered",
-        occurred_at: occurredAt,
-      });
+      const { data: insertedMessage, error: insertError } = await supabase
+        .from("communication_messages")
+        .insert({
+          conversation_id: conversation.id,
+          source_type: "sms",
+          direction: "inbound",
+          sender_role: "customer",
+          sender_display_name: conversation.customer_display_name ?? fromPhone,
+          body: messageBody,
+          external_message_id: externalMessageId,
+          provider_message_id: providerMessageId,
+          delivery_status: "delivered",
+          occurred_at: occurredAt,
+        })
+        .select("id")
+        .single();
 
       if (insertError && insertError.code !== "23505") {
         console.error("[telnyx-sms-message-insert-error]", {
@@ -555,6 +930,14 @@ export async function handleTelnyxMessagingWebhook(payload: unknown) {
           code: insertError.code,
         });
         return { ok: false, status: 503, message: "Unable to persist inbound SMS." };
+      }
+
+      if (insertedMessage && mediaAttachments.length > 0 && conversation.company_id) {
+        await persistInboundMmsAttachments({
+          companyId: conversation.company_id,
+          messageId: insertedMessage.id,
+          attachments: mediaAttachments,
+        });
       }
 
       await supabase.rpc("apply_communication_inbound_state_rpc", {
@@ -606,9 +989,11 @@ export async function handleTelnyxMessagingWebhook(payload: unknown) {
 export async function sendConversationSms({
   conversationId,
   body,
+  attachments = [],
 }: {
   conversationId: string;
   body: string;
+  attachments?: OutboundMmsAttachment[];
 }): Promise<SendSmsResult> {
   const supabase = getSupabaseServiceRoleClient();
   const apiKey = getTelnyxApiKey();
@@ -630,6 +1015,10 @@ export async function sendConversationSms({
   }
 
   const conversation = conversationData as ConversationRow;
+  if (!conversation.company_id) {
+    return { ok: false, status: 400, message: "Conversation is missing company context." };
+  }
+
   const toPhone = normalizeSmsPhone(conversation.customer_phone);
   if (!toPhone) {
     return { ok: false, status: 400, message: "Conversation does not have a valid recipient phone." };
@@ -642,6 +1031,7 @@ export async function sendConversationSms({
   }
 
   const now = new Date().toISOString();
+  const normalizedBody = body.trim();
   const { data: messageData, error: messageError } = await supabase
     .from("communication_messages")
     .insert({
@@ -649,7 +1039,7 @@ export async function sendConversationSms({
       source_type: "sms",
       direction: "outbound",
       sender_role: "dispatcher",
-      body,
+      body: normalizedBody || null,
       delivery_status: "pending",
       occurred_at: now,
     })
@@ -661,6 +1051,27 @@ export async function sendConversationSms({
   }
 
   const messageId = messageData.id;
+  const mediaUrls = attachments.length > 0
+    ? await persistOutboundMmsAttachments({
+        companyId: conversation.company_id,
+        messageId,
+        attachments,
+      })
+    : [];
+
+  if (attachments.length > 0 && mediaUrls.length === 0) {
+    const failureReason = "Unable to prepare MMS media.";
+    await supabase
+      .from("communication_messages")
+      .update({
+        delivery_status: "failed",
+        failed_at: new Date().toISOString(),
+        failure_reason: failureReason,
+      })
+      .eq("id", messageId);
+
+    return { ok: false, status: 503, message: failureReason, messageId };
+  }
 
   const response = await fetch(TELNYX_MESSAGES_URL, {
     method: "POST",
@@ -671,7 +1082,8 @@ export async function sendConversationSms({
     body: JSON.stringify({
       from: fromPhone,
       to: toPhone,
-      text: body,
+      ...(normalizedBody ? { text: normalizedBody } : {}),
+      ...(mediaUrls.length > 0 ? { media_urls: mediaUrls } : {}),
     }),
   });
 
