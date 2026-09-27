@@ -93,6 +93,10 @@ type ConversationRow = {
   inbound_source_id?: string | null;
   attribution?: Json | null;
   provider_metadata?: Json | null;
+  unread_count?: number | null;
+  last_read_at?: string | null;
+  last_inbound_at?: string | null;
+  last_outbound_at?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -102,6 +106,11 @@ type HubConversation = CommunicationConversation & {
   inboundSourceId: string | null;
   attribution: Json | null;
   authoritativeEventType: string | null;
+  unreadCount: number;
+  lastReadAt: string | null;
+  lastInboundAt: string | null;
+  lastOutboundAt: string | null;
+  latestMessagePreview: string | null;
 };
 
 type TimelineRow = {
@@ -151,6 +160,11 @@ function mapConversation(row: ConversationRow): HubConversation {
     inboundSourceId: row.inbound_source_id ?? null,
     attribution: row.attribution ?? null,
     authoritativeEventType: getJsonString(row.provider_metadata, "authoritativeEventType"),
+    unreadCount: row.unread_count ?? 0,
+    lastReadAt: row.last_read_at ?? null,
+    lastInboundAt: row.last_inbound_at ?? null,
+    lastOutboundAt: row.last_outbound_at ?? null,
+    latestMessagePreview: null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -214,7 +228,145 @@ function getConversationTitle(conversation: HubConversation): string {
 }
 
 function getConversationPreview(conversation: HubConversation): string {
-  return conversation.summary ?? conversation.nextAction ?? "No message preview yet.";
+  return (
+    conversation.latestMessagePreview ??
+    conversation.summary ??
+    conversation.nextAction ??
+    "No message preview yet."
+  );
+}
+
+function getConversationActivityTimestamp(conversation: HubConversation): number {
+  const value =
+    conversation.lastEventAt ??
+    conversation.lastInboundAt ??
+    conversation.lastOutboundAt ??
+    conversation.updatedAt ??
+    conversation.createdAt;
+
+  return value ? Date.parse(value) || 0 : 0;
+}
+
+function sortConversationsByActivity(conversations: HubConversation[]) {
+  return [...conversations].sort(
+    (left, right) =>
+      getConversationActivityTimestamp(right) - getConversationActivityTimestamp(left),
+  );
+}
+
+function sortMessagesByNewest(messages: MessageRow[]) {
+  return [...messages].sort(
+    (left, right) =>
+      (Date.parse(right.occurred_at) || 0) - (Date.parse(left.occurred_at) || 0),
+  );
+}
+
+function mergeMessageRows(messages: MessageRow[], nextMessage: MessageRow) {
+  const existingIndex = messages.findIndex((message) => message.id === nextMessage.id);
+  const merged =
+    existingIndex >= 0
+      ? messages.map((message) => (message.id === nextMessage.id ? nextMessage : message))
+      : [nextMessage, ...messages];
+
+  return sortMessagesByNewest(merged).slice(0, 20);
+}
+
+function getMessagePreview(message: MessageRow): string | null {
+  const body = message.body?.trim();
+  return body || null;
+}
+
+function applyConversationUpdate(
+  conversations: HubConversation[],
+  row: ConversationRow,
+): HubConversation[] {
+  const nextConversation = mapConversation(row);
+  const existing = conversations.find((conversation) => conversation.id === row.id);
+  const merged = existing
+    ? {
+        ...existing,
+        ...nextConversation,
+        latestMessagePreview:
+          existing.latestMessagePreview ?? nextConversation.latestMessagePreview,
+      }
+    : nextConversation;
+
+  const nextConversations = existing
+    ? conversations.map((conversation) =>
+        conversation.id === row.id ? merged : conversation,
+      )
+    : [merged, ...conversations];
+
+  return sortConversationsByActivity(nextConversations).slice(0, 50);
+}
+
+function applyMessageUpdate(
+  conversations: HubConversation[],
+  message: MessageRow,
+): HubConversation[] {
+  const preview = getMessagePreview(message);
+  const activityAt = message.occurred_at;
+  let matched = false;
+
+  const nextConversations = conversations.map((conversation) => {
+    if (conversation.id !== message.conversation_id) {
+      return conversation;
+    }
+
+    matched = true;
+    return {
+      ...conversation,
+      latestMessagePreview: preview ?? conversation.latestMessagePreview,
+      lastEventAt: activityAt ?? conversation.lastEventAt,
+      updatedAt: activityAt ?? conversation.updatedAt,
+    };
+  });
+
+  return matched ? sortConversationsByActivity(nextConversations) : conversations;
+}
+
+async function hydrateLatestMessagePreviews(
+  conversations: HubConversation[],
+): Promise<HubConversation[]> {
+  if (conversations.length === 0) {
+    return conversations;
+  }
+
+  const supabase = getSupabaseBrowserClient();
+  if (!supabase) {
+    return conversations;
+  }
+
+  const { data, error } = await supabase
+    .from("communication_messages")
+    .select("id,conversation_id,body,occurred_at")
+    .in(
+      "conversation_id",
+      conversations.map((conversation) => conversation.id),
+    )
+    .order("occurred_at", { ascending: false })
+    .limit(200);
+
+  if (error || !data) {
+    return conversations;
+  }
+
+  const previews = new Map<string, string>();
+  for (const message of data as Array<Pick<MessageRow, "conversation_id" | "body">>) {
+    if (previews.has(message.conversation_id)) {
+      continue;
+    }
+
+    const preview = message.body?.trim();
+    if (preview) {
+      previews.set(message.conversation_id, preview);
+    }
+  }
+
+  return conversations.map((conversation) => ({
+    ...conversation,
+    latestMessagePreview: previews.get(conversation.id) ?? conversation.latestMessagePreview,
+  }));
 }
 
 function getAttributionRecord(value: Json | null | undefined): Record<string, Json> | null {
@@ -589,7 +741,7 @@ export function CommunicationsHub() {
       const { data, error } = await supabase
         .from("communication_conversations")
         .select(
-          "id,primary_source_type,status,provider_name,customer_display_name,customer_id,customer_phone,customer_email,service_address,summary,next_action,last_event_at,call_started_at,call_ended_at,intake_request_id,service_request_id,source_account_id,inbound_source_id,attribution,provider_metadata,created_at,updated_at",
+          "id,primary_source_type,status,provider_name,customer_display_name,customer_id,customer_phone,customer_email,service_address,summary,next_action,last_event_at,call_started_at,call_ended_at,intake_request_id,service_request_id,source_account_id,inbound_source_id,attribution,provider_metadata,unread_count,last_read_at,last_inbound_at,last_outbound_at,created_at,updated_at",
         )
         .order("updated_at", { ascending: false })
         .limit(50);
@@ -607,7 +759,9 @@ export function CommunicationsHub() {
         return;
       }
 
-      const conversations = ((data ?? []) as ConversationRow[]).map(mapConversation);
+      const conversations = await hydrateLatestMessagePreviews(
+        sortConversationsByActivity(((data ?? []) as ConversationRow[]).map(mapConversation)),
+      );
 
       setHubState({ status: "ready", conversations, error: null });
       setSelectedConversationId((current) => current ?? conversations[0]?.id ?? null);
@@ -619,6 +773,103 @@ export function CommunicationsHub() {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      return;
+    }
+
+    const channel = supabase
+      .channel("communications-live-inbox")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "communication_conversations",
+        },
+        (payload) => {
+          if (payload.eventType === "DELETE") {
+            setHubState((current) => ({
+              ...current,
+              conversations: current.conversations.filter(
+                (conversation) => conversation.id !== payload.old.id,
+              ),
+            }));
+            return;
+          }
+
+          const row = payload.new as ConversationRow;
+          setHubState((current) => ({
+            ...current,
+            conversations: applyConversationUpdate(current.conversations, row),
+          }));
+
+          if (row.id === selectedConversationId) {
+            setDetailReloadToken((value) => value + 1);
+          }
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "communication_messages",
+        },
+        (payload) => {
+          if (payload.eventType === "DELETE") {
+            const deletedId = payload.old.id;
+            const conversationId = payload.old.conversation_id;
+
+            setDetailState((current) =>
+              current.data.messages.some((message) => message.id === deletedId)
+                ? {
+                    ...current,
+                    data: {
+                      ...current.data,
+                      messages: current.data.messages.filter(
+                        (message) => message.id !== deletedId,
+                      ),
+                    },
+                  }
+                : current,
+            );
+
+            if (conversationId === selectedConversationId) {
+              setDetailReloadToken((value) => value + 1);
+            }
+            return;
+          }
+
+          const message = payload.new as MessageRow;
+
+          setHubState((current) => ({
+            ...current,
+            conversations: applyMessageUpdate(current.conversations, message),
+          }));
+
+          if (message.conversation_id !== selectedConversationId) {
+            return;
+          }
+
+          setDetailState((current) => ({
+            ...current,
+            data: {
+              ...current.data,
+              messages: mergeMessageRows(current.data.messages, message),
+            },
+          }));
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [selectedConversationId]);
 
   useEffect(() => {
     let isMounted = true;
@@ -873,6 +1124,57 @@ export function CommunicationsHub() {
       ) ?? null,
     [hubState.conversations, selectedConversationId],
   );
+
+
+  useEffect(() => {
+    if (
+      !selectedConversationId ||
+      detailState.status !== "ready" ||
+      !selectedConversation ||
+      selectedConversation.unreadCount <= 0
+    ) {
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      return;
+    }
+
+    let canceled = false;
+    const timer = window.setTimeout(() => {
+      void supabase
+        .rpc("mark_communication_conversation_read_rpc", {
+          p_conversation_id: selectedConversationId,
+        })
+        .then(({ error }) => {
+          if (error || canceled) {
+            return;
+          }
+
+          const readAt = new Date().toISOString();
+          setHubState((current) => ({
+            ...current,
+            conversations: current.conversations.map((conversation) =>
+              conversation.id === selectedConversationId
+                ? { ...conversation, unreadCount: 0, lastReadAt: readAt }
+                : conversation,
+            ),
+          }));
+        });
+    }, 400);
+
+    return () => {
+      canceled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    detailState.status,
+    selectedConversation,
+    selectedConversationId,
+    selectedConversation?.unreadCount,
+  ]);
+
   const filteredConversations = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
 
@@ -1173,9 +1475,16 @@ export function CommunicationsHub() {
                       type="button"
                     >
                       <div className="flex items-start justify-between gap-3">
-                        <p className="min-w-0 truncate text-sm font-black text-[#0F172A]">
-                          {getConversationTitle(conversation)}
-                        </p>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-black text-[#0F172A]">
+                            {getConversationTitle(conversation)}
+                          </p>
+                          {conversation.unreadCount > 0 ? (
+                            <span className="mt-1 inline-flex rounded-full bg-red-500 px-2 py-0.5 text-[11px] font-black text-white">
+                              {conversation.unreadCount}
+                            </span>
+                          ) : null}
+                        </div>
                         <p className="shrink-0 text-xs font-bold text-[#0F6BFF]">
                           {formatActivity(conversation)}
                         </p>
@@ -1483,6 +1792,11 @@ export function CommunicationsHub() {
                         <p className="truncate text-sm font-black text-[#0F172A]">
                           {getConversationTitle(conversation)}
                         </p>
+                        {conversation.unreadCount > 0 ? (
+                          <span className="mt-1 inline-flex rounded-full bg-red-500 px-2 py-0.5 text-[11px] font-black text-white">
+                            {conversation.unreadCount}
+                          </span>
+                        ) : null}
                       </div>
                       <p className="shrink-0 text-xs font-bold text-[#0F6BFF]">
                         {formatActivity(conversation)}
