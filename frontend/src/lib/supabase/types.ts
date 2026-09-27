@@ -951,6 +951,7 @@ export type Database = {
           company_id: string | null;
           customer_id: string | null;
           customer_appliance_id: string | null;
+          customer_address_id: string | null;
           customer_name: string;
           customer_email: string | null;
           customer_phone: string | null;

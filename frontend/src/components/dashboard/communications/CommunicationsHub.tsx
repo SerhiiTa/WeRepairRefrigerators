@@ -92,6 +92,7 @@ type ConversationRow = {
   source_account_id?: string | null;
   inbound_source_id?: string | null;
   attribution?: Json | null;
+  provider_metadata?: Json | null;
   created_at: string;
   updated_at: string;
 };
@@ -100,6 +101,7 @@ type HubConversation = CommunicationConversation & {
   sourceAccountId: string | null;
   inboundSourceId: string | null;
   attribution: Json | null;
+  authoritativeEventType: string | null;
 };
 
 type TimelineRow = {
@@ -148,6 +150,7 @@ function mapConversation(row: ConversationRow): HubConversation {
     sourceAccountId: row.source_account_id ?? null,
     inboundSourceId: row.inbound_source_id ?? null,
     attribution: row.attribution ?? null,
+    authoritativeEventType: getJsonString(row.provider_metadata, "authoritativeEventType"),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -261,9 +264,60 @@ function getJsonString(value: Json | null | undefined, key: string): string | nu
 function isTrustedWebsiteBooking(detail: ConversationDetailData, conversation: HubConversation) {
   return (
     conversation.sourceType === "website_form" &&
-    getJsonString(detail.intake?.raw_payload, "event_type") === "booking_request" &&
+    conversation.authoritativeEventType === "booking_request" &&
     Boolean(detail.intake?.id)
   );
+}
+
+function getCreateJobBlockedReason(
+  detail: ConversationDetailData,
+  conversation: HubConversation | null,
+): string | null {
+  if (!conversation) {
+    return "Select a conversation before creating a Job.";
+  }
+
+  const intake = detail.intake;
+  if (!intake) {
+    return "A linked Intake is required before creating a Job.";
+  }
+
+  if (!isTrustedWebsiteBooking(detail, conversation)) {
+    return "Only trusted online booking requests can be converted from Communications.";
+  }
+
+  if (detail.job || intake.linked_service_request_id) {
+    return null;
+  }
+
+  const customerName = [intake.customer_first_name, intake.customer_last_name]
+    .filter(Boolean)
+    .join(" ") || intake.customer_name;
+  if (!customerName?.trim()) {
+    return "Customer name is required before creating a Job.";
+  }
+
+  if (!intake.customer_phone?.trim()) {
+    return "Customer phone is required before creating a Job.";
+  }
+
+  if (!intake.service_address?.trim()) {
+    return "Service address is required before creating a Job.";
+  }
+
+  if (!intake.zip_code?.trim()) {
+    return "ZIP code is required before creating a Job.";
+  }
+
+  if (!intake.appliance_type?.trim()) {
+    return "Appliance type is required before creating a Job.";
+  }
+
+  if (!intake.problem_description?.trim()) {
+    return "Problem description is required before creating a Job.";
+  }
+
+  return null;
 }
 
 function getRequestDetailRows(
@@ -371,6 +425,45 @@ function formatServiceAddress(detail: ConversationDetailData, conversation: Comm
     .join(", ");
 
   return jobAddress || intake?.service_address || conversation.serviceAddress || "Not captured";
+}
+
+function formatJobAddress(job: ServiceRequestRow): string {
+  if (job.full_address?.trim()) {
+    return job.full_address;
+  }
+
+  return (
+    [
+      job.street_address,
+      job.unit,
+      [job.city, job.state, job.zip_code].filter(Boolean).join(" "),
+    ]
+      .filter(Boolean)
+      .join(", ") || "Not captured"
+  );
+}
+
+function getJobDetailRows(job: ServiceRequestRow): Array<[string, string]> {
+  const scheduledWindow = [
+    job.scheduled_date,
+    [job.scheduled_window_start_time, job.scheduled_window_end_time]
+      .filter(Boolean)
+      .join(" - "),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return [
+    ["Job", job.id],
+    ["Status", getStatusLabel(job.status)],
+    ["Customer", job.customer_name],
+    ["Service Address", formatJobAddress(job)],
+    ["Appliance", job.appliance_type],
+    ["Brand", job.appliance_brand],
+    ["Problem", job.issue_description],
+    ["Requested Window", job.preferred_time_window],
+    ["Scheduled", scheduledWindow],
+  ].filter((row): row is [string, string] => Boolean(row[1]));
 }
 
 function getHubReadError(message: string) {
@@ -496,7 +589,7 @@ export function CommunicationsHub() {
       const { data, error } = await supabase
         .from("communication_conversations")
         .select(
-          "id,primary_source_type,status,provider_name,customer_display_name,customer_id,customer_phone,customer_email,service_address,summary,next_action,last_event_at,call_started_at,call_ended_at,intake_request_id,service_request_id,source_account_id,inbound_source_id,attribution,created_at,updated_at",
+          "id,primary_source_type,status,provider_name,customer_display_name,customer_id,customer_phone,customer_email,service_address,summary,next_action,last_event_at,call_started_at,call_ended_at,intake_request_id,service_request_id,source_account_id,inbound_source_id,attribution,provider_metadata,created_at,updated_at",
         )
         .order("updated_at", { ascending: false })
         .limit(50);
@@ -875,12 +968,13 @@ export function CommunicationsHub() {
   const intakeHref = detail.intake
     ? `/dashboard/intake?selected=${encodeURIComponent(detail.intake.id)}`
     : "/dashboard/intake";
+  const createJobBlockedReason = getCreateJobBlockedReason(detail, selectedConversation);
   const canCreateJobFromConversation = Boolean(
     selectedConversation &&
       detail.intake &&
-      isTrustedWebsiteBooking(detail, selectedConversation) &&
       !detail.job &&
-      !detail.intake.linked_service_request_id,
+      !detail.intake.linked_service_request_id &&
+      !createJobBlockedReason,
   );
   const linkedJobId =
     detail.job?.id ??
@@ -963,6 +1057,8 @@ export function CommunicationsHub() {
             : current.data.intake,
         },
       }));
+      setContextTab("job");
+      setMobileDetailTab("job");
       setDetailReloadToken((value) => value + 1);
       setCreateJobState({
         status: "success",
@@ -1166,6 +1262,10 @@ export function CommunicationsHub() {
                   }`}
                 >
                   {createJobState.message}
+                </p>
+              ) : createJobBlockedReason && !linkedJobId ? (
+                <p className="mt-3 text-sm font-semibold text-amber-700">
+                  {createJobBlockedReason}
                 </p>
               ) : null}
             </div>
@@ -1704,16 +1804,34 @@ export function CommunicationsHub() {
               <Panel title="Job">
                 {detail.job ? (
                   <div className="space-y-2">
-                    <ContextRow label="Status" value={getStatusLabel(detail.job.status)} />
-                    <ContextRow label="Customer" value={detail.job.customer_name} />
-                    <ContextRow label="Problem" value={detail.job.issue_description} />
+                    {getJobDetailRows(detail.job).map(([label, value]) => (
+                      <ContextRow key={label} label={label} value={value} />
+                    ))}
                     <ActionLink href={withReturnTo(`/dashboard/leads/${detail.job.id}`)} label="Open Job" />
                   </div>
                 ) : (
-                  <EmptyState
-                    title="No job linked"
-                    body="Create Job is reserved for a later backend workflow."
-                  />
+                  <div className="space-y-3">
+                    <EmptyState
+                      title="No job linked"
+                      body={
+                        canCreateJobFromConversation
+                          ? "Create a Job from this trusted booking request."
+                          : createJobBlockedReason ?? "Open Intake to review missing information before creating a Job."
+                      }
+                    />
+                    {canCreateJobFromConversation ? (
+                      <button
+                        className="rounded-lg bg-[#0F6BFF] px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={createJobState.status === "saving"}
+                        onClick={() => void handleCreateJobFromConversation()}
+                        type="button"
+                      >
+                        {createJobState.status === "saving" ? "Creating..." : "Create Job"}
+                      </button>
+                    ) : detail.intake ? (
+                      <ActionLink href={withReturnTo(intakeHref)} label="Review Intake" />
+                    ) : null}
+                  </div>
                 )}
               </Panel>
             ) : null}
@@ -1857,15 +1975,15 @@ function MobileJobPanel({
     <Panel title="Job">
       {detail.job ? (
         <div className="space-y-2">
-          <ContextRow label="Status" value={getStatusLabel(detail.job.status)} />
-          <ContextRow label="Customer" value={detail.job.customer_name} />
-          <ContextRow label="Problem" value={detail.job.issue_description} />
+          {getJobDetailRows(detail.job).map(([label, value]) => (
+            <ContextRow key={label} label={label} value={value} />
+          ))}
           <ActionLink href={withReturnTo(`/dashboard/leads/${detail.job.id}`)} label="Open Job" />
         </div>
       ) : (
         <EmptyState
           title="No job linked"
-          body="Create Job is reserved for a later backend workflow."
+          body="Create Job from the conversation header, or open Intake to review missing information."
         />
       )}
     </Panel>

@@ -419,6 +419,7 @@ export async function POST(request: Request) {
     },
     providerMetadata: {
       com06Endpoint: "public_website_inbound",
+      authoritativeEventType: eventTypeResult.eventType,
       formId: eventTypeResult.formId ?? null,
       submittedProviderMetadata: cleanJsonRecord(payload.providerMetadata) ?? {},
     },

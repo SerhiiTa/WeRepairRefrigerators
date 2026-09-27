@@ -387,7 +387,10 @@ async function createOrReuseConversation(
       summary,
       next_action: "Review inbound request",
       last_event_at: event.occurredAt,
-      provider_metadata: event.providerMetadata ?? {},
+      provider_metadata: {
+        ...(event.providerMetadata ?? {}),
+        authoritativeEventType: event.eventType,
+      },
       inbound_source_id: gateway.source.inboundSourceId,
       attribution: event.attribution ?? {},
       created_by: null,
