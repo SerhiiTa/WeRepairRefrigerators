@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
+import { useCommunicationsAttention } from "@/components/dashboard/communications/CommunicationsAttentionProvider";
+
 type DashboardMobileDrawerProps = {
   trigger: "dashboard-shortcut" | "hamburger";
 };
@@ -30,6 +32,9 @@ export function DashboardMobileDrawer({ trigger }: DashboardMobileDrawerProps) {
   const [isVisible, setIsVisible] = useState(false);
   const animationFrameRef = useRef<number | null>(null);
   const closeTimeoutRef = useRef<number | null>(null);
+  const { unreadCount } = useCommunicationsAttention();
+  const communicationsBadge =
+    unreadCount > 0 ? (unreadCount > 99 ? "99+" : String(unreadCount)) : null;
 
   function open() {
     if (closeTimeoutRef.current) {
@@ -154,12 +159,17 @@ export function DashboardMobileDrawer({ trigger }: DashboardMobileDrawerProps) {
             >
               {drawerMenuItems.map((item) => (
                 <Link
-                  className="block rounded-2xl px-4 py-3 text-sm font-black text-[#334155] transition hover:bg-[#F8FAFC] hover:text-[#0F6BFF]"
+                  className="flex items-center justify-between gap-3 rounded-2xl px-4 py-3 text-sm font-black text-[#334155] transition hover:bg-[#F8FAFC] hover:text-[#0F6BFF]"
                   href={item.href}
                   key={`${item.label}-${item.href}`}
                   onClick={close}
                 >
-                  {item.label}
+                  <span>{item.label}</span>
+                  {item.label === "Communications" && communicationsBadge ? (
+                    <span className="rounded-full bg-red-500 px-2 py-0.5 text-[11px] font-black text-white">
+                      {communicationsBadge}
+                    </span>
+                  ) : null}
                 </Link>
               ))}
             </nav>

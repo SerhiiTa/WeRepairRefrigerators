@@ -8,6 +8,7 @@ import {
   getVisibleDashboardNavigationItems,
   type DashboardNavigationItem,
 } from "@/config/dashboard-navigation";
+import { useCommunicationsAttention } from "@/components/dashboard/communications/CommunicationsAttentionProvider";
 import { loadDashboardIdentity } from "@/lib/dashboard/identity";
 import type {
   DatabaseOnboardingStatus,
@@ -249,6 +250,13 @@ function DashboardNavigationLink({
 }) {
   const isActive = isActivePath(pathname, item);
   const visibilityLabel = getVisibilityLabel(item.visibility);
+  const { unreadCount } = useCommunicationsAttention();
+  const communicationsBadge =
+    item.label === "Communications" && unreadCount > 0
+      ? unreadCount > 99
+        ? "99+"
+        : String(unreadCount)
+      : null;
 
   if (variant === "mobile") {
     return (
@@ -262,6 +270,15 @@ function DashboardNavigationLink({
         }`}
       >
         {item.label}
+        {communicationsBadge ? (
+          <span
+            className={`ml-2 rounded-full px-1.5 py-0.5 text-[10px] font-black ${
+              isActive ? "bg-white text-[#0F6BFF]" : "bg-red-500 text-white"
+            }`}
+          >
+            {communicationsBadge}
+          </span>
+        ) : null}
         {visibilityLabel ? (
           <span className="ml-2 text-[10px] uppercase opacity-70">
             {visibilityLabel}
@@ -283,6 +300,15 @@ function DashboardNavigationLink({
         }`}
       >
         {item.label}
+        {communicationsBadge ? (
+          <span
+            className={`ml-2 rounded-full px-1.5 py-0.5 text-[10px] font-black ${
+              isActive ? "bg-white text-[#0F6BFF]" : "bg-red-500 text-white"
+            }`}
+          >
+            {communicationsBadge}
+          </span>
+        ) : null}
         {visibilityLabel ? (
           <span className="ml-2 text-[10px] uppercase opacity-70">
             {visibilityLabel}
@@ -314,7 +340,15 @@ function DashboardNavigationLink({
         </span>
         <span className="truncate">{item.label}</span>
       </span>
-      {visibilityLabel ? (
+      {communicationsBadge ? (
+        <span
+          className={`rounded-full px-2 py-0.5 text-[11px] font-black ${
+            isActive ? "bg-white text-[#0F6BFF]" : "bg-red-500 text-white"
+          }`}
+        >
+          {communicationsBadge}
+        </span>
+      ) : visibilityLabel ? (
         <span
           className={`rounded border px-1.5 py-0.5 text-[10px] font-black uppercase tracking-[0.12em] ${
             isActive
