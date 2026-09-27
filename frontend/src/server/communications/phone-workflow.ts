@@ -3,10 +3,10 @@ import { getSupabaseServiceRoleClient } from "@/lib/supabase/service-role";
 import type { Json } from "@/lib/supabase/types";
 
 import { getPhoneProviderAdapter } from "./provider-adapters";
-import {
-  normalizePhoneNumber,
-  type NormalizedPhoneWorkflow,
-  type PhoneWorkflowProvider,
+import { resolveCommunicationPhoneIdentity } from "./phone-identity";
+import type {
+  NormalizedPhoneWorkflow,
+  PhoneWorkflowProvider,
 } from "./phone-normalization";
 
 export type PhoneWorkflowIngestionResult = {
@@ -17,7 +17,7 @@ export type PhoneWorkflowIngestionResult = {
   conversationId?: string;
   intakeRequestId?: string | null;
   customerId?: string | null;
-  customerRecognitionStatus?: "matched" | "new_customer";
+  customerRecognitionStatus?: "matched" | "lead_matched" | "unknown";
   timelineEventsCreated?: number;
   transcriptCreated?: boolean;
   jobCreated: boolean;
@@ -33,10 +33,8 @@ type SourceAccountRow = {
   display_name: string | null;
 };
 
-type CustomerRow = {
+type ResolvedCustomer = {
   id: string;
-  first_name: string | null;
-  last_name: string | null;
   full_name: string;
   phone: string | null;
   email: string | null;
@@ -160,50 +158,10 @@ async function findSourceAccount(
   return { account: row };
 }
 
-async function findExistingCustomer(
-  normalized: NormalizedPhoneWorkflow,
-): Promise<CustomerRow | null> {
-  const supabase = getSupabaseServiceRoleClient();
-  if (!supabase) {
-    return null;
-  }
-
-  const phone = normalizePhoneNumber(normalized.fromPhone);
-  const email = normalized.customerEmail?.toLowerCase() ?? null;
-
-  if (phone) {
-    const { data } = await supabase
-      .from("customers")
-      .select("id,first_name,last_name,full_name,phone,email")
-      .in("phone", phoneVariants(phone))
-      .limit(1)
-      .maybeSingle();
-
-    if (data) {
-      return data as CustomerRow;
-    }
-  }
-
-  if (email) {
-    const { data } = await supabase
-      .from("customers")
-      .select("id,first_name,last_name,full_name,phone,email")
-      .eq("email", email)
-      .limit(1)
-      .maybeSingle();
-
-    if (data) {
-      return data as CustomerRow;
-    }
-  }
-
-  return null;
-}
-
 async function createPhoneIntake(
   normalized: NormalizedPhoneWorkflow,
   sourceAccount: SourceAccountRow,
-  customer: CustomerRow | null,
+  customer: ResolvedCustomer | null,
 ): Promise<string | null> {
   const supabase = getSupabaseServiceRoleClient();
   if (!supabase) {
@@ -313,9 +271,34 @@ export async function ingestPhoneCommunication(
     };
   }
 
-  const customer = await findExistingCustomer(normalized);
+  const phoneIdentity = await resolveCommunicationPhoneIdentity({
+    companyId: sourceAccount.company_id,
+    phone: normalized.fromPhone,
+  });
+  const customer: ResolvedCustomer | null =
+    phoneIdentity.identityType === "customer" && phoneIdentity.customerId
+      ? {
+          id: phoneIdentity.customerId,
+          full_name:
+            phoneIdentity.displayName ??
+            normalized.customerName ??
+            normalized.fromPhone ??
+            "Phone customer",
+          phone: phoneIdentity.phone ?? normalized.fromPhone,
+          email: phoneIdentity.email ?? null,
+        }
+      : null;
   const customerDisplayName =
     customer?.full_name ?? normalized.customerName ?? normalized.fromPhone ?? "Phone customer";
+  const providerMetadata = safeJsonObject({
+    ...normalized.providerMetadata,
+    phone_identity: {
+      type: phoneIdentity.identityType,
+      customer_id: phoneIdentity.customerId,
+      lead_id: phoneIdentity.leadId,
+      canonical_phone: phoneIdentity.canonicalPhone,
+    },
+  });
 
   const existingConversationResult = normalized.externalConversationId
     ? await supabase
@@ -367,7 +350,7 @@ export async function ingestPhoneCommunication(
         call_status: normalized.callStatus,
         call_started_at: normalized.callStartedAt,
         call_ended_at: normalized.callEndedAt,
-        provider_metadata: normalized.providerMetadata,
+        provider_metadata: providerMetadata,
       })
       .select("id")
       .single();
@@ -397,7 +380,7 @@ export async function ingestPhoneCommunication(
         call_status: normalized.callStatus,
         call_started_at: normalized.callStartedAt,
         call_ended_at: normalized.callEndedAt,
-        provider_metadata: normalized.providerMetadata,
+        provider_metadata: providerMetadata,
       })
       .eq("id", conversationId);
 
@@ -577,7 +560,12 @@ export async function ingestPhoneCommunication(
     conversationId,
     intakeRequestId,
     customerId: customer?.id ?? null,
-    customerRecognitionStatus: customer ? "matched" : "new_customer",
+    customerRecognitionStatus:
+      phoneIdentity.identityType === "customer"
+        ? "matched"
+        : phoneIdentity.identityType === "lead"
+          ? "lead_matched"
+          : "unknown",
     timelineEventsCreated: existingTimelineEvent ? 0 : 1,
     transcriptCreated:
       !existingTranscript &&
