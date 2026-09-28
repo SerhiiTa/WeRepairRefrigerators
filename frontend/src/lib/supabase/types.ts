@@ -1289,6 +1289,13 @@ export type Database = {
         };
         Returns: Json;
       };
+      update_communication_lead_operational_details_rpc: {
+        Args: {
+          p_lead_id: string;
+          p_payload: Json;
+        };
+        Returns: Json;
+      };
       can_access_intake_request: {
         Args: {
           target_intake_request_id: string;
@@ -1319,6 +1326,12 @@ export type Database = {
         Args: {
           p_intake_request_id: string;
           p_allow_possible_duplicate?: boolean;
+        };
+        Returns: Json;
+      };
+      ensure_communication_job_intake_rpc: {
+        Args: {
+          p_conversation_id: string;
         };
         Returns: Json;
       };

@@ -14,6 +14,7 @@ const drawerMenuItems = [
   { href: "/dashboard/leads", label: "Jobs" },
   { href: "/dashboard/intake", label: "Intake" },
   { href: "/dashboard/communications", label: "Communications" },
+  { href: "/dashboard/communication-leads", label: "Leads" },
   { href: "/dashboard/technician-schedule", label: "Schedule" },
   { href: "/dashboard/customers", label: "Customers" },
   { href: "/dashboard/leads", label: "Estimates" },

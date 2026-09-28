@@ -98,6 +98,17 @@ export const dashboardNavigationItems: DashboardNavigationItem[] = [
       "Customer communication workspace.",
   },
   {
+    label: "Leads",
+    href: "/dashboard/communication-leads",
+    allowedRoles: TECHNICIAN_ROLES,
+    allowedStatuses: ACTIVE_PROFILE_STATUSES,
+    requiresCompletedOnboarding: true,
+    visibility: "real",
+    group: "operations",
+    description:
+      "Operational Leads created from Communications and Intake.",
+  },
+  {
     label: "Schedule",
     href: "/dashboard/technician-schedule",
     allowedRoles: TECHNICIAN_ROLES,

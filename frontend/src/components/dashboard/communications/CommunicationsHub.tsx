@@ -161,7 +161,7 @@ const emptyDetailData: ConversationDetailData = {
   timelineEvents: [],
 };
 
-type ContextTab = "customer" | "intake" | "lead" | "job" | "activity";
+type ContextTab = "customer" | "lead" | "job" | "activity";
 type ChannelFilter = "all" | "calls" | "texts" | "forms" | "booking";
 
 function mapConversation(row: ConversationRow): HubConversation {
@@ -478,7 +478,7 @@ function getJsonString(value: Json | null | undefined, key: string): string | nu
   return typeof entry === "string" && entry.trim() ? entry.trim() : null;
 }
 
-function isTrustedWebsiteIntake(detail: ConversationDetailData, conversation: HubConversation) {
+function isTrustedWebsiteRequest(detail: ConversationDetailData, conversation: HubConversation) {
   return (
     conversation.sourceType === "website_form" &&
     Boolean(conversation.inboundSourceId) &&
@@ -496,11 +496,11 @@ function getCreateJobBlockedReason(
 
   const intake = detail.intake;
   if (!intake) {
-    return "A linked Intake is required before creating a Job.";
+    return "Request details are required before creating a Job.";
   }
 
-  if (!isTrustedWebsiteIntake(detail, conversation)) {
-    return "A trusted website Intake is required before creating a Job.";
+  if (!isTrustedWebsiteRequest(detail, conversation)) {
+    return "A trusted website request is required before creating a Job.";
   }
 
   if (detail.job || intake.linked_service_request_id) {
@@ -703,30 +703,6 @@ function getHubReadError(message: string) {
   return "Communications Hub is unavailable right now.";
 }
 
-function getRequiredNextAction(detail: ConversationDetailData, conversation: CommunicationConversation) {
-  if (!detail.intake) {
-    return "Review conversation";
-  }
-
-  if (!detail.customer) {
-    return "Create / Match Customer";
-  }
-
-  if (!detail.appliance && (detail.intake.appliance_type || detail.job?.appliance_type)) {
-    return "Create / Match Appliance";
-  }
-
-  if (!detail.job) {
-    return "Convert to Job";
-  }
-
-  if (detail.job.status === "scheduled" || detail.job.status === "contacted") {
-    return "Open Job";
-  }
-
-  return conversation.status === "resolved" ? "No action needed" : "Open Job";
-}
-
 function getConversationFlags(
   conversation: CommunicationConversation,
   detail?: ConversationDetailData | null,
@@ -795,10 +771,6 @@ export function CommunicationsHub() {
     message: null,
   });
   const [createLeadState, setCreateLeadState] = useState<ActionState>({
-    status: "idle",
-    message: null,
-  });
-  const [updateIntakeState, setUpdateIntakeState] = useState<ActionState>({
     status: "idle",
     message: null,
   });
@@ -1367,9 +1339,6 @@ export function CommunicationsHub() {
     );
   });
   const recordingAudioUrl = recordingState.status === "ready" ? recordingState.audioUrl : null;
-  const requiredAction = selectedConversation
-    ? getRequiredNextAction(detail, selectedConversation)
-    : "Select conversation";
   const buildCommunicationsReturnTo = (conversationId = selectedConversationId) => {
     const params = new URLSearchParams();
     if (conversationId) {
@@ -1394,7 +1363,6 @@ export function CommunicationsHub() {
     setCreatedLeadId(null);
     setCreateJobState({ status: "idle", message: null });
     setCreateLeadState({ status: "idle", message: null });
-    setUpdateIntakeState({ status: "idle", message: null });
     setSmsDraft("");
     setSendMessageState({ status: "idle", message: null });
     setMobileDetailOpen(true);
@@ -1408,20 +1376,20 @@ export function CommunicationsHub() {
     `${href}${href.includes("?") ? "&" : "?"}returnTo=${encodeURIComponent(
       destinationReturnTo,
     )}`;
-  const intakeHref = detail.intake
-    ? `/dashboard/intake?selected=${encodeURIComponent(detail.intake.id)}`
-    : "/dashboard/intake";
+  const linkedLeadId = detail.lead?.id ?? createdLeadId;
+  const linkedJobId =
+    detail.job?.id ??
+    detail.intake?.linked_service_request_id ??
+    selectedConversation?.linkedServiceRequestId ??
+    null;
   const createJobBlockedReason = getCreateJobBlockedReason(detail, selectedConversation);
   const canCreateJobFromConversation = Boolean(
     selectedConversation &&
-      detail.intake &&
       !detail.job &&
-      !detail.intake.linked_service_request_id &&
-      !createJobBlockedReason,
+      !linkedJobId,
   );
-  const linkedLeadId = detail.lead?.id ?? createdLeadId;
   const canCreateLeadFromConversation = Boolean(
-    selectedConversation && detail.intake && !linkedLeadId,
+    selectedConversation && !linkedLeadId,
   );
   const smsSourceAccount = detail.sourceAccount;
   const canSendSmsFromConversation = Boolean(
@@ -1440,11 +1408,6 @@ export function CommunicationsHub() {
             smsSourceAccount.supports_outbound_sms !== true
           ? "Outbound SMS is not enabled for this conversation source."
           : null;
-  const linkedJobId =
-    detail.job?.id ??
-    detail.intake?.linked_service_request_id ??
-    selectedConversation?.linkedServiceRequestId ??
-    null;
   const requestDetailRows = selectedConversation
     ? getRequestDetailRows(detail, selectedConversation)
     : [];
@@ -1544,58 +1507,6 @@ export function CommunicationsHub() {
     }
   }
 
-  async function handleSaveIntakeDetails(formData: FormData) {
-    if (!detail.intake) {
-      return;
-    }
-
-    setUpdateIntakeState({ status: "saving", message: "Saving request details..." });
-
-    try {
-      const supabase = getSupabaseBrowserClient();
-      if (!supabase) {
-        throw new Error("Communications is not configured for intake updates.");
-      }
-
-      const payload = {
-        customer_name: String(formData.get("customer_name") ?? ""),
-        customer_phone: String(formData.get("customer_phone") ?? ""),
-        customer_email: String(formData.get("customer_email") ?? ""),
-        service_address: String(formData.get("service_address") ?? ""),
-        unit: String(formData.get("unit") ?? ""),
-        city: String(formData.get("city") ?? ""),
-        state: String(formData.get("state") ?? ""),
-        zip_code: String(formData.get("zip_code") ?? ""),
-        appliance_type: String(formData.get("appliance_type") ?? ""),
-        brand: String(formData.get("brand") ?? ""),
-        problem_description: String(formData.get("problem_description") ?? ""),
-        preferred_appointment_window: String(
-          formData.get("preferred_appointment_window") ?? "",
-        ),
-      };
-
-      const { error } = await supabase.rpc("update_intake_operational_details_rpc", {
-        p_intake_request_id: detail.intake.id,
-        p_payload: payload,
-      });
-
-      if (error) {
-        throw new Error(error.message);
-      }
-
-      setDetailReloadToken((value) => value + 1);
-      setUpdateIntakeState({
-        status: "success",
-        message: "Request details updated.",
-      });
-    } catch (error) {
-      setUpdateIntakeState({
-        status: "error",
-        message: error instanceof Error ? error.message : "Could not update request details.",
-      });
-    }
-  }
-
   async function handleSendMessage() {
     if (
       !selectedConversation ||
@@ -1672,7 +1583,7 @@ export function CommunicationsHub() {
   }
 
   async function handleCreateJobFromConversation() {
-    if (!selectedConversation || !detail.intake) {
+    if (!selectedConversation) {
       return;
     }
 
@@ -1698,14 +1609,17 @@ export function CommunicationsHub() {
         throw new Error("Log in again to create this job.");
       }
 
-      const response = await fetch(`/api/intake/${detail.intake.id}/convert`, {
+      const response = await fetch(
+        `/api/communications/conversations/${selectedConversation.id}/create-job`,
+        {
         method: "POST",
         headers: {
           Authorization: `Bearer ${session.access_token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ allowPossibleDuplicate: true }),
-      });
+        },
+      );
       const payload = (await response.json().catch(() => null)) as {
         conversion?: { serviceRequestId?: string | null; alreadyConverted?: boolean };
         message?: string;
@@ -1960,11 +1874,6 @@ export function CommunicationsHub() {
                       ? "Open Job"
                       : "Create Job"}
                 </button>
-                {detail.intake ? (
-                  <ActionLink href={withReturnTo(intakeHref)} label="Open Intake" />
-                ) : (
-                  <ActionLink href={withReturnTo(intakeHref)} label="Create Intake" />
-                )}
               </div>
               {createLeadState.message ? (
                 <p
@@ -1997,7 +1906,6 @@ export function CommunicationsHub() {
               {([
                 ["conversation", "Conversation"],
                 ["customer", "Customer"],
-                ["intake", "Intake"],
                 ["lead", "Lead"],
                 ["job", "Job"],
                 ["activity", "Activity"],
@@ -2184,17 +2092,8 @@ export function CommunicationsHub() {
                   detail={detail}
                   returnTo={destinationReturnTo}
                 />
-              ) : mobileDetailTab === "intake" ? (
-                <MobileIntakePanel
-                  detail={detail}
-                  onSave={handleSaveIntakeDetails}
-                  requestDetailRows={requestDetailRows}
-                  requiredAction={requiredAction}
-                  returnTo={destinationReturnTo}
-                  updateState={updateIntakeState}
-                />
               ) : mobileDetailTab === "lead" ? (
-                <MobileLeadPanel detail={detail} onCreate={() => void handleCreateLeadFromConversation()} state={createLeadState} />
+                <MobileLeadPanel detail={detail} state={createLeadState} />
               ) : mobileDetailTab === "job" ? (
                 <MobileJobPanel detail={detail} returnTo={destinationReturnTo} />
               ) : (
@@ -2360,11 +2259,6 @@ export function CommunicationsHub() {
                         ? "Open Job"
                         : "Create Job"}
                   </button>
-                  {detail.intake ? (
-                    <ActionLink href={withReturnTo(intakeHref)} label="Open Intake" />
-                  ) : (
-                    <ActionLink href={withReturnTo(intakeHref)} label="Create Intake" />
-                  )}
                 </div>
                 {createLeadState.message ? (
                   <p
@@ -2591,7 +2485,6 @@ export function CommunicationsHub() {
           <div className="flex border-b border-[#E5E7EB]">
             {([
               ["customer", "Customer"],
-              ["intake", "Intake"],
               ["lead", "Lead"],
               ["job", "Job"],
               ["activity", "Activity"],
@@ -2633,7 +2526,6 @@ export function CommunicationsHub() {
                         title="Unknown customer"
                         body="Not linked to a customer yet."
                       />
-                      <ActionLink href={withReturnTo(intakeHref)} label="Link to customer" />
                     </div>
                   )}
                 </Panel>
@@ -2654,38 +2546,9 @@ export function CommunicationsHub() {
               </>
             ) : null}
 
-            {contextTab === "intake" ? (
-              <Panel title="Intake">
-                {detail.intake ? (
-                  <div className="space-y-2">
-                    {requestDetailRows.length > 0 ? (
-                      <RequestDetailsList rows={requestDetailRows} />
-                    ) : null}
-                    <ContextRow label="Status" value={getStatusLabel(detail.intake.status)} />
-                    <ContextRow
-                      label="Problem"
-                      value={detail.intake.problem_description ?? "Not captured"}
-                    />
-                    <IntakeDetailsEditor
-                      intake={detail.intake}
-                      onSave={handleSaveIntakeDetails}
-                      state={updateIntakeState}
-                    />
-                    <ActionLink href={withReturnTo(intakeHref)} label="Review Intake" />
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <EmptyState title="No intake created yet" body={requiredAction} />
-                    <ActionLink href={withReturnTo(intakeHref)} label="Create intake request" />
-                  </div>
-                )}
-              </Panel>
-            ) : null}
-
             {contextTab === "lead" ? (
               <LeadPanel
                 detail={detail}
-                onCreate={() => void handleCreateLeadFromConversation()}
                 state={createLeadState}
               />
             ) : null}
@@ -2705,8 +2568,8 @@ export function CommunicationsHub() {
                       title="No job linked"
                       body={
                         canCreateJobFromConversation
-                          ? "Create a Job from this trusted website request."
-                          : createJobBlockedReason ?? "Open Intake to review missing information before creating a Job."
+                          ? "Create a Job from this conversation."
+                          : createJobBlockedReason ?? "Complete the missing request details before creating a Job."
                       }
                     />
                     {canCreateJobFromConversation ? (
@@ -2718,8 +2581,6 @@ export function CommunicationsHub() {
                       >
                         {createJobState.status === "saving" ? "Creating..." : "Create Job"}
                       </button>
-                    ) : detail.intake ? (
-                      <ActionLink href={withReturnTo(intakeHref)} label="Review Intake" />
                     ) : null}
                   </div>
                 )}
@@ -2872,9 +2733,6 @@ function MobileCustomerPanel({
 }) {
   const withReturnTo = (href: string) =>
     `${href}${href.includes("?") ? "&" : "?"}returnTo=${encodeURIComponent(returnTo)}`;
-  const intakeHref = detail.intake
-    ? `/dashboard/intake?selected=${encodeURIComponent(detail.intake.id)}`
-    : "/dashboard/intake";
 
   return (
     <>
@@ -2895,7 +2753,6 @@ function MobileCustomerPanel({
         ) : (
           <div className="space-y-3">
             <EmptyState title="Unknown customer" body="Not linked to a customer yet." />
-            <ActionLink href={withReturnTo(intakeHref)} label="Link to customer" />
           </div>
         )}
       </Panel>
@@ -2917,63 +2774,11 @@ function MobileCustomerPanel({
   );
 }
 
-function MobileIntakePanel({
-  detail,
-  onSave,
-  requestDetailRows,
-  requiredAction,
-  returnTo,
-  updateState,
-}: {
-  detail: ConversationDetailData;
-  onSave: (formData: FormData) => void;
-  requestDetailRows: Array<[string, string]>;
-  requiredAction: string;
-  returnTo: string;
-  updateState: ActionState;
-}) {
-  const withReturnTo = (href: string) =>
-    `${href}${href.includes("?") ? "&" : "?"}returnTo=${encodeURIComponent(returnTo)}`;
-  const intakeHref = detail.intake
-    ? `/dashboard/intake?selected=${encodeURIComponent(detail.intake.id)}`
-    : "/dashboard/intake";
-
-  return (
-    <Panel title="Intake">
-      {detail.intake ? (
-        <div className="space-y-2">
-          <ContextRow label="Status" value={getStatusLabel(detail.intake.status)} />
-          <ContextRow
-            label="Problem"
-            value={detail.intake.problem_description ?? "Not captured"}
-          />
-          {requestDetailRows.length > 0 ? (
-            <RequestDetailsList rows={requestDetailRows} />
-          ) : null}
-          <IntakeDetailsEditor
-            intake={detail.intake}
-            onSave={onSave}
-            state={updateState}
-          />
-          <ActionLink href={withReturnTo(intakeHref)} label="Review Intake" />
-        </div>
-      ) : (
-        <div className="space-y-3">
-          <EmptyState title="No intake created yet" body={requiredAction} />
-          <ActionLink href={withReturnTo(intakeHref)} label="Create intake request" />
-        </div>
-      )}
-    </Panel>
-  );
-}
-
 function LeadPanel({
   detail,
-  onCreate,
   state,
 }: {
   detail: ConversationDetailData;
-  onCreate: () => void;
   state: ActionState;
 }) {
   if (!detail.lead) {
@@ -2982,16 +2787,8 @@ function LeadPanel({
         <div className="space-y-3">
           <EmptyState
             title="No lead created"
-            body="Create a Lead to keep this opportunity open without creating a Customer or Job."
+            body="Use Create Lead in the conversation header to keep this opportunity open without creating a Customer or Job."
           />
-          <button
-            className="rounded-lg bg-[#0F6BFF] px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={state.status === "saving"}
-            onClick={onCreate}
-            type="button"
-          >
-            {state.status === "saving" ? "Creating..." : "Create Lead"}
-          </button>
           {state.message ? (
             <p
               className={`text-sm font-semibold ${
@@ -3011,6 +2808,7 @@ function LeadPanel({
       .filter(Boolean)
       .join(" ") ||
     detail.lead.customer_name ||
+    detail.lead.customer_phone ||
     "Unknown contact";
 
   return (
@@ -3039,100 +2837,12 @@ function LeadPanel({
 
 function MobileLeadPanel({
   detail,
-  onCreate,
   state,
 }: {
   detail: ConversationDetailData;
-  onCreate: () => void;
   state: ActionState;
 }) {
-  return <LeadPanel detail={detail} onCreate={onCreate} state={state} />;
-}
-
-function IntakeDetailsEditor({
-  intake,
-  onSave,
-  state,
-}: {
-  intake: IntakeRequestRow;
-  onSave: (formData: FormData) => void;
-  state: ActionState;
-}) {
-  return (
-    <form
-      onSubmit={(event) => {
-        event.preventDefault();
-        onSave(new FormData(event.currentTarget));
-      }}
-      className="mt-4 space-y-3 rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3"
-    >
-      <p className="text-sm font-semibold text-[#0F172A]">Complete Request Details</p>
-      <FieldInput label="Customer name" name="customer_name" value={intake.customer_name} />
-      <FieldInput label="Phone" name="customer_phone" value={intake.customer_phone} />
-      <FieldInput label="Email" name="customer_email" value={intake.customer_email} />
-      <FieldInput label="Service address" name="service_address" value={intake.service_address} />
-      <div className="grid grid-cols-2 gap-2">
-        <FieldInput label="Unit" name="unit" value={intake.unit} />
-        <FieldInput label="ZIP" name="zip_code" value={intake.zip_code} />
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <FieldInput label="City" name="city" value={intake.city} />
-        <FieldInput label="State" name="state" value={intake.state} />
-      </div>
-      <FieldInput label="Appliance / service type" name="appliance_type" value={intake.appliance_type} />
-      <FieldInput label="Brand" name="brand" value={intake.brand} />
-      <label className="block text-xs font-bold uppercase tracking-[0.12em] text-[#64748B]">
-        Problem description
-        <textarea
-          className="mt-1 min-h-24 w-full resize-y rounded-lg border border-[#E5E7EB] bg-white px-3 py-2 text-sm font-semibold normal-case tracking-normal text-[#0F172A] outline-none focus:border-[#0F6BFF]"
-          defaultValue={intake.problem_description ?? ""}
-          name="problem_description"
-        />
-      </label>
-      <FieldInput
-        label="Preferred appointment window"
-        name="preferred_appointment_window"
-        value={intake.preferred_appointment_window}
-      />
-      <button
-        className="w-full rounded-lg bg-[#0F6BFF] px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-        disabled={state.status === "saving"}
-        type="submit"
-      >
-        {state.status === "saving" ? "Saving..." : "Save Request Details"}
-      </button>
-      {state.message ? (
-        <p
-          className={`text-sm font-semibold ${
-            state.status === "error" ? "text-amber-700" : "text-emerald-700"
-          }`}
-        >
-          {state.message}
-        </p>
-      ) : null}
-    </form>
-  );
-}
-
-function FieldInput({
-  label,
-  name,
-  value,
-}: {
-  label: string;
-  name: string;
-  value: string | null;
-}) {
-  return (
-    <label className="block text-xs font-bold uppercase tracking-[0.12em] text-[#64748B]">
-      {label}
-      <input
-        className="mt-1 w-full rounded-lg border border-[#E5E7EB] bg-white px-3 py-2 text-sm font-semibold normal-case tracking-normal text-[#0F172A] outline-none focus:border-[#0F6BFF]"
-        defaultValue={value ?? ""}
-        name={name}
-      />
-    </label>
-  );
+  return <LeadPanel detail={detail} state={state} />;
 }
 
 function MobileJobPanel({
@@ -3157,7 +2867,7 @@ function MobileJobPanel({
       ) : (
         <EmptyState
           title="No job linked"
-          body="Create Job from the conversation header, or open Intake to review missing information."
+          body="Create Job from the conversation header when the required request details are available."
         />
       )}
     </Panel>

@@ -17,6 +17,7 @@ export function DashboardTopbar() {
   const isJobsCenter = pathname === "/dashboard/leads";
   const isJobWorkspace = /^\/dashboard\/leads\/[^/]+$/.test(pathname);
   const isCommunicationsWorkspace = pathname === "/dashboard/communications";
+  const isCommunicationLeadsWorkspace = pathname?.startsWith("/dashboard/communication-leads");
   const isCustomersIndex = pathname === "/dashboard/customers";
   const isCustomerWorkspace = /^\/dashboard\/customers\/[^/]+$/.test(pathname);
   const usesCompactMobileAppBar =
@@ -177,7 +178,7 @@ export function DashboardTopbar() {
   return (
     <header
       className={`border-b border-[#E5E7EB] bg-white px-4 py-4 shadow-[0_8px_24px_rgba(15,23,42,0.04)] sm:px-6 lg:px-8 ${
-        isJobWorkspace || isCustomerWorkspace
+        isJobWorkspace || isCustomerWorkspace || isCommunicationLeadsWorkspace
           ? "hidden lg:block"
           : ""
       }`}
