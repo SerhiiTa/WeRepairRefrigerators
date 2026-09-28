@@ -313,6 +313,40 @@ function hasAddressFormData(form: CustomerFormState): boolean {
   );
 }
 
+function normalizeAddressText(value: string | null | undefined): string {
+  return (value ?? "").trim();
+}
+
+function normalizeAddressState(value: string | null | undefined): string {
+  return normalizeAddressText(value).toUpperCase().slice(0, 2) || "TX";
+}
+
+function normalizeAddressCountry(value: string | null | undefined): string {
+  return normalizeAddressText(value).toUpperCase().slice(0, 2) || "US";
+}
+
+function hasPrimaryAddressChanges(
+  form: CustomerFormState,
+  address: CustomerAddressRow | undefined,
+): boolean {
+  if (!address) {
+    return hasAddressFormData(form);
+  }
+
+  return (
+    normalizeAddressText(form.streetAddress) !==
+      normalizeAddressText(address.street_address) ||
+    normalizeAddressText(form.unit) !== normalizeAddressText(address.unit) ||
+    normalizeAddressText(form.city) !== normalizeAddressText(address.city) ||
+    normalizeAddressState(form.state) !== normalizeAddressState(address.state) ||
+    cleanZip(form.zipCode) !== cleanZip(address.zip_code ?? "") ||
+    normalizeAddressCountry(form.country) !== normalizeAddressCountry(address.country) ||
+    form.latitude !== (address.latitude ?? null) ||
+    form.longitude !== (address.longitude ?? null) ||
+    (form.placeId ?? null) !== (address.place_id ?? null)
+  );
+}
+
 function buildAddressPayload(form: CustomerFormState): Record<string, Json> {
   return {
     label: "Customer Primary Address",
@@ -837,7 +871,9 @@ function getCustomerJobTitle(request: ServiceRequestRow): string {
 }
 
 function getShortJobNumber(request: ServiceRequestRow): string {
-  return request.id.slice(0, 8).toUpperCase();
+  return "job_number" in request && request.job_number
+    ? String(request.job_number)
+    : "Pending";
 }
 
 function normalizeSearch(value: string | null | undefined): string {
@@ -2125,7 +2161,7 @@ export function DashboardCustomerDetail({
         ? state.addresses.find((address) => address.is_primary) ?? state.addresses[0]
         : undefined;
 
-    if (primaryAddress || hasAddressFormData(profileForm)) {
+    if (hasPrimaryAddressChanges(profileForm, primaryAddress)) {
       const addressResult = await supabase.rpc("upsert_customer_address_rpc", {
         p_customer_id: customerId,
         p_address_id: primaryAddress?.id ?? null,

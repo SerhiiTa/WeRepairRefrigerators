@@ -13,6 +13,10 @@ type RecordingConversationRow = {
   external_conversation_id: string | null;
 };
 
+type RecordingCallRow = {
+  provider_call_id: string;
+};
+
 function fail(message: string, status = 400) {
   return NextResponse.json({ ok: false, message }, { status });
 }
@@ -69,17 +73,39 @@ export async function GET(request: Request) {
 
   const row = conversation as RecordingConversationRow | null;
 
-  if (!row) {
+  let retellCallId = row?.external_conversation_id ?? null;
+
+  if (!retellCallId) {
+    let callQuery = supabase
+      .from("communication_calls")
+      .select("provider_call_id")
+      .eq("provider_name", "retell")
+      .order("started_at", { ascending: false, nullsFirst: false })
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    callQuery = callId
+      ? callQuery.or(`provider_call_id.eq.${callId},id.eq.${callId}`)
+      : callQuery.eq("conversation_id", conversationId ?? "");
+
+    const { data: call, error: callError } = await callQuery.maybeSingle();
+
+    if (callError) {
+      return fail("Could not load the selected call.", 503);
+    }
+
+    retellCallId = (call as RecordingCallRow | null)?.provider_call_id ?? null;
+  }
+
+  if (!row && !retellCallId) {
     return fail("Conversation not found.", 404);
   }
 
-  if (!row.external_conversation_id) {
+  if (!retellCallId) {
     return fail("This conversation does not have a Retell call id.", 404);
   }
 
-  const recordingResult = await fetchRetellCallRecording(
-    row.external_conversation_id,
-  );
+  const recordingResult = await fetchRetellCallRecording(retellCallId);
 
   if (!recordingResult.ok) {
     return fail(recordingResult.reason, 502);

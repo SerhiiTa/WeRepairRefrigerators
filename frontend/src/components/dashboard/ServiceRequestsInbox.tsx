@@ -204,42 +204,49 @@ function formatAppointmentStartTime(value: string | null | undefined) {
   }).format(new Date(2026, 0, 1, hour, minute));
 }
 
-function formatLooseAppointmentStartTime(value: string | null | undefined) {
-  if (!value) {
-    return null;
+function formatRequestedWindowTime(value: string | null | undefined) {
+  const formatted = formatAppointmentStartTime(value);
+  return formatted?.replace(":00 ", " ") ?? null;
+}
+
+function getRequestedWindowLabel(request: DashboardServiceRequest) {
+  if (request.preferredTimeWindow?.trim()) {
+    return request.preferredTimeWindow.trim();
   }
 
-  const timeMatch = value.match(/\b(\d{1,2})(?::(\d{2}))?\s*(AM|PM)\b/i);
-
-  if (timeMatch) {
-    const rawHour = Number(timeMatch[1]);
-    const minute = Number(timeMatch[2] ?? "0");
-    const period = timeMatch[3]?.toUpperCase();
-    const hour =
-      period === "PM" && rawHour < 12
-        ? rawHour + 12
-        : period === "AM" && rawHour === 12
-          ? 0
-          : rawHour;
-
-    return formatAppointmentStartTime(
-      `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`,
-    );
+  if (request.scheduledWindowStartTime && request.scheduledWindowEndTime) {
+    const start = formatRequestedWindowTime(request.scheduledWindowStartTime);
+    const end = formatRequestedWindowTime(request.scheduledWindowEndTime);
+    return start && end ? `${start}-${end}` : null;
   }
 
   return null;
 }
 
-function getAppointmentLabel(request: DashboardServiceRequest) {
-  if (request.scheduledWindowStartTime) {
-    return formatAppointmentStartTime(request.scheduledWindowStartTime) ?? "Scheduled";
+function getScheduleBadge(request: DashboardServiceRequest): {
+  eyebrow: string | null;
+  value: string;
+} {
+  if (request.appointmentId) {
+    if (request.scheduledWindowStartTime) {
+      return {
+        eyebrow: null,
+        value: formatAppointmentStartTime(request.scheduledWindowStartTime) ?? "Scheduled",
+      };
+    }
+
+    return { eyebrow: null, value: "Scheduled" };
   }
 
-  return (
-    formatLooseAppointmentStartTime(request.preferredTimeWindow) ||
-    request.preferredTimeWindow ||
-    "Not scheduled"
-  );
+  const requestedWindow = getRequestedWindowLabel(request);
+  if (request.scheduledDate || requestedWindow) {
+    return {
+      eyebrow: "Requested",
+      value: requestedWindow ?? "Window pending",
+    };
+  }
+
+  return { eyebrow: null, value: "Not scheduled" };
 }
 
 function looksLikeInternalListText(value: string | null | undefined) {
@@ -1221,7 +1228,10 @@ export function ServiceRequestsInbox() {
 
       {filteredRequests.length > 0 ? (
         <div className="grid gap-1">
-          {filteredRequests.map((request) => (
+          {filteredRequests.map((request) => {
+            const scheduleBadge = getScheduleBadge(request);
+
+            return (
             <article
               className="w-full rounded-[10px] border border-[#E5E7EB] bg-white shadow-[0_4px_12px_rgba(15,23,42,0.025)] transition hover:border-[#0F6BFF]/30 hover:shadow-[0_8px_20px_rgba(15,23,42,0.05)]"
               key={request.id}
@@ -1237,8 +1247,13 @@ export function ServiceRequestsInbox() {
                   <p className="text-lg font-black leading-none text-[#0F172A]">
                     {getJobDateParts(request).day}
                   </p>
+                  {scheduleBadge.eyebrow ? (
+                    <p className="mt-0.5 truncate text-[8px] font-black uppercase leading-tight text-[#0F6BFF]">
+                      {scheduleBadge.eyebrow}
+                    </p>
+                  ) : null}
                   <p className="mt-0.5 truncate text-[9px] font-bold leading-tight text-[#475569]">
-                    {getAppointmentLabel(request)}
+                    {scheduleBadge.value}
                   </p>
                 </div>
                 <div className="flex min-w-0 flex-1 flex-col justify-center">
@@ -1281,7 +1296,8 @@ export function ServiceRequestsInbox() {
                 </div>
               </Link>
             </article>
-          ))}
+          );
+          })}
         </div>
       ) : (
         <EmptyState

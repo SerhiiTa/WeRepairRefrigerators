@@ -252,8 +252,8 @@ function buildLineId() {
   return `manual-line-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function formatCompactJobNumber(requestId: string) {
-  return `Job #${requestId.slice(0, 8).toUpperCase()}`;
+function formatCompactJobNumber(request: DashboardServiceRequest) {
+  return `Job #${request.jobNumber?.toString() ?? "Pending"}`;
 }
 
 function mapPriceBookTypeToLineType(
@@ -1633,7 +1633,7 @@ export function ManualEstimateEditor({
 
           <div className="rounded-2xl bg-[#F8FAFC] p-3">
             <p className="text-sm font-black text-[#0F172A]">
-              {formatCompactJobNumber(request.id)}
+              {formatCompactJobNumber(request)}
             </p>
             <p className="mt-0.5 text-sm font-semibold text-[#475569]">
               {[request.applianceType, request.issueDescription]

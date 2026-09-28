@@ -497,6 +497,35 @@ export type Database = {
         Update: Partial<Database["public"]["Tables"]["communication_lead_notes"]["Row"]>;
         Relationships: [];
       };
+      communication_calls: {
+        Row: {
+          id: string;
+          company_id: string;
+          conversation_id: string;
+          source_account_id: string | null;
+          provider_name: "telnyx" | "retell" | "manual" | "other";
+          provider_call_id: string;
+          direction: "inbound" | "outbound";
+          from_phone: string | null;
+          to_phone: string | null;
+          status: string;
+          started_at: string | null;
+          answered_at: string | null;
+          ended_at: string | null;
+          duration_seconds: number | null;
+          disposition: string | null;
+          end_reason: string | null;
+          recording_reference: string | null;
+          transcript_id: string | null;
+          summary: string | null;
+          provider_metadata: Json;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Partial<Database["public"]["Tables"]["communication_calls"]["Row"]>;
+        Update: Partial<Database["public"]["Tables"]["communication_calls"]["Row"]>;
+        Relationships: [];
+      };
       communication_source_accounts: {
         Row: {
           id: string;
@@ -1078,6 +1107,7 @@ export type Database = {
           appliance_type: string;
           appliance_brand: string | null;
           appliance_model: string | null;
+          job_number: number;
           job_type_id?: string | null;
           job_name?: string | null;
           problem_type_id?: string | null;

@@ -6440,7 +6440,7 @@ export function ServiceRequestDetail({
     request.scheduledWindowStartTime,
     request.scheduledWindowEndTime,
   );
-  const jobNumber = request.id.slice(0, 8).toUpperCase();
+  const jobNumber = request.jobNumber?.toString() ?? "Pending";
   const statusLabel = formatServiceRequestSource(request.status);
   const latestEstimateStatusSignal = estimatesState.estimates.find(
     (estimate) =>

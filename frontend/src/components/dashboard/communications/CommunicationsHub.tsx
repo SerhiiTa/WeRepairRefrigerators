@@ -25,6 +25,7 @@ import type {
 type MessageRow = PublicSchema["Tables"]["communication_messages"]["Row"];
 type MessageAttachmentRow =
   PublicSchema["Tables"]["communication_message_attachments"]["Row"];
+type CommunicationCallRow = PublicSchema["Tables"]["communication_calls"]["Row"];
 type TranscriptRow = PublicSchema["Tables"]["communication_transcripts"]["Row"];
 type CommunicationLeadRow = PublicSchema["Tables"]["communication_leads"]["Row"];
 type SourceAccountRow = PublicSchema["Tables"]["communication_source_accounts"]["Row"];
@@ -78,6 +79,7 @@ type ConversationDetailData = {
   job: ServiceRequestRow | null;
   messages: MessageRow[];
   attachmentsByMessageId: Record<string, SignedMessageAttachment[]>;
+  calls: CommunicationCallRow[];
   transcripts: TranscriptRow[];
   timelineEvents: CommunicationTimelineEvent[];
 };
@@ -157,6 +159,7 @@ const emptyDetailData: ConversationDetailData = {
   job: null,
   messages: [],
   attachmentsByMessageId: {},
+  calls: [],
   transcripts: [],
   timelineEvents: [],
 };
@@ -633,6 +636,34 @@ function formatDuration(durationMs: number | null): string | null {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
+function formatCallStatus(status: string | null): string {
+  if (!status) {
+    return "Call";
+  }
+
+  return status
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function getCallDurationLabel(
+  call: CommunicationCallRow | null,
+  recordingState: RecordingState,
+): string {
+  const callDuration = call?.duration_seconds
+    ? formatDuration(call.duration_seconds * 1000)
+    : null;
+  const recordingDuration =
+    recordingState.status === "ready" && recordingState.recording?.durationMs
+      ? formatDuration(recordingState.recording.durationMs)
+      : null;
+  const duration = callDuration ?? recordingDuration;
+
+  return duration ? ` · ${duration}` : "";
+}
+
 function formatServiceAddress(detail: ConversationDetailData, conversation: CommunicationConversation) {
   const job = detail.job;
   const intake = detail.intake;
@@ -669,6 +700,8 @@ function formatJobAddress(job: ServiceRequestRow): string {
 }
 
 function getJobDetailRows(job: ServiceRequestRow): Array<[string, string]> {
+  const jobNumber =
+    "job_number" in job && job.job_number ? String(job.job_number) : "Pending";
   const scheduledWindow = [
     job.scheduled_date,
     [job.scheduled_window_start_time, job.scheduled_window_end_time]
@@ -679,7 +712,7 @@ function getJobDetailRows(job: ServiceRequestRow): Array<[string, string]> {
     .join(" · ");
 
   return [
-    ["Job", job.id],
+    ["Job", `Job #${jobNumber}`],
     ["Status", getStatusLabel(job.status)],
     ["Customer", job.customer_name],
     ["Service Address", formatJobAddress(job)],
@@ -782,6 +815,7 @@ export function CommunicationsHub() {
     status: "idle",
     message: null,
   });
+  const [transcriptExpanded, setTranscriptExpanded] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -968,6 +1002,7 @@ export function CommunicationsHub() {
 
       const [
         messagesResult,
+        callsResult,
         transcriptsResult,
         timelineResult,
         intakeResult,
@@ -980,6 +1015,13 @@ export function CommunicationsHub() {
             .select("*")
             .eq("conversation_id", selectedConversationId)
             .order("occurred_at", { ascending: false })
+            .limit(5),
+          supabase
+            .from("communication_calls")
+            .select("*")
+            .eq("conversation_id", selectedConversationId)
+            .order("started_at", { ascending: false, nullsFirst: false })
+            .order("created_at", { ascending: false })
             .limit(5),
           supabase
             .from("communication_transcripts")
@@ -1033,6 +1075,7 @@ export function CommunicationsHub() {
 
       if (
         messagesResult.error ||
+        callsResult.error ||
         transcriptsResult.error ||
         timelineResult.error ||
         leadResult.error ||
@@ -1090,6 +1133,7 @@ export function CommunicationsHub() {
           job,
           messages,
           attachmentsByMessageId,
+          calls: (callsResult.data ?? []) as CommunicationCallRow[],
           transcripts: (transcriptsResult.data ?? []) as TranscriptRow[],
           timelineEvents: filterBusinessTimelineEvents(
             ((timelineResult.data ?? []) as TimelineRow[]).map(mapTimelineEvent),
@@ -1323,6 +1367,7 @@ export function CommunicationsHub() {
     [hubState.conversations],
   );
   const detail = detailState.data;
+  const latestCall = detail.calls[0] ?? null;
   const latestTranscript = detail.transcripts[0] ?? null;
   const chronologicalMessages = [...detail.messages].reverse();
   const chronologicalTimeline = [...detail.timelineEvents].reverse();
@@ -1365,6 +1410,7 @@ export function CommunicationsHub() {
     setCreateLeadState({ status: "idle", message: null });
     setSmsDraft("");
     setSendMessageState({ status: "idle", message: null });
+    setTranscriptExpanded(false);
     setMobileDetailOpen(true);
     setMobileDetailTab("conversation");
     if (typeof window !== "undefined") {
@@ -1938,23 +1984,26 @@ export function CommunicationsHub() {
                 <>
                   {selectedConversation.sourceType === "phone" ? (
                     <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
-                      <p className="text-sm font-semibold text-[#0F172A]">Inbound call</p>
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-semibold text-[#0F172A]">
+                          {latestCall?.direction === "outbound" ? "Outbound call" : "Inbound call"}
+                        </p>
+                        {latestCall?.status ? (
+                          <Badge tone={latestCall.status === "missed" ? "amber" : "blue"}>
+                            {formatCallStatus(latestCall.status)}
+                          </Badge>
+                        ) : null}
+                      </div>
                       <p className="mt-1 text-xs font-medium text-[#64748B]">
                         {selectedConversation.customerPhone ?? "No phone captured"}
-                        {recordingState.status === "ready" &&
-                        recordingState.recording?.durationMs
-                          ? ` · ${formatDuration(recordingState.recording.durationMs)}`
-                          : ""}
+                        {getCallDurationLabel(latestCall, recordingState)}
                       </p>
                       {latestTranscript?.transcript_text ? (
-                        <div className="mt-4">
-                          <p className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
-                            Transcript
-                          </p>
-                          <p className="mt-2 whitespace-pre-line text-sm font-medium leading-6 text-[#334155]">
-                            {latestTranscript.transcript_text}
-                          </p>
-                        </div>
+                        <TranscriptPanel
+                          expanded={transcriptExpanded}
+                          onToggle={() => setTranscriptExpanded((value) => !value)}
+                          text={latestTranscript.transcript_text}
+                        />
                       ) : null}
                       <div className="mt-3">
                         <RecordingPlayer
@@ -1966,7 +2015,10 @@ export function CommunicationsHub() {
                   ) : null}
 
                   {requestDetailRows.length > 0 ? (
-                    <RequestDetailsCard rows={requestDetailRows} />
+                    <RequestDetailsCard
+                      rows={requestDetailRows}
+                      sourceLabel={getSourceLabel(selectedConversation.sourceType)}
+                    />
                   ) : null}
 
                   {chronologicalMessages.map((message) => {
@@ -2299,27 +2351,25 @@ export function CommunicationsHub() {
                         <div className="flex items-center justify-between gap-3">
                           <div>
                             <p className="text-sm font-semibold text-[#0F172A]">
-                              Inbound call
+                              {latestCall?.direction === "outbound"
+                                ? "Outbound call"
+                                : "Inbound call"}
                             </p>
                             <p className="mt-1 text-xs font-medium text-[#64748B]">
                               {selectedConversation.customerPhone ?? "No phone captured"}
-                              {recordingState.status === "ready" &&
-                              recordingState.recording?.durationMs
-                                ? ` · ${formatDuration(recordingState.recording.durationMs)}`
-                                : ""}
+                              {getCallDurationLabel(latestCall, recordingState)}
                             </p>
                           </div>
-                          <Badge tone="blue">Call</Badge>
+                          <Badge tone={latestCall?.status === "missed" ? "amber" : "blue"}>
+                            {formatCallStatus(latestCall?.status ?? "call")}
+                          </Badge>
                         </div>
                         {latestTranscript?.transcript_text ? (
-                          <div className="mt-4 rounded-xl bg-[#F8FAFC] p-4">
-                            <p className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
-                              Transcript
-                            </p>
-                            <p className="mt-2 whitespace-pre-line text-sm font-medium leading-6 text-[#334155]">
-                              {latestTranscript.transcript_text}
-                            </p>
-                          </div>
+                          <TranscriptPanel
+                            expanded={transcriptExpanded}
+                            onToggle={() => setTranscriptExpanded((value) => !value)}
+                            text={latestTranscript.transcript_text}
+                          />
                         ) : null}
                         <div className="mt-3">
                           <RecordingPlayer
@@ -2331,7 +2381,10 @@ export function CommunicationsHub() {
                     ) : null}
 
                     {requestDetailRows.length > 0 ? (
-                      <RequestDetailsCard rows={requestDetailRows} />
+                      <RequestDetailsCard
+                        rows={requestDetailRows}
+                        sourceLabel={getSourceLabel(selectedConversation.sourceType)}
+                      />
                     ) : null}
 
                     {chronologicalMessages.length === 0 &&
@@ -2917,12 +2970,18 @@ function RequestDetailsList({ rows }: { rows: Array<[string, string]> }) {
   );
 }
 
-function RequestDetailsCard({ rows }: { rows: Array<[string, string]> }) {
+function RequestDetailsCard({
+  rows,
+  sourceLabel,
+}: {
+  rows: Array<[string, string]>;
+  sourceLabel: string;
+}) {
   return (
     <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm font-semibold text-[#0F172A]">Request details</p>
-        <Badge tone="purple">Website</Badge>
+        <Badge tone={sourceLabel === "Website" ? "purple" : "blue"}>{sourceLabel}</Badge>
       </div>
       <div className="mt-4">
         <RequestDetailsList rows={rows} />
@@ -3025,6 +3084,40 @@ function RecordingPlayer({
           <track kind="captions" />
         </audio>
       ) : null}
+    </div>
+  );
+}
+
+function TranscriptPanel({
+  expanded,
+  onToggle,
+  text,
+}: {
+  expanded: boolean;
+  onToggle: () => void;
+  text: string;
+}) {
+  return (
+    <div className="mt-4 rounded-xl bg-[#F8FAFC] p-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
+          Transcript
+        </p>
+        <button
+          className="text-xs font-black text-[#0F6BFF]"
+          onClick={onToggle}
+          type="button"
+        >
+          {expanded ? "Hide transcript" : "Show transcript"}
+        </button>
+      </div>
+      <p
+        className={`mt-2 whitespace-pre-line text-sm font-medium leading-6 text-[#334155] ${
+          expanded ? "" : "line-clamp-4"
+        }`}
+      >
+        {text}
+      </p>
     </div>
   );
 }

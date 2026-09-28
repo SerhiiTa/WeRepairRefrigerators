@@ -286,6 +286,7 @@ export function isServiceRequestCrmStatus(
 
 export type DashboardServiceRequest = {
   id: string;
+  jobNumber: number | null;
   companyId: string | null;
   customerId: string | null;
   customerApplianceId: string | null;
@@ -327,6 +328,7 @@ export type DashboardServiceRequest = {
 
 export const SERVICE_REQUEST_SELECT_COLUMNS = [
   "id",
+  "job_number",
   "company_id",
   "customer_id",
   "customer_appliance_id",
@@ -502,6 +504,7 @@ export function mapServiceRequestRow(
 ): DashboardServiceRequest {
   return {
     id: row.id,
+    jobNumber: "job_number" in row ? (row.job_number ?? null) : null,
     companyId: row.company_id ?? null,
     customerId: row.customer_id ?? null,
     customerApplianceId: row.customer_appliance_id ?? null,
