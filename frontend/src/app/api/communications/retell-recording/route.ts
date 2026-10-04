@@ -6,9 +6,111 @@ import {
   getBestRetellRecordingAudioUrl,
 } from "@/server/communications/retell-recording";
 import { extractBearerToken } from "@/server/intake/intake-service";
+import type { Json } from "@/lib/supabase/types";
 
 function fail(message: string, status = 400) {
   return NextResponse.json({ ok: false, message }, { status });
+}
+
+function metadataRecord(value: Json | null | undefined): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function cleanUrl(value: unknown): string | null {
+  return typeof value === "string" && /^https?:\/\//i.test(value.trim()) ? value.trim() : null;
+}
+
+function getTelnyxRecordingUrl(metadata: Json | null | undefined): string | null {
+  const recording = metadataRecord(metadataRecord(metadata).recording as Json | null | undefined);
+  const urls = metadataRecord(recording.urls as Json | null | undefined);
+  return cleanUrl(urls.mp3) ?? cleanUrl(urls.wav);
+}
+
+async function fetchTelnyxRecordingSummary(recordingReference: string | null): Promise<{
+  hasAudio: boolean;
+  durationMs: number | null;
+  startTimestamp: string | null;
+  endTimestamp: string | null;
+} | null> {
+  const apiKey = process.env.TELNYX_API_KEY?.trim().replace(/^Bearer\s+/i, "");
+  if (!apiKey || !recordingReference) {
+    return null;
+  }
+
+  const response = await fetch(
+    `https://api.telnyx.com/v2/recordings/${encodeURIComponent(recordingReference)}`,
+    {
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      cache: "no-store",
+    },
+  );
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const payload = (await response.json().catch(() => null)) as
+    | {
+        data?: {
+          download_urls?: Record<string, unknown>;
+          duration_millis?: unknown;
+          recording_ended_at?: unknown;
+          recording_started_at?: unknown;
+        };
+      }
+    | null;
+  const downloadUrls = metadataRecord(payload?.data?.download_urls as Json | null | undefined);
+  const durationMs =
+    typeof payload?.data?.duration_millis === "number" &&
+    Number.isFinite(payload.data.duration_millis)
+      ? payload.data.duration_millis
+      : null;
+
+  return {
+    hasAudio: Boolean(cleanUrl(downloadUrls.mp3) ?? cleanUrl(downloadUrls.wav)),
+    durationMs,
+    startTimestamp:
+      typeof payload?.data?.recording_started_at === "string"
+        ? payload.data.recording_started_at
+        : null,
+    endTimestamp:
+      typeof payload?.data?.recording_ended_at === "string"
+        ? payload.data.recording_ended_at
+        : null,
+  };
+}
+
+async function buildTelnyxRecording(call: {
+  duration_seconds: number | null;
+  ended_at: string | null;
+  provider_metadata: Json | null;
+  recording_reference: string | null;
+  started_at: string | null;
+}) {
+  const fetchedRecording = await fetchTelnyxRecordingSummary(call.recording_reference);
+  const legacyStoredUrl = getTelnyxRecordingUrl(call.provider_metadata);
+  return {
+    recordingUrl: fetchedRecording?.hasAudio
+      ? "server-proxied"
+      : legacyStoredUrl
+        ? "server-proxied"
+        : null,
+    recordingMultiChannelUrl: null,
+    scrubbedRecordingUrl: null,
+    durationMs:
+      fetchedRecording?.durationMs ??
+      (typeof call.duration_seconds === "number" && call.duration_seconds >= 0
+        ? call.duration_seconds * 1000
+        : null),
+    startTimestamp: fetchedRecording?.startTimestamp ?? call.started_at,
+    endTimestamp: fetchedRecording?.endTimestamp ?? call.ended_at,
+    recordingReference: call.recording_reference,
+  };
 }
 
 export async function GET(request: Request) {
@@ -58,6 +160,37 @@ export async function GET(request: Request) {
     conversation?.provider_name === "retell"
       ? conversation.external_conversation_id
       : null;
+
+  const { data: latestCall, error: latestCallError } = await supabase
+    .from("communication_calls")
+    .select(
+      "id,provider_name,provider_call_id,recording_reference,provider_metadata,duration_seconds,started_at,ended_at",
+    )
+    .eq(callId ? "id" : "conversation_id", callId ?? conversationId ?? "")
+    .order("started_at", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (latestCallError) {
+    return fail("Could not load the selected call.", 503);
+  }
+
+  if (latestCall?.provider_name === "telnyx") {
+    const recording = await buildTelnyxRecording(latestCall);
+    return NextResponse.json({
+      ok: true,
+      recording: {
+        ...recording,
+        recordingUrl: null,
+      },
+      message: recording.recordingUrl
+        ? null
+        : latestCall.recording_reference
+          ? "Telnyx recording metadata loaded, but playback is not available yet."
+          : "Telnyx has not provided a recording for this call yet.",
+    });
+  }
 
   if (!retellCallId) {
     let query = supabase

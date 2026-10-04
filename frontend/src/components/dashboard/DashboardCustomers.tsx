@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import {
   getAddressAutocompleteAdapter,
@@ -15,6 +15,7 @@ import {
 } from "@/lib/asset-placeholders";
 import { SERVICE_REQUEST_PHOTO_BUCKET } from "@/lib/service-request-photos";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import type { TelnyxRTC as TelnyxRTCClass } from "@telnyx/webrtc";
 import type {
   CustomerApplianceRow,
   CustomerAddressRow,
@@ -1151,6 +1152,678 @@ function CustomerQuickAction({
   );
 }
 
+type BrowserCallStatus =
+  | "idle"
+  | "preparing"
+  | "calling"
+  | "ringing"
+  | "connected"
+  | "canceled"
+  | "ended"
+  | "failed";
+
+type BrowserCallSession = {
+  callId: string;
+  conversationId: string;
+  telnyxToken: string;
+  callerNumber: string;
+  destinationNumber: string;
+};
+
+export type BrowserCallTarget = {
+  conversationId?: string | null;
+  customerId?: string | null;
+  displayName: string;
+  phone: string | null;
+};
+
+type TelnyxBrowserCall = {
+  cause?: string;
+  causeCode?: number;
+  hangup?: () => void;
+  id?: string;
+  localStream?: MediaStream;
+  muteAudio?: () => void;
+  prevState?: string;
+  remoteStream?: MediaStream;
+  sipCode?: number;
+  sipReason?: string;
+  state?: string;
+  telnyxIDs?: {
+    telnyxCallControlId?: string;
+    telnyxLegId?: string;
+    telnyxSessionId?: string;
+  };
+  unmuteAudio?: () => void;
+  options?: { id?: string };
+};
+
+type TelnyxBrowserClient = {
+  connect?: () => void;
+  disconnect?: () => void;
+  newCall: (options: {
+    audio?: boolean;
+    callerNumber: string;
+    destinationNumber: string;
+    onNotification?: (notification: unknown) => void;
+    remoteElement?: HTMLMediaElement;
+  }) => TelnyxBrowserCall;
+  on: (eventName: string, handler: (...args: unknown[]) => void) => void;
+};
+
+type TelnyxRtcConstructor = typeof TelnyxRTCClass;
+
+let telnyxRtcConstructorPromise: Promise<TelnyxRtcConstructor> | null = null;
+
+type SanitizedTelnyxCallInfo = {
+  cause?: string | null;
+  causeCode?: number | null;
+  id?: string | null;
+  prevState?: string | null;
+  sipCode?: number | null;
+  sipReason?: string | null;
+  state?: string | null;
+  telnyxIDs?: {
+    telnyxCallControlId?: string | null;
+    telnyxLegId?: string | null;
+    telnyxSessionId?: string | null;
+  } | null;
+};
+
+type SanitizedTelnyxNotification = {
+  call?: SanitizedTelnyxCallInfo | null;
+  cause?: string | null;
+  causeCode?: number | null;
+  id?: string | null;
+  message?: string | null;
+  method?: string | null;
+  name?: string | null;
+  sipCode?: number | null;
+  sipReason?: string | null;
+  type?: string | null;
+};
+
+function formatBrowserCallPhone(value: string | null | undefined): string {
+  const digits = cleanPhone(value ?? "");
+  const national = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+
+  if (national.length === 10) {
+    return `(${national.slice(0, 3)}) ${national.slice(3, 6)}-${national.slice(6)}`;
+  }
+
+  return value || "No phone";
+}
+
+function extractTelnyxCallId(value: unknown): string | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as {
+    call?: {
+      options?: { id?: unknown };
+      id?: unknown;
+      telnyxIDs?: {
+        telnyxCallControlId?: unknown;
+        telnyxLegId?: unknown;
+        telnyxSessionId?: unknown;
+      };
+    };
+    id?: unknown;
+    options?: { id?: unknown };
+    telnyxIDs?: {
+      telnyxCallControlId?: unknown;
+      telnyxLegId?: unknown;
+      telnyxSessionId?: unknown;
+    };
+  };
+  const id =
+    record.call?.telnyxIDs?.telnyxCallControlId ??
+    record.telnyxIDs?.telnyxCallControlId ??
+    record.call?.options?.id ??
+    record.call?.id ??
+    record.options?.id ??
+    record.id;
+
+  return typeof id === "string" && id.trim() ? id.trim() : null;
+}
+
+function extractTelnyxLifecycleIds(value: unknown): Record<string, string> {
+  const record = asRecord(value);
+  const call = asRecord(record?.call);
+  const telnyxIDs = asRecord(call?.telnyxIDs) ?? asRecord(record?.telnyxIDs);
+  const callControlId = readString(telnyxIDs, "telnyxCallControlId");
+  const callLegId = readString(telnyxIDs, "telnyxLegId");
+  const sessionId = readString(telnyxIDs, "telnyxSessionId");
+  const patch: Record<string, string> = {};
+
+  if (callControlId) {
+    patch.telnyxCallControlId = callControlId;
+    patch.providerCallId = callControlId;
+  }
+  if (callLegId) {
+    patch.telnyxCallLegId = callLegId;
+  }
+  if (sessionId) {
+    patch.telnyxSessionId = sessionId;
+  }
+
+  return patch;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function readString(record: Record<string, unknown> | null, key: string): string | null {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readNumber(record: Record<string, unknown> | null, key: string): number | null {
+  const value = record?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function sanitizeTelnyxCall(value: unknown): SanitizedTelnyxCallInfo | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+
+  const telnyxIDs = asRecord(record.telnyxIDs);
+
+  return {
+    cause: readString(record, "cause"),
+    causeCode: readNumber(record, "causeCode"),
+    id: readString(record, "id") ?? readString(asRecord(record.options), "id"),
+    prevState: readString(record, "prevState"),
+    sipCode: readNumber(record, "sipCode"),
+    sipReason: readString(record, "sipReason"),
+    state: readString(record, "state"),
+    telnyxIDs: telnyxIDs
+      ? {
+          telnyxCallControlId: readString(telnyxIDs, "telnyxCallControlId"),
+          telnyxLegId: readString(telnyxIDs, "telnyxLegId"),
+          telnyxSessionId: readString(telnyxIDs, "telnyxSessionId"),
+        }
+      : null,
+  };
+}
+
+function sanitizeTelnyxNotification(value: unknown): SanitizedTelnyxNotification {
+  const record = asRecord(value);
+  const call = sanitizeTelnyxCall(record?.call);
+
+  return {
+    call,
+    cause: readString(record, "cause") ?? call?.cause ?? null,
+    causeCode: readNumber(record, "causeCode") ?? call?.causeCode ?? null,
+    id: readString(record, "id"),
+    message: readString(record, "message"),
+    method: readString(record, "method"),
+    name: readString(record, "name"),
+    sipCode: readNumber(record, "sipCode") ?? call?.sipCode ?? null,
+    sipReason: readString(record, "sipReason") ?? call?.sipReason ?? null,
+    type: readString(record, "type"),
+  };
+}
+
+function describeTelnyxFailure(notification: SanitizedTelnyxNotification): string | null {
+  const code = notification.sipCode ?? notification.causeCode;
+  const reason = notification.sipReason ?? notification.cause ?? notification.message;
+
+  if (!code && !reason) {
+    return null;
+  }
+
+  return ["Browser call failed", code ? `code ${code}` : null, reason].filter(Boolean).join(": ");
+}
+
+function isNormalTelnyxClearing(notification: SanitizedTelnyxNotification): boolean {
+  const reason = `${notification.sipReason ?? ""} ${notification.cause ?? ""}`.toUpperCase();
+  return notification.causeCode === 16 || reason.includes("NORMAL_CLEARING");
+}
+
+function describeAudioTracks(stream: MediaStream | null | undefined) {
+  return (stream?.getAudioTracks() ?? []).map((track) => ({
+    enabled: track.enabled,
+    label: track.label || "unlabeled audio device",
+    muted: track.muted,
+    readyState: track.readyState,
+  }));
+}
+
+export function BrowserCallModal({
+  onClose,
+  target,
+}: {
+  onClose: () => void;
+  target: BrowserCallTarget;
+}) {
+  const activeCallRef = useRef<TelnyxBrowserCall | null>(null);
+  const callEndedRef = useRef(false);
+  const clientRef = useRef<TelnyxBrowserClient | null>(null);
+  const connectedAtRef = useRef<string | null>(null);
+  const latestTelnyxLifecycleIdsRef = useRef<Record<string, string>>({});
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+  const sessionRef = useRef<BrowserCallSession | null>(null);
+  const startedAtRef = useRef<string | null>(null);
+  const hasDialedRef = useRef(false);
+  const startInProgressRef = useRef(false);
+  const userRequestedEndRef = useRef(false);
+  const [session, setSession] = useState<BrowserCallSession | null>(null);
+  const [status, setStatus] = useState<BrowserCallStatus>("idle");
+  const [message, setMessage] = useState<string | null>(null);
+  const [muted, setMuted] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  useEffect(() => {
+    if (status !== "connected") {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      if (!connectedAtRef.current) {
+        return;
+      }
+
+      setElapsedSeconds(
+        Math.max(0, Math.floor((Date.now() - Date.parse(connectedAtRef.current)) / 1000)),
+      );
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [status]);
+
+  async function patchCall(nextStatus: string, extra?: Record<string, unknown>) {
+    const activeSession = sessionRef.current ?? session;
+    if (!activeSession) {
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+    const { data } = supabase ? await supabase.auth.getSession() : { data: null };
+    const token = data?.session?.access_token;
+    if (!token) {
+      return;
+    }
+
+    await fetch(`/api/communications/browser-call/${activeSession.callId}`, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ status: nextStatus, ...extra }),
+    }).catch(() => null);
+  }
+
+  async function loadTelnyxRtcConstructor(): Promise<TelnyxRtcConstructor> {
+    telnyxRtcConstructorPromise ??= import("@telnyx/webrtc")
+      .then((module) => module.TelnyxRTC)
+      .catch((error: unknown) => {
+        telnyxRtcConstructorPromise = null;
+        throw error;
+      });
+
+    return telnyxRtcConstructorPromise;
+  }
+
+  async function startCall() {
+    if (startInProgressRef.current || sessionRef.current || hasDialedRef.current) {
+      return;
+    }
+
+    startInProgressRef.current = true;
+    setStatus("preparing");
+    setMessage(null);
+    setElapsedSeconds(0);
+    callEndedRef.current = false;
+    connectedAtRef.current = null;
+    latestTelnyxLifecycleIdsRef.current = {};
+    sessionRef.current = null;
+    hasDialedRef.current = false;
+    userRequestedEndRef.current = false;
+
+    try {
+      const supabase = getSupabaseBrowserClient();
+      const { data } = supabase ? await supabase.auth.getSession() : { data: null };
+      const token = data?.session?.access_token;
+      if (!token) {
+        throw new Error("Log in again before calling.");
+      }
+
+      const response = await fetch("/api/communications/browser-call/session", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          conversationId: target.conversationId ?? undefined,
+          customerId: target.customerId ?? undefined,
+          destinationPhone: target.phone,
+        }),
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | (BrowserCallSession & { ok?: boolean; message?: string })
+        | null;
+
+      if (!response.ok || !payload?.ok) {
+        throw new Error(payload?.message ?? "Could not prepare browser call.");
+      }
+
+      const nextSession: BrowserCallSession = {
+        callId: payload.callId,
+        conversationId: payload.conversationId,
+        telnyxToken: payload.telnyxToken,
+        callerNumber: payload.callerNumber,
+        destinationNumber: payload.destinationNumber,
+      };
+      sessionRef.current = nextSession;
+      setSession(nextSession);
+
+      const TelnyxRTC = await loadTelnyxRtcConstructor();
+      const client = new TelnyxRTC({ login_token: nextSession.telnyxToken });
+      clientRef.current = client;
+      startedAtRef.current = new Date().toISOString();
+
+      const handleTelnyxNotification = (notification: unknown) => {
+        const sanitized = sanitizeTelnyxNotification(notification);
+        const providerCallId = extractTelnyxCallId(notification);
+        const telnyxPatch = extractTelnyxLifecycleIds(notification);
+        if (Object.keys(telnyxPatch).length > 0) {
+          latestTelnyxLifecycleIdsRef.current = {
+            ...latestTelnyxLifecycleIdsRef.current,
+            ...telnyxPatch,
+          };
+        }
+        const stateText = [
+          sanitized.type,
+          sanitized.method,
+          sanitized.call?.state,
+          sanitized.call?.prevState,
+          sanitized.cause,
+          sanitized.sipReason,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+
+        if (stateText.includes("ringing") || stateText.includes("early")) {
+          setStatus("ringing");
+          void playRemoteAudio(activeCallRef.current);
+          void patchCall("ringing", { providerCallId, ...telnyxPatch });
+          return;
+        }
+
+        if (stateText.includes("active") || stateText.includes("answered")) {
+          const answeredAt = connectedAtRef.current ?? new Date().toISOString();
+          connectedAtRef.current = answeredAt;
+          setStatus("connected");
+          void playRemoteAudio(activeCallRef.current);
+          void patchCall("connected", { answeredAt, providerCallId, ...telnyxPatch });
+          return;
+        }
+
+        if (
+          stateText.includes("hangup") ||
+          stateText.includes("destroy") ||
+          stateText.includes("ended") ||
+          sanitized.sipCode != null ||
+          sanitized.causeCode != null
+        ) {
+          callEndedRef.current = true;
+          activeCallRef.current = null;
+          const completedNormally = isNormalTelnyxClearing(sanitized) && connectedAtRef.current;
+          const canceledByUser = userRequestedEndRef.current && !connectedAtRef.current;
+          const failureMessage = describeTelnyxFailure(sanitized);
+          setStatus(
+            canceledByUser
+              ? "canceled"
+              : completedNormally || !failureMessage
+                ? "ended"
+                : "failed",
+          );
+          setMessage(completedNormally || canceledByUser ? null : failureMessage);
+          void patchCall(
+            canceledByUser
+              ? "canceled"
+              : completedNormally || !failureMessage
+                ? "ended"
+                : "failed",
+            {
+              endedAt: new Date().toISOString(),
+              endReason:
+                canceledByUser
+                  ? "canceled_by_wra_user"
+                  : completedNormally
+                    ? "normal_clearing"
+                    : failureMessage ??
+                      sanitized.sipReason ??
+                      sanitized.cause ??
+                      "browser_call_ended",
+              providerCallId,
+              ...telnyxPatch,
+            },
+          );
+        }
+      };
+
+      const playRemoteAudio = async (call: TelnyxBrowserCall | null) => {
+        const audio = remoteAudioRef.current;
+        if (!audio) {
+          return;
+        }
+
+        if (!audio.srcObject && call?.remoteStream) {
+          audio.srcObject = call.remoteStream;
+        }
+
+        try {
+          await audio.play();
+        } catch (error) {
+          console.warn("[wra-browser-call-audio-play]", {
+            ok: false,
+            message: error instanceof Error ? error.message : "Remote audio play failed.",
+            localAudioTracks: describeAudioTracks(call?.localStream),
+            remoteAudioTracks: describeAudioTracks(call?.remoteStream),
+          });
+        }
+      };
+
+      client.on("telnyx.ready", () => {
+        if (hasDialedRef.current || callEndedRef.current) {
+          return;
+        }
+
+        hasDialedRef.current = true;
+        setStatus("calling");
+        const call = client.newCall({
+          audio: true,
+          callerNumber: nextSession.callerNumber,
+          destinationNumber: nextSession.destinationNumber,
+          onNotification: handleTelnyxNotification,
+          ...(remoteAudioRef.current ? { remoteElement: remoteAudioRef.current } : {}),
+        });
+        activeCallRef.current = call;
+        void patchCall("calling", {
+          providerCallId: extractTelnyxCallId(call) ?? call.options?.id ?? null,
+          startedAt: startedAtRef.current,
+          ...extractTelnyxLifecycleIds(call),
+        });
+      });
+
+      client.on("telnyx.notification", (notification) => {
+        handleTelnyxNotification(notification);
+      });
+
+      client.on("telnyx.error", (error) => {
+        if (callEndedRef.current) {
+          return;
+        }
+
+        const sanitized = sanitizeTelnyxNotification(error);
+        console.error("[wra-browser-call-telnyx-error]", sanitized);
+        callEndedRef.current = true;
+        activeCallRef.current = null;
+        setStatus("failed");
+        setMessage(
+          describeTelnyxFailure(sanitized) ??
+            (error instanceof Error ? error.message : "Browser call failed."),
+        );
+        void patchCall("failed", {
+          endedAt: new Date().toISOString(),
+          endReason:
+            sanitized.sipReason ??
+            sanitized.cause ??
+            sanitized.message ??
+            "browser_call_error",
+        });
+      });
+
+      client.connect?.();
+    } catch (error) {
+      if (!sessionRef.current) {
+        hasDialedRef.current = false;
+      }
+      setStatus("failed");
+      setMessage(error instanceof Error ? error.message : "Could not start browser call.");
+    } finally {
+      startInProgressRef.current = false;
+    }
+  }
+
+  function endCall() {
+    const telnyxPatch = {
+      ...latestTelnyxLifecycleIdsRef.current,
+      ...extractTelnyxLifecycleIds(activeCallRef.current),
+    };
+    const callWasConnected = Boolean(connectedAtRef.current) || status === "connected";
+    userRequestedEndRef.current = true;
+    if (!callEndedRef.current && status !== "ended" && status !== "failed") {
+      activeCallRef.current?.hangup?.();
+      clientRef.current?.disconnect?.();
+      callEndedRef.current = true;
+    }
+    activeCallRef.current = null;
+    setStatus(callWasConnected ? "ended" : "canceled");
+    void patchCall(callWasConnected ? "ended" : "canceled", {
+      endedAt: new Date().toISOString(),
+      endReason: callWasConnected ? "ended_by_wra_user" : "canceled_by_wra_user",
+      ...telnyxPatch,
+    });
+  }
+
+  function toggleMute() {
+    if (!activeCallRef.current) {
+      return;
+    }
+
+    if (muted) {
+      activeCallRef.current.unmuteAudio?.();
+      setMuted(false);
+    } else {
+      activeCallRef.current.muteAudio?.();
+      setMuted(true);
+    }
+  }
+
+  const formattedElapsed = `${Math.floor(elapsedSeconds / 60)}:${String(
+    elapsedSeconds % 60,
+  ).padStart(2, "0")}`;
+  const statusLabel =
+    status === "preparing"
+      ? "Preparing"
+      : status.charAt(0).toUpperCase() + status.slice(1);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/40 px-4 py-5 sm:items-center">
+      <div className="w-full max-w-sm rounded-[24px] bg-white p-5 shadow-[0_24px_80px_rgba(15,23,42,0.28)]">
+        <audio
+          ref={remoteAudioRef}
+          autoPlay
+          className="hidden"
+          playsInline
+        />
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.16em] text-[#0F6BFF]">
+              WRA Browser Call
+            </p>
+            <h2 className="mt-1 text-xl font-black text-slate-950">
+              {target.displayName}
+            </h2>
+            <p className="mt-1 text-sm font-semibold text-slate-600">
+              {formatBrowserCallPhone(target.phone)}
+            </p>
+          </div>
+          <button
+            aria-label="Close browser call"
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-lg font-black text-slate-500"
+            onClick={onClose}
+            type="button"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="mt-5 rounded-2xl bg-slate-50 p-4">
+          <p className="text-sm font-black text-slate-950">Status: {statusLabel}</p>
+          <p className="mt-1 text-sm font-semibold text-slate-600">
+            {status === "connected" ? `Connected · ${formattedElapsed}` : "MacBook microphone and speaker"}
+          </p>
+          {session ? (
+            <p className="mt-1 text-xs font-semibold text-slate-500">
+              Caller ID {formatBrowserCallPhone(session.callerNumber)}
+            </p>
+          ) : null}
+          {message ? <p className="mt-2 text-sm font-bold text-red-600">{message}</p> : null}
+        </div>
+
+        <div className="mt-5 grid grid-cols-2 gap-2">
+          {(status === "idle" || status === "failed") && !session ? (
+            <button
+              className="col-span-2 rounded-2xl bg-[#0F6BFF] px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={!target.phone}
+              onClick={() => void startCall()}
+              type="button"
+            >
+              Start browser call
+            </button>
+          ) : status === "ended" || status === "canceled" || (status === "failed" && session) ? (
+            <button
+              className="col-span-2 rounded-2xl bg-[#0F6BFF] px-4 py-3 text-sm font-black text-white"
+              onClick={onClose}
+              type="button"
+            >
+              Close
+            </button>
+          ) : (
+            <>
+              <button
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-800"
+                onClick={toggleMute}
+                type="button"
+              >
+                {muted ? "Unmute" : "Mute"}
+              </button>
+              <button
+                className="rounded-2xl bg-red-600 px-4 py-3 text-sm font-black text-white"
+                onClick={endCall}
+                type="button"
+              >
+                End Call
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CustomerActivityContent({ item }: { item: TimelineItem }) {
   const iconName: CustomerOverviewIconName =
     item.category === "estimate"
@@ -1780,6 +2453,7 @@ export function DashboardCustomerDetail({
   });
   const [isCustomerActionsOpen, setIsCustomerActionsOpen] = useState(false);
   const [isQuickNoteComposerOpen, setIsQuickNoteComposerOpen] = useState(false);
+  const [isBrowserCallOpen, setIsBrowserCallOpen] = useState(false);
   const [customerAction, setCustomerAction] = useState<ActionState>({
     status: "idle",
     message: null,
@@ -2573,7 +3247,6 @@ export function DashboardCustomerDetail({
     selectedAssetId !== null
       ? state.appliances.find((appliance) => appliance.id === selectedAssetId) ?? null
       : null;
-  const customerPhoneHref = customer.phone ? `tel:${cleanPhone(customer.phone)}` : undefined;
   const customerSmsHref = customer.phone ? `sms:${cleanPhone(customer.phone)}` : undefined;
   const customerEmailHref = customer.email ? `mailto:${customer.email}` : undefined;
   const shouldRenderLegacyDetails = false;
@@ -2637,11 +3310,25 @@ export function DashboardCustomerDetail({
       </header>
 
       <section className="grid grid-cols-4 gap-2 px-2 py-3">
-        <CustomerQuickAction href={customerPhoneHref} label="Call" />
+        <CustomerQuickAction
+          label="Call"
+          onClick={customer.phone ? () => setIsBrowserCallOpen(true) : undefined}
+        />
         <CustomerQuickAction href={customerSmsHref} label="Text" />
         <CustomerQuickAction href={customerEmailHref} label="Email" />
         <CustomerQuickAction label="More" onClick={openCustomerActions} />
       </section>
+
+      {isBrowserCallOpen ? (
+        <BrowserCallModal
+          onClose={() => setIsBrowserCallOpen(false)}
+          target={{
+            customerId: customer.id,
+            displayName: getCustomerName(customer),
+            phone: customer.phone,
+          }}
+        />
+      ) : null}
 
       <nav className="grid grid-cols-4 overflow-hidden rounded-xl border border-slate-200 bg-white p-1 text-center text-sm font-black text-slate-600">
         {[

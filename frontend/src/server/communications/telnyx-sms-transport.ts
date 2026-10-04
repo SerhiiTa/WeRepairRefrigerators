@@ -10,10 +10,15 @@ import type {
 import { resolveCommunicationPhoneIdentity } from "./phone-identity";
 
 type ConversationRow = PublicSchema["Tables"]["communication_conversations"]["Row"];
+type CommunicationCallRow = PublicSchema["Tables"]["communication_calls"]["Row"];
 type SourceAccountRow = PublicSchema["Tables"]["communication_source_accounts"]["Row"];
 type SupportedMmsMimeType = "image/jpeg" | "image/png" | "image/webp";
 
 const TELNYX_MESSAGES_URL = "https://api.telnyx.com/v2/messages";
+const TELNYX_RECORDINGS_URL = "https://api.telnyx.com/v2/recordings";
+const TELNYX_TRANSCRIPTIONS_URL = "https://api.telnyx.com/v2/ai/audio/transcriptions";
+const TELNYX_RECORDED_AUDIO_TRANSCRIPTION_MODEL = "openai/whisper-large-v3-turbo";
+const TELNYX_RECORDED_AUDIO_TRANSCRIPTION_ATTEMPTS = 3;
 const SIGNATURE_MAX_AGE_SECONDS = 5 * 60;
 const COMMUNICATIONS_MEDIA_BUCKET = "communications-media";
 const MAX_MMS_ATTACHMENTS = 5;
@@ -46,7 +51,7 @@ type TelnyxWebhookPayload = {
     id?: unknown;
     event_type?: unknown;
     occurred_at?: unknown;
-    payload?: TelnyxMessagePayload;
+    payload?: TelnyxMessagePayload & Record<string, unknown>;
   };
 };
 
@@ -69,6 +74,16 @@ type TelnyxMediaAttachment = {
   metadata: Record<string, Json>;
 };
 
+type TelnyxTranscriptSpeaker = "agent" | "customer";
+
+type TelnyxTranscriptSegment = {
+  channel: "A" | "B";
+  end: number;
+  speaker: TelnyxTranscriptSpeaker;
+  start: number;
+  text: string;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -77,6 +92,20 @@ function cleanText(value: unknown, maxLength = 2_000): string | null {
   return typeof value === "string" && value.trim()
     ? value.trim().slice(0, maxLength)
     : null;
+}
+
+function cleanDiagnosticMessage(value: unknown): string | null {
+  return cleanText(value, 300)?.replace(/https?:\/\/\S+/g, "[redacted-url]") ?? null;
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function shouldUseStableFlatTranscription(): boolean {
+  return true;
 }
 
 function getStringFromRecord(
@@ -544,6 +573,1175 @@ function getOccurredAt(payload: TelnyxWebhookPayload): string {
   return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
 }
 
+function metadataRecord(value: Json | null | undefined): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function sanitizeProviderMetadata(value: Record<string, unknown>): Record<string, Json> {
+  return JSON.parse(JSON.stringify(value)) as Record<string, Json>;
+}
+
+function getPayloadString(payload: TelnyxWebhookPayload, keys: string[]): string | null {
+  const record = payload.data?.payload;
+  if (!record) {
+    return null;
+  }
+
+  for (const key of keys) {
+    const value = cleanText(record[key], 1_000);
+    if (value) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function decodeTelnyxClientState(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+
+  try {
+    const decoded = Buffer.from(value.trim(), "base64").toString("utf8");
+    const parsed = JSON.parse(decoded) as unknown;
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function getTelnyxRecordingUrls(payload: TelnyxWebhookPayload): {
+  mp3: string | null;
+  wav: string | null;
+  raw: Record<string, Json>;
+} {
+  const record = payload.data?.payload;
+  const recordingUrls = isRecord(record?.recording_urls) ? record.recording_urls : null;
+  const publicRecordingUrls = isRecord(record?.public_recording_urls)
+    ? record.public_recording_urls
+    : null;
+  const mp3 =
+    cleanText(record?.recording_url, 2_000) ??
+    cleanText(record?.mp3, 2_000) ??
+    cleanText(recordingUrls?.mp3, 2_000) ??
+    cleanText(publicRecordingUrls?.mp3, 2_000);
+  const wav =
+    cleanText(record?.wav, 2_000) ??
+    cleanText(recordingUrls?.wav, 2_000) ??
+    cleanText(publicRecordingUrls?.wav, 2_000);
+
+  return {
+    mp3,
+    wav,
+    raw: sanitizeProviderMetadata({
+      recording_urls: recordingUrls ?? null,
+      public_recording_urls: publicRecordingUrls ?? null,
+    }),
+  };
+}
+
+function getTelnyxRecordingReference(payload: TelnyxWebhookPayload): string | null {
+  return getPayloadString(payload, [
+    "recording_id",
+    "recordingId",
+    "call_leg_id",
+    "callLegId",
+    "call_session_id",
+    "callSessionId",
+    "id",
+    "recording_url",
+  ]);
+}
+
+async function fetchTelnyxRecordingResource(recordingReference: string): Promise<{
+  endedAt: string | null;
+  mp3Url: string | null;
+  startedAt: string | null;
+  wavUrl: string | null;
+} | null> {
+  const apiKey = getTelnyxApiKey();
+  if (!apiKey) {
+    return null;
+  }
+
+  const response = await fetch(
+    `${TELNYX_RECORDINGS_URL}/${encodeURIComponent(recordingReference)}`,
+    {
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      cache: "no-store",
+    },
+  );
+
+  if (!response.ok) {
+    console.error("[telnyx-call-recording-resource-error]", {
+      status: response.status,
+    });
+    return null;
+  }
+
+  const payload = (await response.json().catch(() => null)) as
+    | {
+        data?: {
+          download_urls?: Record<string, unknown>;
+          recording_ended_at?: unknown;
+          recording_started_at?: unknown;
+        };
+      }
+    | null;
+  const downloadUrls = isRecord(payload?.data?.download_urls)
+    ? payload.data.download_urls
+    : null;
+
+  return {
+    endedAt: cleanText(payload?.data?.recording_ended_at, 120),
+    mp3Url: cleanText(downloadUrls?.mp3, 4_000),
+    startedAt: cleanText(payload?.data?.recording_started_at, 120),
+    wavUrl: cleanText(downloadUrls?.wav, 4_000),
+  };
+}
+
+async function fetchRecordingAudio(url: string): Promise<{
+  bytes: ArrayBuffer;
+  contentType: string;
+  filename: string;
+} | null> {
+  const response = await fetch(url, { cache: "no-store" });
+
+  if (!response.ok) {
+    console.error("[telnyx-call-recording-audio-fetch-error]", {
+      status: response.status,
+    });
+    return null;
+  }
+
+  return {
+    bytes: await response.arrayBuffer(),
+    contentType: response.headers.get("content-type") ?? "audio/mpeg",
+    filename: url.toLowerCase().includes(".wav") ? "call-recording.wav" : "call-recording.mp3",
+  };
+}
+
+function readTranscriptionText(value: unknown): string | null {
+  if (typeof value === "string") {
+    return cleanText(value, 100_000);
+  }
+
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  return cleanText(value.text, 100_000) ?? cleanText(value.transcript, 100_000);
+}
+
+async function transcribeTelnyxAudioBytes({
+  bytes,
+  contentType,
+  filename,
+}: {
+  bytes: ArrayBuffer | Buffer;
+  contentType: string;
+  filename: string;
+}): Promise<
+  | { ok: true; raw: Record<string, Json>; text: string }
+  | { ok: false; reason: string; status: number }
+> {
+  const apiKey = getTelnyxApiKey();
+  if (!apiKey) {
+    return { ok: false, reason: "Telnyx API key is not configured.", status: 503 };
+  }
+
+  let lastFailure: { errors: unknown[] | null; message: string | null; status: number } | null =
+    null;
+
+  for (let attempt = 1; attempt <= TELNYX_RECORDED_AUDIO_TRANSCRIPTION_ATTEMPTS; attempt += 1) {
+    try {
+      const form = new FormData();
+      form.set("model", TELNYX_RECORDED_AUDIO_TRANSCRIPTION_MODEL);
+      form.set("file", new Blob([new Uint8Array(bytes)], { type: contentType }), filename);
+
+      const response = await fetch(TELNYX_TRANSCRIPTIONS_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: form,
+        cache: "no-store",
+      });
+      const payload = (await response.json().catch(() => null)) as unknown;
+      const transcriptText = readTranscriptionText(payload);
+
+      if (response.ok && transcriptText) {
+        return {
+          ok: true,
+          raw: sanitizeProviderMetadata({
+            attempts: attempt,
+            model: TELNYX_RECORDED_AUDIO_TRANSCRIPTION_MODEL,
+            provider_response: isRecord(payload) ? payload : { text: transcriptText },
+          }),
+          text: transcriptText,
+        };
+      }
+
+      const errors = isRecord(payload) && Array.isArray(payload.errors) ? payload.errors : null;
+      lastFailure = {
+        errors,
+        message: response.ok
+          ? "Telnyx recorded-audio transcription returned no text."
+          : "Telnyx recorded-audio transcription failed.",
+        status: response.status || 502,
+      };
+
+      if (
+        (!response.ok && response.status < 500) ||
+        attempt === TELNYX_RECORDED_AUDIO_TRANSCRIPTION_ATTEMPTS
+      ) {
+        break;
+      }
+    } catch (error) {
+      lastFailure = {
+        errors: null,
+        message: cleanDiagnosticMessage(
+          error instanceof Error ? error.message : "Telnyx recorded-audio transcription failed.",
+        ),
+        status: 502,
+      };
+      if (attempt === TELNYX_RECORDED_AUDIO_TRANSCRIPTION_ATTEMPTS) {
+        break;
+      }
+    }
+
+    await wait(250 * attempt);
+  }
+
+  console.error("[telnyx-call-recording-transcription-error]", {
+    errors: lastFailure?.errors ?? null,
+    message: lastFailure?.message,
+    status: lastFailure?.status ?? 502,
+  });
+  return {
+    ok: false,
+    reason: lastFailure?.message ?? "Telnyx recorded-audio transcription failed.",
+    status: lastFailure?.status ?? 502,
+  };
+}
+
+async function getExistingTranscriptForRecording({
+  call,
+  recordingReference,
+}: {
+  call: CommunicationCallRow;
+  recordingReference: string;
+}): Promise<{ id: string; speakerSegments: Json | null; text: string | null } | null> {
+  const supabase = getSupabaseServiceRoleClient();
+  if (!supabase) {
+    return null;
+  }
+
+  let query = supabase
+    .from("communication_transcripts")
+    .select("id,transcript_text,speaker_segments")
+    .eq("conversation_id", call.conversation_id);
+
+  if (call.transcript_id) {
+    query = query.eq("id", call.transcript_id);
+  } else {
+    query = query.eq("recording_reference", recordingReference);
+  }
+
+  const { data, error } = await query.limit(1).maybeSingle();
+
+  if (error) {
+    console.error("[telnyx-call-existing-transcript-lookup-error]", {
+      message: error.message,
+      code: error.code,
+    });
+    return null;
+  }
+
+  if (!data) {
+    return null;
+  }
+
+  return {
+    id: data.id,
+    speakerSegments: data.speaker_segments,
+    text: cleanText(data.transcript_text, 100_000),
+  };
+}
+
+function getCanonicalTranscriptFromMetadata(metadata: Record<string, unknown>): string | null {
+  const recording = metadataRecord(metadata.recording as Json | null | undefined);
+  const transcription = metadataRecord(recording.transcription as Json | null | undefined);
+  return cleanText(transcription.canonical_transcript_text, 100_000);
+}
+
+async function resolveAuthoritativeFullTranscript({
+  audio,
+  call,
+  preferredTranscriptText,
+  recordingReference,
+}: {
+  audio: { bytes: ArrayBuffer; contentType: string; filename: string };
+  call: CommunicationCallRow;
+  preferredTranscriptText?: string | null;
+  recordingReference: string;
+}): Promise<
+  | {
+      ok: true;
+      raw: Record<string, Json>;
+      source: "existing_transcript" | "provider_event" | "telnyx_full_recording_stt";
+      text: string;
+    }
+  | { ok: false; reason: string; status: number }
+> {
+  const preferredText = cleanText(preferredTranscriptText, 100_000);
+  if (preferredText) {
+    return {
+      ok: true,
+      raw: sanitizeProviderMetadata({ source: "provider_event" }),
+      source: "provider_event",
+      text: preferredText,
+    };
+  }
+
+  const existing = await getExistingTranscriptForRecording({ call, recordingReference });
+  if (existing?.text) {
+    return {
+      ok: true,
+      raw: sanitizeProviderMetadata({ source: "existing_transcript" }),
+      source: "existing_transcript",
+      text: existing.text,
+    };
+  }
+
+  const transcription = await transcribeTelnyxAudioBytes({
+    bytes: audio.bytes,
+    contentType: audio.contentType,
+    filename: `${recordingReference}-${audio.filename}`,
+  });
+
+  if (!transcription.ok) {
+    return transcription;
+  }
+
+  return {
+    ok: true,
+    raw: transcription.raw,
+    source: "telnyx_full_recording_stt",
+    text: transcription.text,
+  };
+}
+
+async function transcribeTelnyxRecordingAudio({
+  audioUrl,
+  call,
+  preferredTranscriptText = null,
+  recordingReference,
+}: {
+  audioUrl: string;
+  call: CommunicationCallRow;
+  preferredTranscriptText?: string | null;
+  recordingReference: string;
+}): Promise<
+  | {
+      ok: true;
+      raw: Record<string, Json>;
+      segments: TelnyxTranscriptSegment[];
+      text: string;
+    }
+  | { ok: false; reason: string; status: number }
+> {
+  const audio = await fetchRecordingAudio(audioUrl);
+  if (!audio) {
+    return { ok: false, reason: "Unable to fetch Telnyx recording audio.", status: 502 };
+  }
+
+  if (shouldUseStableFlatTranscription()) {
+    const stableFullTranscript = await resolveAuthoritativeFullTranscript({
+      audio,
+      call,
+      preferredTranscriptText,
+      recordingReference,
+    });
+
+    if (!stableFullTranscript.ok) {
+      return stableFullTranscript;
+    }
+
+    return {
+      ok: true,
+      raw: sanitizeProviderMetadata({
+        channel_strategy: "flat_full_recording",
+        full_transcript_source: stableFullTranscript.source,
+        model: TELNYX_RECORDED_AUDIO_TRANSCRIPTION_MODEL,
+        provider_response: stableFullTranscript.raw,
+      }),
+      segments: [],
+      text: stableFullTranscript.text,
+    };
+  }
+
+  return {
+    ok: false,
+    reason: "Stable full-recording transcription is disabled.",
+    status: 503,
+  };
+}
+
+async function createOrReuseTelnyxCallTranscript({
+  call,
+  recordingReference,
+  recordingResource,
+  speakerSegments,
+  transcriptText,
+}: {
+  call: CommunicationCallRow;
+  recordingReference: string;
+  recordingResource: Awaited<ReturnType<typeof fetchTelnyxRecordingResource>>;
+  speakerSegments: TelnyxTranscriptSegment[];
+  transcriptText: string;
+}): Promise<{ id: string } | null> {
+  const supabase = getSupabaseServiceRoleClient();
+  if (!supabase) {
+    return null;
+  }
+
+  let existingTranscript: { id: string } | null = call.transcript_id
+    ? { id: call.transcript_id }
+    : null;
+
+  if (!existingTranscript) {
+    const { data: transcriptLookup, error: lookupError } = await supabase
+      .from("communication_transcripts")
+      .select("id")
+      .eq("conversation_id", call.conversation_id)
+      .eq("recording_reference", recordingReference)
+      .limit(1)
+      .maybeSingle();
+
+    if (lookupError) {
+      console.error("[telnyx-call-transcript-lookup-error]", {
+        message: lookupError.message,
+        code: lookupError.code,
+      });
+      return null;
+    }
+
+    existingTranscript = transcriptLookup as { id: string } | null;
+  }
+
+  const transcriptPatch = {
+    conversation_id: call.conversation_id,
+    source_type: "phone" as const,
+    transcript_text: transcriptText,
+    speaker_segments: JSON.parse(
+      JSON.stringify(
+        speakerSegments.map((segment, index) => ({
+          id: index,
+          provider: "telnyx",
+          recording_id: recordingReference,
+          ...segment,
+        })),
+      ),
+    ) as Json,
+    recording_reference: recordingReference,
+    started_at: recordingResource?.startedAt ?? call.started_at,
+    ended_at: recordingResource?.endedAt ?? call.ended_at,
+  };
+
+  const result = existingTranscript
+    ? await supabase
+        .from("communication_transcripts")
+        .update(transcriptPatch)
+        .eq("id", (existingTranscript as { id: string }).id)
+        .select("id")
+        .single()
+    : await supabase
+        .from("communication_transcripts")
+        .insert(transcriptPatch)
+        .select("id")
+        .single();
+
+  if (result.error || !result.data) {
+    console.error("[telnyx-call-transcript-save-error]", {
+      message: result.error?.message ?? null,
+      code: result.error?.code ?? null,
+    });
+    return null;
+  }
+
+  return result.data as { id: string };
+}
+
+async function processTelnyxCallRecordingTranscription({
+  call,
+  forceRefresh = false,
+  lastTriggerEvent = "manual_force_refresh",
+  occurredAt,
+  preferredTranscriptText = null,
+  recordingReference,
+  recordingUrls,
+}: {
+  call: CommunicationCallRow;
+  forceRefresh?: boolean;
+  lastTriggerEvent?: string;
+  occurredAt: string;
+  preferredTranscriptText?: string | null;
+  recordingReference: string;
+  recordingUrls: ReturnType<typeof getTelnyxRecordingUrls>;
+}): Promise<
+  | { ok: true; transcriptId: string; status: "created" | "existing" }
+  | { ok: false; reason: string; status: number }
+> {
+  const supabase = getSupabaseServiceRoleClient();
+  if (!supabase) {
+    return { ok: false, reason: "Supabase service role is not configured.", status: 503 };
+  }
+
+  if (!forceRefresh) {
+    const existingTranscript = await getExistingTranscriptForRecording({ call, recordingReference });
+    if (existingTranscript?.text) {
+      return { ok: true, transcriptId: existingTranscript.id, status: "existing" };
+    }
+  }
+
+  const recordingResource = await fetchTelnyxRecordingResource(recordingReference);
+  const audioUrl =
+    recordingResource?.mp3Url ??
+    recordingResource?.wavUrl ??
+    recordingUrls.mp3 ??
+    recordingUrls.wav;
+  if (!audioUrl) {
+    return { ok: false, reason: "Telnyx recording audio is not available yet.", status: 404 };
+  }
+
+  const transcription = await transcribeTelnyxRecordingAudio({
+    audioUrl,
+    call,
+    preferredTranscriptText,
+    recordingReference,
+  });
+
+  if (!transcription.ok) {
+    return transcription;
+  }
+
+  const structuredDiagnostics = metadataRecord(
+    transcription.raw.structured_diagnostics as Json | null | undefined,
+  );
+
+  const transcript = await createOrReuseTelnyxCallTranscript({
+    call,
+    recordingReference,
+    recordingResource,
+    speakerSegments: transcription.segments,
+    transcriptText: transcription.text,
+  });
+
+  if (!transcript) {
+    return { ok: false, reason: "Unable to persist Telnyx transcript.", status: 503 };
+  }
+
+  const currentMetadata = metadataRecord(call.provider_metadata);
+  const previousRecording = metadataRecord(currentMetadata.recording as Json | null | undefined);
+  const refreshedMetadata = sanitizeProviderMetadata({
+    ...currentMetadata,
+    recording: {
+      ...previousRecording,
+      provider: "telnyx",
+      recording_id: recordingReference,
+      saved_at: previousRecording.saved_at ?? occurredAt,
+      status: "transcribed",
+      transcription: {
+        canonical_transcript_ready: true,
+        completed_at: occurredAt,
+        diagnostics: transcription.raw.structured_diagnostics ?? null,
+        failed_stage:
+          transcription.raw.failed_stage ?? structuredDiagnostics.failedStage ?? null,
+        fallback_reason:
+          transcription.raw.fallback_reason ?? structuredDiagnostics.fallbackReason ?? null,
+        split_status: transcription.raw.split_status ?? structuredDiagnostics.splitStatus ?? null,
+        input_channels:
+          transcription.raw.input_channels ?? structuredDiagnostics.inputChannels ?? null,
+        agent_raw_interval_count:
+          transcription.raw.agent_raw_interval_count ??
+          structuredDiagnostics.agentRawIntervalCount ??
+          null,
+        agent_merged_interval_count:
+          transcription.raw.agent_merged_interval_count ??
+          structuredDiagnostics.agentMergedIntervalCount ??
+          null,
+        customer_raw_interval_count:
+          transcription.raw.customer_raw_interval_count ??
+          structuredDiagnostics.customerRawIntervalCount ??
+          null,
+        customer_merged_interval_count:
+          transcription.raw.customer_merged_interval_count ??
+          structuredDiagnostics.customerMergedIntervalCount ??
+          null,
+        error_message:
+          transcription.raw.error_message ?? structuredDiagnostics.errorMessage ?? null,
+        full_transcript_source:
+          transcription.raw.full_transcript_source ??
+          structuredDiagnostics.fullTranscriptSource ??
+          null,
+        last_processing_at: occurredAt,
+        last_trigger_event: lastTriggerEvent,
+        timestamp_metadata_available:
+          transcription.raw.timestamp_metadata_available ??
+          structuredDiagnostics.timestampMetadataAvailable ??
+          null,
+        alignment_strategy:
+          transcription.raw.alignment_strategy ?? structuredDiagnostics.alignmentStrategy ?? null,
+        model: TELNYX_RECORDED_AUDIO_TRANSCRIPTION_MODEL,
+        recording_ready: true,
+        state: "transcript_complete",
+        transcript_id: transcript.id,
+        strategy: transcription.raw.channel_strategy ?? null,
+        structured_segment_count: transcription.segments.length,
+      },
+      urls: {
+        mp3: recordingUrls.mp3,
+        wav: recordingUrls.wav,
+      },
+      raw_urls: recordingUrls.raw,
+    },
+  });
+
+  const { error: transcriptLinkError } = await supabase
+    .from("communication_calls")
+    .update({
+      transcript_id: transcript.id,
+      provider_metadata: refreshedMetadata,
+    })
+    .eq("id", call.id);
+
+  if (transcriptLinkError) {
+    console.error("[telnyx-call-transcript-link-error]", {
+      message: transcriptLinkError.message,
+      code: transcriptLinkError.code,
+    });
+    return { ok: false, reason: "Unable to link Telnyx transcript to call.", status: 503 };
+  }
+
+  return { ok: true, transcriptId: transcript.id, status: "created" };
+}
+
+async function persistTelnyxCallTranscriptionLifecycle({
+  call,
+  canonicalTranscriptText,
+  lastTriggerEvent,
+  occurredAt,
+  recordingReference,
+  recordingUrls,
+  state,
+  transcriptionPatch,
+}: {
+  call: CommunicationCallRow;
+  canonicalTranscriptText?: string | null;
+  lastTriggerEvent: string;
+  occurredAt: string;
+  recordingReference?: string | null;
+  recordingUrls?: ReturnType<typeof getTelnyxRecordingUrls> | null;
+  state:
+    | "waiting_for_recording"
+    | "processing"
+    | "transcript_complete"
+    | "transcription_failed";
+  transcriptionPatch?: Record<string, unknown>;
+}): Promise<void> {
+  const supabase = getSupabaseServiceRoleClient();
+  if (!supabase) {
+    return;
+  }
+
+  const currentMetadata = metadataRecord(call.provider_metadata);
+  const previousRecording = metadataRecord(currentMetadata.recording as Json | null | undefined);
+  const previousTranscription = metadataRecord(
+    previousRecording.transcription as Json | null | undefined,
+  );
+  const effectiveRecordingReference =
+    recordingReference ?? call.recording_reference ?? cleanText(previousRecording.recording_id, 200);
+  const canonicalText =
+    cleanText(canonicalTranscriptText, 100_000) ??
+    cleanText(previousTranscription.canonical_transcript_text, 100_000);
+
+  const { error } = await supabase
+    .from("communication_calls")
+    .update({
+      provider_metadata: sanitizeProviderMetadata({
+        ...currentMetadata,
+        recording: {
+          ...previousRecording,
+          provider: "telnyx",
+          recording_id: effectiveRecordingReference ?? previousRecording.recording_id ?? null,
+          status: effectiveRecordingReference ? previousRecording.status ?? "saved" : previousRecording.status ?? null,
+          transcription: {
+            ...previousTranscription,
+            ...(canonicalText ? { canonical_transcript_text: canonicalText } : {}),
+            canonical_transcript_ready: Boolean(canonicalText),
+            last_processing_at: occurredAt,
+            last_trigger_event: lastTriggerEvent,
+            recording_ready: Boolean(effectiveRecordingReference),
+            state,
+            ...transcriptionPatch,
+          },
+          urls: recordingUrls
+            ? {
+                mp3: recordingUrls.mp3,
+                wav: recordingUrls.wav,
+              }
+            : previousRecording.urls ?? null,
+          raw_urls: recordingUrls?.raw ?? previousRecording.raw_urls ?? null,
+        },
+      }),
+    })
+    .eq("id", call.id);
+
+  if (error) {
+    console.error("[telnyx-call-transcription-lifecycle-error]", {
+      code: error.code,
+      message: error.message,
+      state,
+    });
+  }
+}
+
+async function finalizeTelnyxCallTranscript({
+  callId,
+  lastTriggerEvent,
+  occurredAt,
+  preferredTranscriptText = null,
+  recordingReference = null,
+  recordingUrls,
+}: {
+  callId: string;
+  lastTriggerEvent: string;
+  occurredAt: string;
+  preferredTranscriptText?: string | null;
+  recordingReference?: string | null;
+  recordingUrls: ReturnType<typeof getTelnyxRecordingUrls>;
+}): Promise<
+  | {
+      ok: true;
+      state:
+        | "waiting_for_recording"
+        | "transcript_complete";
+      transcriptId?: string;
+    }
+  | { ok: false; reason: string; status: number; state: "transcription_failed" }
+> {
+  const supabase = getSupabaseServiceRoleClient();
+  if (!supabase) {
+    return {
+      ok: false,
+      reason: "Supabase service role is not configured.",
+      state: "transcription_failed",
+      status: 503,
+    };
+  }
+
+  const { data: callData, error: callError } = await supabase
+    .from("communication_calls")
+    .select("*")
+    .eq("id", callId)
+    .eq("provider_name", "telnyx")
+    .maybeSingle();
+
+  if (callError) {
+    console.error("[telnyx-call-transcription-finalizer-call-error]", {
+      code: callError.code,
+      message: callError.message,
+    });
+    return {
+      ok: false,
+      reason: "Unable to load Telnyx call for transcription finalization.",
+      state: "transcription_failed",
+      status: 503,
+    };
+  }
+
+  if (!callData) {
+    return {
+      ok: false,
+      reason: "Telnyx call not found for transcription finalization.",
+      state: "transcription_failed",
+      status: 404,
+    };
+  }
+
+  const call = callData as CommunicationCallRow;
+  const currentMetadata = metadataRecord(call.provider_metadata);
+  const effectiveRecordingReference =
+    recordingReference ??
+    call.recording_reference ??
+    cleanText(metadataRecord(currentMetadata.recording as Json | null | undefined).recording_id, 200);
+  const canonicalTranscriptText =
+    cleanText(preferredTranscriptText, 100_000) ??
+    getCanonicalTranscriptFromMetadata(currentMetadata) ??
+    (effectiveRecordingReference
+      ? (
+          await getExistingTranscriptForRecording({
+            call,
+            recordingReference: effectiveRecordingReference,
+          })
+        )?.text
+      : null);
+
+  if (!effectiveRecordingReference) {
+    await persistTelnyxCallTranscriptionLifecycle({
+      call,
+      canonicalTranscriptText,
+      lastTriggerEvent,
+      occurredAt,
+      recordingReference: null,
+      recordingUrls,
+      state: "waiting_for_recording",
+    });
+    return { ok: true, state: "waiting_for_recording" };
+  }
+
+  const existingTranscript = await getExistingTranscriptForRecording({
+    call,
+    recordingReference: effectiveRecordingReference,
+  });
+  if (existingTranscript?.text) {
+    await persistTelnyxCallTranscriptionLifecycle({
+      call,
+      canonicalTranscriptText,
+      lastTriggerEvent,
+      occurredAt,
+      recordingReference: effectiveRecordingReference,
+      recordingUrls,
+      state: "transcript_complete",
+      transcriptionPatch: {
+        structured_segment_count: Array.isArray(existingTranscript.speakerSegments)
+          ? existingTranscript.speakerSegments.length
+          : 0,
+        transcript_id: existingTranscript.id,
+      },
+    });
+    return {
+      ok: true,
+      state: "transcript_complete",
+      transcriptId: existingTranscript.id,
+    };
+  }
+
+  await persistTelnyxCallTranscriptionLifecycle({
+    call,
+    canonicalTranscriptText,
+    lastTriggerEvent,
+    occurredAt,
+    recordingReference: effectiveRecordingReference,
+    recordingUrls,
+    state: "processing",
+  });
+
+  const transcriptionResult = await processTelnyxCallRecordingTranscription({
+    call,
+    lastTriggerEvent,
+    occurredAt,
+    preferredTranscriptText: canonicalTranscriptText,
+    recordingReference: effectiveRecordingReference,
+    recordingUrls,
+  });
+
+  if (!transcriptionResult.ok) {
+    await persistTelnyxCallTranscriptionLifecycle({
+      call,
+      canonicalTranscriptText,
+      lastTriggerEvent,
+      occurredAt,
+      recordingReference: effectiveRecordingReference,
+      recordingUrls,
+      state: "transcription_failed",
+      transcriptionPatch: {
+        failed_at: occurredAt,
+        failure_reason: transcriptionResult.reason,
+      },
+    });
+    return { ...transcriptionResult, state: "transcription_failed" };
+  }
+
+  return {
+    ok: true,
+    state: "transcript_complete",
+    transcriptId: transcriptionResult.transcriptId,
+  };
+}
+
+export async function reprocessTelnyxCallRecordingTranscript(
+  callId: string,
+  options: { forceRefresh?: boolean } = {},
+): Promise<
+  | { ok: true; transcriptId: string; status: "created" | "existing" }
+  | { ok: false; reason: string; status: number }
+> {
+  const supabase = getSupabaseServiceRoleClient();
+  if (!supabase) {
+    return { ok: false, reason: "Supabase service role is not configured.", status: 503 };
+  }
+
+  const { data: call, error } = await supabase
+    .from("communication_calls")
+    .select("*")
+    .eq("id", callId)
+    .eq("provider_name", "telnyx")
+    .maybeSingle();
+
+  if (error) {
+    console.error("[telnyx-call-transcript-retry-call-lookup-error]", {
+      message: error.message,
+      code: error.code,
+    });
+    return { ok: false, reason: "Unable to load the selected Telnyx call.", status: 503 };
+  }
+
+  if (!call) {
+    return { ok: false, reason: "Telnyx call not found.", status: 404 };
+  }
+
+  const callRow = call as CommunicationCallRow;
+  if (!callRow.recording_reference) {
+    return { ok: false, reason: "This Telnyx call does not have a recording yet.", status: 400 };
+  }
+
+  return processTelnyxCallRecordingTranscription({
+    call: callRow,
+    forceRefresh: options.forceRefresh === true,
+    occurredAt: new Date().toISOString(),
+    recordingReference: callRow.recording_reference,
+    recordingUrls: {
+      mp3: null,
+      wav: null,
+      raw: sanitizeProviderMetadata({ retry: true }),
+    },
+  });
+}
+
+function formatTelnyxRecordingError(payload: TelnyxWebhookPayload): string | null {
+  const record = payload.data?.payload;
+  const errors = record?.errors;
+  if (Array.isArray(errors) && errors.length > 0) {
+    const first = errors[0];
+    if (isRecord(first)) {
+      return [
+        cleanText(first.code, 80),
+        cleanText(first.title, 160),
+        cleanText(first.detail, 300),
+      ]
+        .filter(Boolean)
+        .join(" — ");
+    }
+  }
+
+  return (
+    cleanText(record?.error, 300) ??
+    cleanText(record?.failure_reason, 300) ??
+    cleanText(record?.reason, 300)
+  );
+}
+
+async function findCommunicationCallForTelnyxRecording(
+  payload: TelnyxWebhookPayload,
+): Promise<CommunicationCallRow | null> {
+  const supabase = getSupabaseServiceRoleClient();
+  if (!supabase) {
+    return null;
+  }
+
+  const clientState = decodeTelnyxClientState(payload.data?.payload?.client_state);
+  const clientStateCallId = cleanText(clientState?.communication_call_id, 120);
+  if (clientStateCallId) {
+    const { data, error } = await supabase
+      .from("communication_calls")
+      .select("*")
+      .eq("id", clientStateCallId)
+      .maybeSingle();
+
+    if (error) {
+      console.error("[telnyx-call-recording-call-lookup-error]", {
+        message: error.message,
+        code: error.code,
+      });
+      return null;
+    }
+
+    if (data) {
+      return data as CommunicationCallRow;
+    }
+  }
+
+  const identifiers = Array.from(
+    new Set(
+      [
+        getPayloadString(payload, ["call_control_id", "callControlId"]),
+        getPayloadString(payload, ["call_leg_id", "callLegId"]),
+        getPayloadString(payload, ["call_session_id", "callSessionId"]),
+      ].filter((value): value is string => Boolean(value)),
+    ),
+  );
+
+  if (identifiers.length === 0) {
+    return null;
+  }
+
+  const { data, error } = await supabase
+    .from("communication_calls")
+    .select("*")
+    .eq("provider_name", "telnyx")
+    .in("provider_call_id", identifiers)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error("[telnyx-call-recording-call-lookup-error]", {
+      message: error.message,
+      code: error.code,
+    });
+    return null;
+  }
+
+  return (data ?? null) as CommunicationCallRow | null;
+}
+
+async function handleTelnyxCallRecordingWebhook(
+  payload: TelnyxWebhookPayload,
+  eventType: string,
+) {
+  const supabase = getSupabaseServiceRoleClient();
+  if (!supabase) {
+    return { ok: false, status: 503, message: "Supabase service role is not configured." };
+  }
+
+  const call = await findCommunicationCallForTelnyxRecording(payload);
+  if (!call) {
+    return { ok: true, status: 202, message: "Telnyx call recording event did not match a WRA call." };
+  }
+
+  const occurredAt = getOccurredAt(payload);
+  const currentMetadata = metadataRecord(call.provider_metadata);
+  const previousRecording = metadataRecord(currentMetadata.recording as Json | null | undefined);
+  const recordingReference = getTelnyxRecordingReference(payload);
+  const recordingUrls = getTelnyxRecordingUrls(payload);
+
+  if (eventType === "call.recording.saved") {
+    const effectiveRecordingReference = recordingReference ?? call.recording_reference;
+    const { error } = await supabase
+      .from("communication_calls")
+      .update({
+        recording_reference: effectiveRecordingReference,
+        provider_metadata: sanitizeProviderMetadata({
+          ...currentMetadata,
+          recording: {
+            ...previousRecording,
+            provider: "telnyx",
+            recording_id: effectiveRecordingReference ?? previousRecording.recording_id ?? null,
+            saved_at: occurredAt,
+            status: "saved",
+            urls: {
+              mp3: recordingUrls.mp3,
+              wav: recordingUrls.wav,
+            },
+            raw_urls: recordingUrls.raw,
+          },
+        }),
+      })
+      .eq("id", call.id);
+
+    if (error) {
+      console.error("[telnyx-call-recording-save-error]", {
+        message: error.message,
+        code: error.code,
+      });
+      return { ok: false, status: 503, message: "Unable to persist Telnyx recording metadata." };
+    }
+
+    if (effectiveRecordingReference) {
+      const transcriptionResult = await finalizeTelnyxCallTranscript({
+        callId: call.id,
+        lastTriggerEvent: eventType,
+        occurredAt,
+        recordingReference: effectiveRecordingReference,
+        recordingUrls,
+      });
+
+      if (!transcriptionResult.ok) {
+        return {
+          ok: false,
+          status: transcriptionResult.status,
+          message: transcriptionResult.reason,
+        };
+      }
+    }
+
+    return { ok: true, status: 200, message: "Telnyx call recording accepted." };
+  }
+
+  if (eventType === "call.recording.transcription.saved") {
+    const transcriptText =
+      cleanText(payload.data?.payload?.transcription_text, 100_000) ??
+      cleanText(payload.data?.payload?.transcript, 100_000);
+    const transcriptionResult = await finalizeTelnyxCallTranscript({
+      callId: call.id,
+      lastTriggerEvent: eventType,
+      occurredAt,
+      preferredTranscriptText: transcriptText,
+      recordingReference: recordingReference ?? call.recording_reference,
+      recordingUrls,
+    });
+
+    if (!transcriptionResult.ok) {
+      return {
+        ok: false,
+        status: transcriptionResult.status,
+        message: transcriptionResult.reason,
+      };
+    }
+
+    return { ok: true, status: 200, message: "Telnyx call transcription accepted." };
+  }
+
+  if (eventType === "call.recording.error") {
+    const reason = formatTelnyxRecordingError(payload) ?? "Telnyx recording failed.";
+    const { error } = await supabase
+      .from("communication_calls")
+      .update({
+        provider_metadata: sanitizeProviderMetadata({
+          ...currentMetadata,
+          recording: {
+            ...previousRecording,
+            failure_reason: reason,
+            failed_at: occurredAt,
+            provider: "telnyx",
+            status: "failed",
+          },
+        }),
+      })
+      .eq("id", call.id);
+
+    if (error) {
+      console.error("[telnyx-call-recording-error-save-error]", {
+        message: error.message,
+        code: error.code,
+      });
+      return { ok: false, status: 503, message: "Unable to persist Telnyx recording failure." };
+    }
+
+    return { ok: true, status: 200, message: "Telnyx call recording failure accepted." };
+  }
+
+  return { ok: true, status: 202, message: "Telnyx call recording event ignored." };
+}
+
 function hasMedia(payload: TelnyxMessagePayload | undefined): boolean {
   const media = payload?.media;
   const mediaUrls = payload?.media_urls;
@@ -851,9 +2049,18 @@ export async function handleTelnyxMessagingWebhook(payload: unknown) {
 
   const telnyxPayload = payload as TelnyxWebhookPayload;
   const eventType = getEventType(telnyxPayload);
+
+  if (!eventType) {
+    return { ok: false, status: 400, message: "Unsupported Telnyx messaging event." };
+  }
+
+  if (eventType.startsWith("call.recording.")) {
+    return handleTelnyxCallRecordingWebhook(telnyxPayload, eventType);
+  }
+
   const providerMessageId = getProviderMessageId(telnyxPayload);
 
-  if (!eventType || !providerMessageId) {
+  if (!providerMessageId) {
     return { ok: false, status: 400, message: "Unsupported Telnyx messaging event." };
   }
 

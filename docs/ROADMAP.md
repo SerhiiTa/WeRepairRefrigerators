@@ -72,6 +72,8 @@ Success definition:
 
 Future task filter: every task must answer `Does this help HomeFix stop using Workiz within two months?` If no, move it to backlog.
 
+Current phone checkpoint: COMM-09B Browser Outbound Calling is complete for Workiz Exit V1. Production now supports outbound browser PSTN calls through WRA with two-way audio, Communications call history realtime, provider recording playback, and automatic canonical flat full-recording transcripts. Speaker separation/diarization is deferred; `speaker_segments = []` is valid for V1. The next phone task is COMM-09C: Retell inbound AI transfers to Serhii ordinary mobile while preserving recording/transcript. Do not build dispatcher/browser inbound ringing or queueing before cutover. After minimum phone cutover, the priority sequence is Database Security Isolation, Workiz migration, Estimates/Invoices/Approvals, then Payments.
+
 ## Long-Term Product Direction: Home App + Pro App
 
 The active roadmap remains Workiz Exit: complete WRA as the Pro App / Contractor OS for HomeFix before expanding implementation scope.

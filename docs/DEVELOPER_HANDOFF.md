@@ -122,8 +122,9 @@ Immediate task sequence:
 3. Task 151 — Communications Hub Foundation: complete. WRA now has provider-neutral conversation, message, transcript, and business timeline foundations plus `/dashboard/communications`. Future real SMS/calls/email must plug into this hub instead of writing directly to CRM tables.
 4. Task 152 — First Live Phone Workflow: complete as a safe foundation. Provider-shaped call payloads now enter WRA-owned conversations/transcripts/timeline/intake after source-account resolution. Real development phone QA still requires applying `0051`/`0052`, adding a source account for the owned test number, and configuring provider webhook verification.
 5. Task 153 — Platform Vision Rebase: complete as documentation only. Future implementation must align with `docs/WRA_PLATFORM_OPERATING_MODEL.md`.
-6. Future Task — Invoice + Payment Completion: invoice creation from approved/completed work, Stripe payment, payment status, receipt, customer payment page.
-7. Future HomeFix Daily Pilot: run real HomeFix jobs inside WRA, identify operational blockers, fix only operational blockers, prepare Workiz shutoff checklist.
+6. COMM-09B — Browser Outbound Calling: complete for Workiz Exit V1. Production verification passed for browser PSTN calling, two-way audio, Communications call history realtime, provider recording playback, and automatic canonical flat full-recording transcripts. `0107` is applied in Production for `communication_calls` and `communication_transcripts` realtime. `ffmpeg-static` was removed; `@telnyx/webrtc` remains. Agent/Customer diarization is deferred.
+7. Next phone task — COMM-09C: Retell inbound AI transfers to Serhii ordinary mobile while preserving recording/transcript. Do not build dispatcher/browser inbound ringing or queues before cutover.
+8. After minimum phone cutover: Database Security Isolation, Workiz migration, Estimates/Invoices/Approvals, then Payments.
 
 ## How to run the project
 

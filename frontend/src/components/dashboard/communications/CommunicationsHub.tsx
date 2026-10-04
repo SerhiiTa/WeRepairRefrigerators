@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
+import { BrowserCallModal } from "@/components/dashboard/DashboardCustomers";
 import {
   filterBusinessTimelineEvents,
   getTimelineEventLabel,
@@ -51,6 +52,9 @@ type RecordingState =
       message: string | null;
     }
   | { status: "error"; recording: null; audioUrl: null; message: string };
+
+type RecordingStateByCallId = Record<string, RecordingState>;
+type ExpandedTranscriptByCallId = Record<string, boolean>;
 
 type CreateJobState =
   | { status: "idle"; message: null }
@@ -648,20 +652,20 @@ function formatCallStatus(status: string | null): string {
     .join(" ");
 }
 
-function getCallDurationLabel(
-  call: CommunicationCallRow | null,
-  recordingState: RecordingState,
-): string {
-  const callDuration = call?.duration_seconds
-    ? formatDuration(call.duration_seconds * 1000)
-    : null;
-  const recordingDuration =
-    recordingState.status === "ready" && recordingState.recording?.durationMs
-      ? formatDuration(recordingState.recording.durationMs)
-      : null;
-  const duration = callDuration ?? recordingDuration;
+function getCallDurationText(call: CommunicationCallRow | null): string | null {
+  return call?.duration_seconds ? formatDuration(call.duration_seconds * 1000) : null;
+}
 
-  return duration ? ` · ${duration}` : "";
+function getCallTimeLabel(call: CommunicationCallRow): string {
+  return formatServiceRequestDate(call.started_at ?? call.created_at);
+}
+
+function getEffectiveCallStatus(call: CommunicationCallRow): string | null {
+  if (call.ended_at && (call.status === "calling" || call.status === "ringing")) {
+    return "ended";
+  }
+
+  return call.status;
 }
 
 function formatServiceAddress(detail: ConversationDetailData, conversation: CommunicationConversation) {
@@ -780,12 +784,9 @@ export function CommunicationsHub() {
     data: emptyDetailData,
     error: null,
   });
-  const [recordingState, setRecordingState] = useState<RecordingState>({
-    status: "idle",
-    recording: null,
-    audioUrl: null,
-    message: null,
-  });
+  const [recordingStatesByCallId, setRecordingStatesByCallId] =
+    useState<RecordingStateByCallId>({});
+  const recordingStatesRef = useRef<RecordingStateByCallId>({});
   const [activeFilter, setActiveFilter] = useState<ChannelFilter>(getInitialChannelFilter);
   const [inboxTab, setInboxTab] =
     useState<"inbox" | "assigned" | "archived">(getInitialInboxTab);
@@ -811,11 +812,14 @@ export function CommunicationsHub() {
   const [pendingAttachments, setPendingAttachments] = useState<PendingMmsAttachment[]>([]);
   const [previewAttachment, setPreviewAttachment] =
     useState<SignedMessageAttachment | null>(null);
+  const [retryingTranscriptCallId, setRetryingTranscriptCallId] = useState<string | null>(null);
   const [sendMessageState, setSendMessageState] = useState<ActionState>({
     status: "idle",
     message: null,
   });
-  const [transcriptExpanded, setTranscriptExpanded] = useState(false);
+  const [isBrowserCallOpen, setIsBrowserCallOpen] = useState(false);
+  const [expandedTranscriptByCallId, setExpandedTranscriptByCallId] =
+    useState<ExpandedTranscriptByCallId>({});
 
   useEffect(() => {
     let isMounted = true;
@@ -963,6 +967,42 @@ export function CommunicationsHub() {
           }, 600);
         },
       )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "communication_calls",
+        },
+        (payload) => {
+          const row =
+            payload.eventType === "DELETE"
+              ? (payload.old as Partial<CommunicationCallRow>)
+              : (payload.new as Partial<CommunicationCallRow>);
+
+          if (row.conversation_id === selectedConversationId) {
+            setDetailReloadToken((value) => value + 1);
+          }
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "communication_transcripts",
+        },
+        (payload) => {
+          const row =
+            payload.eventType === "DELETE"
+              ? (payload.old as Partial<TranscriptRow>)
+              : (payload.new as Partial<TranscriptRow>);
+
+          if (row.conversation_id === selectedConversationId) {
+            setDetailReloadToken((value) => value + 1);
+          }
+        },
+      )
       .subscribe();
 
     return () => {
@@ -1003,7 +1043,6 @@ export function CommunicationsHub() {
       const [
         messagesResult,
         callsResult,
-        transcriptsResult,
         timelineResult,
         intakeResult,
         leadResult,
@@ -1023,12 +1062,6 @@ export function CommunicationsHub() {
             .order("started_at", { ascending: false, nullsFirst: false })
             .order("created_at", { ascending: false })
             .limit(5),
-          supabase
-            .from("communication_transcripts")
-            .select("*")
-            .eq("conversation_id", selectedConversationId)
-            .order("created_at", { ascending: false })
-            .limit(2),
           supabase
             .from("communication_timeline_events")
             .select(
@@ -1076,7 +1109,6 @@ export function CommunicationsHub() {
       if (
         messagesResult.error ||
         callsResult.error ||
-        transcriptsResult.error ||
         timelineResult.error ||
         leadResult.error ||
         sourceAccountResult.error
@@ -1092,6 +1124,28 @@ export function CommunicationsHub() {
       const intake = (intakeResult.data ?? null) as IntakeRequestRow | null;
       const lead = (leadResult.data ?? null) as CommunicationLeadRow | null;
       const messages = (messagesResult.data ?? []) as MessageRow[];
+      const calls = (callsResult.data ?? []) as CommunicationCallRow[];
+      const transcriptIds = Array.from(
+        new Set(calls.map((call) => call.transcript_id).filter((id): id is string => Boolean(id))),
+      );
+      const transcriptsResult =
+        transcriptIds.length > 0
+          ? await supabase.from("communication_transcripts").select("*").in("id", transcriptIds)
+          : { data: [], error: null };
+
+      if (!isMounted) {
+        return;
+      }
+
+      if (transcriptsResult.error) {
+        setDetailState({
+          status: "error",
+          data: emptyDetailData,
+          error: "Conversation detail is unavailable right now.",
+        });
+        return;
+      }
+
       const attachmentsByMessageId = await loadSignedMessageAttachments(
         messages.map((message) => message.id),
       );
@@ -1133,7 +1187,7 @@ export function CommunicationsHub() {
           job,
           messages,
           attachmentsByMessageId,
-          calls: (callsResult.data ?? []) as CommunicationCallRow[],
+          calls,
           transcripts: (transcriptsResult.data ?? []) as TranscriptRow[],
           timelineEvents: filterBusinessTimelineEvents(
             ((timelineResult.data ?? []) as TimelineRow[]).map(mapTimelineEvent),
@@ -1151,124 +1205,155 @@ export function CommunicationsHub() {
   }, [detailReloadToken, hubState.conversations, selectedConversationId]);
 
   useEffect(() => {
+    recordingStatesRef.current = recordingStatesByCallId;
+  }, [recordingStatesByCallId]);
+
+  useEffect(() => {
     let isMounted = true;
-    let audioObjectUrl: string | null = null;
+    const createdAudioUrls: string[] = [];
+    const callsToLoad = detailState.data.calls.filter(
+      (call) =>
+        call.recording_reference &&
+        !recordingStatesRef.current[call.id] &&
+        detailState.status === "ready",
+    );
 
-    async function loadRecording() {
-      if (!selectedConversationId) {
-        setRecordingState({ status: "idle", recording: null, audioUrl: null, message: null });
-        return;
-      }
+    if (callsToLoad.length === 0) {
+      return;
+    }
 
-      const supabase = getSupabaseBrowserClient();
-      if (!supabase) {
-        setRecordingState({
-          status: "error",
-          recording: null,
-          audioUrl: null,
-          message: "Recording lookup is not configured for this workspace.",
-        });
-        return;
-      }
-
-      setRecordingState({ status: "loading", recording: null, audioUrl: null, message: null });
-
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session?.access_token) {
-        if (isMounted) {
-          setRecordingState({
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      setRecordingStatesByCallId((current) => {
+        const next = { ...current };
+        for (const call of callsToLoad) {
+          next[call.id] = {
             status: "error",
             recording: null,
             audioUrl: null,
-            message: "Log in again to load call recordings.",
+            message: "Recording lookup is not configured for this workspace.",
+          };
+        }
+        return next;
+      });
+      return;
+    }
+
+    setRecordingStatesByCallId((current) => {
+      const next = { ...current };
+      for (const call of callsToLoad) {
+        next[call.id] = { status: "loading", recording: null, audioUrl: null, message: null };
+      }
+      return next;
+    });
+
+    const supabaseClient = supabase;
+
+    async function loadRecordings() {
+      const {
+        data: { session },
+      } = await supabaseClient.auth.getSession();
+
+      if (!session?.access_token) {
+        if (isMounted) {
+          setRecordingStatesByCallId((current) => {
+            const next = { ...current };
+            for (const call of callsToLoad) {
+              next[call.id] = {
+                status: "error",
+                recording: null,
+                audioUrl: null,
+                message: "Log in again to load call recordings.",
+              };
+            }
+            return next;
           });
         }
         return;
       }
 
-      const response = await fetch(
-        `/api/communications/retell-recording?conversationId=${encodeURIComponent(
-          selectedConversationId,
-        )}`,
-        {
+      for (const call of callsToLoad) {
+        const recordingQuery = `callId=${encodeURIComponent(call.id)}`;
+        const response = await fetch(`/api/communications/retell-recording?${recordingQuery}`, {
           headers: {
             Authorization: `Bearer ${session.access_token}`,
           },
-        },
-      );
-      const payload = (await response.json().catch(() => null)) as
-        | {
-            ok?: boolean;
-            recording?: RetellRecording | null;
-            message?: string | null;
-          }
-        | null;
-
-      if (!isMounted) {
-        return;
-      }
-
-      if (!response.ok || !payload?.ok) {
-        setRecordingState({
-          status: "error",
-          recording: null,
-          audioUrl: null,
-          message: payload?.message ?? "Could not load call recording.",
         });
-        return;
-      }
-
-      let audioUrl: string | null = null;
-      let message = payload.message ?? null;
-
-      if (payload.recording && !message) {
-        const audioResponse = await fetch(
-          `/api/communications/retell-recording/audio?conversationId=${encodeURIComponent(
-            selectedConversationId,
-          )}`,
-          {
-            headers: {
-              Authorization: `Bearer ${session.access_token}`,
-            },
-          },
-        );
+        const payload = (await response.json().catch(() => null)) as
+          | {
+              ok?: boolean;
+              recording?: RetellRecording | null;
+              message?: string | null;
+            }
+          | null;
 
         if (!isMounted) {
           return;
         }
 
-        if (audioResponse.ok) {
-          const audioBlob = await audioResponse.blob();
+        if (!response.ok || !payload?.ok) {
+          setRecordingStatesByCallId((current) => ({
+            ...current,
+            [call.id]: {
+              status: "error",
+              recording: null,
+              audioUrl: null,
+              message: payload?.message ?? "Could not load call recording.",
+            },
+          }));
+          continue;
+        }
+
+        let audioUrl: string | null = null;
+        let message = payload.message ?? null;
+
+        if (payload.recording && !message) {
+          const audioResponse = await fetch(
+            `/api/communications/retell-recording/audio?${recordingQuery}`,
+            {
+              headers: {
+                Authorization: `Bearer ${session.access_token}`,
+              },
+            },
+          );
+
           if (!isMounted) {
             return;
           }
-          audioObjectUrl = URL.createObjectURL(audioBlob);
-          audioUrl = audioObjectUrl;
-        } else {
-          message = "Recording metadata loaded, but audio playback is unavailable.";
-        }
-      }
 
-      setRecordingState({
-        status: "ready",
-        recording: payload.recording ?? null,
-        audioUrl,
-        message,
-      });
+          if (audioResponse.ok) {
+            const audioBlob = await audioResponse.blob();
+            if (!isMounted) {
+              return;
+            }
+            audioUrl = URL.createObjectURL(audioBlob);
+            createdAudioUrls.push(audioUrl);
+          } else {
+            message = "Recording metadata loaded, but audio playback is unavailable.";
+          }
+        }
+
+        setRecordingStatesByCallId((current) => ({
+          ...current,
+          [call.id]: {
+            status: "ready",
+            recording: payload.recording ?? null,
+            audioUrl,
+            message,
+          },
+        }));
+      }
     }
 
-    void loadRecording();
+    void loadRecordings();
 
     return () => {
       isMounted = false;
-      if (audioObjectUrl) {
-        URL.revokeObjectURL(audioObjectUrl);
+      for (const audioUrl of createdAudioUrls) {
+        URL.revokeObjectURL(audioUrl);
       }
     };
-  }, [selectedConversationId]);
+  }, [detailState.data.calls, detailState.status]);
 
   const selectedConversation = useMemo(
     () =>
@@ -1367,8 +1452,10 @@ export function CommunicationsHub() {
     [hubState.conversations],
   );
   const detail = detailState.data;
-  const latestCall = detail.calls[0] ?? null;
-  const latestTranscript = detail.transcripts[0] ?? null;
+  const transcriptsById = useMemo(
+    () => new Map(detail.transcripts.map((transcript) => [transcript.id, transcript])),
+    [detail.transcripts],
+  );
   const chronologicalMessages = [...detail.messages].reverse();
   const chronologicalTimeline = [...detail.timelineEvents].reverse();
   const visibleTimeline = chronologicalTimeline.filter((event) => {
@@ -1383,7 +1470,6 @@ export function CommunicationsHub() {
       eventBody === summary
     );
   });
-  const recordingAudioUrl = recordingState.status === "ready" ? recordingState.audioUrl : null;
   const buildCommunicationsReturnTo = (conversationId = selectedConversationId) => {
     const params = new URLSearchParams();
     if (conversationId) {
@@ -1410,7 +1496,9 @@ export function CommunicationsHub() {
     setCreateLeadState({ status: "idle", message: null });
     setSmsDraft("");
     setSendMessageState({ status: "idle", message: null });
-    setTranscriptExpanded(false);
+    recordingStatesRef.current = {};
+    setRecordingStatesByCallId({});
+    setExpandedTranscriptByCallId({});
     setMobileDetailOpen(true);
     setMobileDetailTab("conversation");
     if (typeof window !== "undefined") {
@@ -1437,6 +1525,60 @@ export function CommunicationsHub() {
   const canCreateLeadFromConversation = Boolean(
     selectedConversation && !linkedLeadId,
   );
+
+  async function handleRetryTranscript(callId: string) {
+    setRetryingTranscriptCallId(callId);
+
+    try {
+      const supabase = getSupabaseBrowserClient();
+      if (!supabase) {
+        throw new Error("Communications is not configured for transcription retry.");
+      }
+
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) {
+        throw new Error("Log in again to retry transcription.");
+      }
+
+      const response = await fetch(
+        `/api/communications/browser-call/${callId}/transcript/retry`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
+      const payload = (await response.json().catch(() => null)) as
+        | { message?: string; ok?: boolean }
+        | null;
+
+      if (!response.ok || !payload?.ok) {
+        throw new Error(payload?.message ?? "Could not retry this transcription.");
+      }
+
+      setDetailReloadToken((value) => value + 1);
+    } catch (error) {
+      setCreateJobState({
+        status: "error",
+        message: error instanceof Error ? error.message : "Could not retry this transcription.",
+      });
+    } finally {
+      setRetryingTranscriptCallId(null);
+    }
+  }
+
+  const communicationCallPhone =
+    detail.customer?.phone ?? selectedConversation?.customerPhone ?? null;
+  const communicationCallTarget = selectedConversation
+    ? {
+        conversationId: selectedConversation.id,
+        customerId: detail.customer?.id ?? selectedConversation.customerId ?? null,
+        displayName: getConversationTitle(selectedConversation),
+        phone: communicationCallPhone,
+      }
+    : null;
   const smsSourceAccount = detail.sourceAccount;
   const canSendSmsFromConversation = Boolean(
     selectedConversation &&
@@ -1722,6 +1864,7 @@ export function CommunicationsHub() {
   }
 
   return (
+    <>
     <main className="space-y-5">
       <section className="flex flex-col gap-4 rounded-2xl border border-[#E5E7EB] bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.06)] lg:flex-row lg:items-end lg:justify-between">
         <div>
@@ -1884,6 +2027,23 @@ export function CommunicationsHub() {
                 </button>
                 <button
                   className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                    communicationCallTarget?.phone
+                      ? "border-[#0F6BFF] bg-white text-[#0F6BFF]"
+                      : "border-[#E5E7EB] text-[#64748B]"
+                  }`}
+                  disabled={!communicationCallTarget?.phone}
+                  onClick={() => setIsBrowserCallOpen(true)}
+                  title={
+                    communicationCallTarget?.phone
+                      ? "Call this conversation"
+                      : "No callable phone number is available."
+                  }
+                  type="button"
+                >
+                  Call
+                </button>
+                <button
+                  className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
                     canCreateLeadFromConversation || linkedLeadId
                       ? "border-[#0F6BFF] bg-white text-[#0F6BFF]"
                       : "border-[#E5E7EB] text-[#64748B]"
@@ -1983,35 +2143,21 @@ export function CommunicationsHub() {
               ) : mobileDetailTab === "conversation" ? (
                 <>
                   {selectedConversation.sourceType === "phone" ? (
-                    <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="text-sm font-semibold text-[#0F172A]">
-                          {latestCall?.direction === "outbound" ? "Outbound call" : "Inbound call"}
-                        </p>
-                        {latestCall?.status ? (
-                          <Badge tone={latestCall.status === "missed" ? "amber" : "blue"}>
-                            {formatCallStatus(latestCall.status)}
-                          </Badge>
-                        ) : null}
-                      </div>
-                      <p className="mt-1 text-xs font-medium text-[#64748B]">
-                        {selectedConversation.customerPhone ?? "No phone captured"}
-                        {getCallDurationLabel(latestCall, recordingState)}
-                      </p>
-                      {latestTranscript?.transcript_text ? (
-                        <TranscriptPanel
-                          expanded={transcriptExpanded}
-                          onToggle={() => setTranscriptExpanded((value) => !value)}
-                          text={latestTranscript.transcript_text}
-                        />
-                      ) : null}
-                      <div className="mt-3">
-                        <RecordingPlayer
-                          audioUrl={recordingAudioUrl}
-                          recordingState={recordingState}
-                        />
-                      </div>
-                    </div>
+                    <CallHistoryList
+                      calls={detail.calls}
+                      customerPhone={selectedConversation.customerPhone}
+                      expandedTranscriptByCallId={expandedTranscriptByCallId}
+                      onRetryTranscript={(callId) => void handleRetryTranscript(callId)}
+                      onToggleTranscript={(callId) =>
+                        setExpandedTranscriptByCallId((current) => ({
+                          ...current,
+                          [callId]: !current[callId],
+                        }))
+                      }
+                      recordingStatesByCallId={recordingStatesByCallId}
+                      retryingTranscriptCallId={retryingTranscriptCallId}
+                      transcriptsById={transcriptsById}
+                    />
                   ) : null}
 
                   {requestDetailRows.length > 0 ? (
@@ -2275,6 +2421,23 @@ export function CommunicationsHub() {
                   </button>
                   <button
                     className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                      communicationCallTarget?.phone
+                        ? "border-[#0F6BFF] bg-white text-[#0F6BFF]"
+                        : "border-[#E5E7EB] text-[#64748B]"
+                    }`}
+                    disabled={!communicationCallTarget?.phone}
+                    onClick={() => setIsBrowserCallOpen(true)}
+                    title={
+                      communicationCallTarget?.phone
+                        ? "Call this conversation"
+                        : "No callable phone number is available."
+                    }
+                    type="button"
+                  >
+                    Call
+                  </button>
+                  <button
+                    className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
                       canCreateLeadFromConversation || linkedLeadId
                         ? "border-[#0F6BFF] bg-white text-[#0F6BFF]"
                         : "border-[#E5E7EB] text-[#64748B]"
@@ -2347,37 +2510,21 @@ export function CommunicationsHub() {
                 <>
                   <div className="flex-1 space-y-4 overflow-y-auto bg-[#F8FAFC] p-5">
                     {selectedConversation.sourceType === "phone" ? (
-                      <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-semibold text-[#0F172A]">
-                              {latestCall?.direction === "outbound"
-                                ? "Outbound call"
-                                : "Inbound call"}
-                            </p>
-                            <p className="mt-1 text-xs font-medium text-[#64748B]">
-                              {selectedConversation.customerPhone ?? "No phone captured"}
-                              {getCallDurationLabel(latestCall, recordingState)}
-                            </p>
-                          </div>
-                          <Badge tone={latestCall?.status === "missed" ? "amber" : "blue"}>
-                            {formatCallStatus(latestCall?.status ?? "call")}
-                          </Badge>
-                        </div>
-                        {latestTranscript?.transcript_text ? (
-                          <TranscriptPanel
-                            expanded={transcriptExpanded}
-                            onToggle={() => setTranscriptExpanded((value) => !value)}
-                            text={latestTranscript.transcript_text}
-                          />
-                        ) : null}
-                        <div className="mt-3">
-                          <RecordingPlayer
-                            audioUrl={recordingAudioUrl}
-                            recordingState={recordingState}
-                          />
-                        </div>
-                      </div>
+                      <CallHistoryList
+                        calls={detail.calls}
+                        customerPhone={selectedConversation.customerPhone}
+                        expandedTranscriptByCallId={expandedTranscriptByCallId}
+                        onRetryTranscript={(callId) => void handleRetryTranscript(callId)}
+                        onToggleTranscript={(callId) =>
+                          setExpandedTranscriptByCallId((current) => ({
+                            ...current,
+                            [callId]: !current[callId],
+                          }))
+                        }
+                        recordingStatesByCallId={recordingStatesByCallId}
+                        retryingTranscriptCallId={retryingTranscriptCallId}
+                        transcriptsById={transcriptsById}
+                      />
                     ) : null}
 
                     {requestDetailRows.length > 0 ? (
@@ -2389,7 +2536,8 @@ export function CommunicationsHub() {
 
                     {chronologicalMessages.length === 0 &&
                     visibleTimeline.length === 0 &&
-                    !latestTranscript ? (
+                    detail.calls.length === 0 &&
+                    detail.transcripts.length === 0 ? (
                       <EmptyState
                         title="No conversation events yet"
                         body="Messages, call events and internal timeline entries will appear here."
@@ -2696,6 +2844,13 @@ export function CommunicationsHub() {
         </div>
       ) : null}
     </main>
+    {isBrowserCallOpen && communicationCallTarget ? (
+      <BrowserCallModal
+        onClose={() => setIsBrowserCallOpen(false)}
+        target={communicationCallTarget}
+      />
+    ) : null}
+    </>
   );
 }
 
@@ -2999,6 +3154,127 @@ function Panel({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
+function CallHistoryList({
+  calls,
+  expandedTranscriptByCallId,
+  onRetryTranscript,
+  onToggleTranscript,
+  recordingStatesByCallId,
+  retryingTranscriptCallId,
+  transcriptsById,
+  customerPhone,
+}: {
+  calls: CommunicationCallRow[];
+  expandedTranscriptByCallId: ExpandedTranscriptByCallId;
+  onRetryTranscript: (callId: string) => void;
+  onToggleTranscript: (callId: string) => void;
+  recordingStatesByCallId: RecordingStateByCallId;
+  retryingTranscriptCallId: string | null;
+  transcriptsById: Map<string, TranscriptRow>;
+  customerPhone: string | null;
+}) {
+  if (calls.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm font-semibold text-[#0F172A]">Call history</p>
+        <Badge tone="slate">{calls.length}</Badge>
+      </div>
+      <div className="mt-4 space-y-3">
+        {calls.map((call) => {
+          const effectiveStatus = getEffectiveCallStatus(call);
+          const duration = getCallDurationText(call);
+          const hasTranscript = Boolean(call.transcript_id);
+          const hasRecording = Boolean(call.recording_reference);
+          const recordingState =
+            recordingStatesByCallId[call.id] ??
+            ({
+              status: "loading",
+              recording: null,
+              audioUrl: null,
+              message: null,
+            } satisfies RecordingState);
+          const canRetryTranscript =
+            call.provider_name === "telnyx" &&
+            hasRecording &&
+            !hasTranscript &&
+            retryingTranscriptCallId !== call.id;
+          const transcript = call.transcript_id
+            ? transcriptsById.get(call.transcript_id) ?? null
+            : null;
+          const isTranscriptExpanded = expandedTranscriptByCallId[call.id] === true;
+
+          return (
+            <div
+              className="rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3"
+              key={call.id}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-black text-[#0F172A]">
+                    {call.direction === "outbound" ? "Outgoing Call" : "Incoming Call"}
+                  </p>
+                  <p className="mt-1 text-xs font-semibold text-[#64748B]">
+                    {getCallTimeLabel(call)}
+                    {duration ? ` · ${duration}` : ""}
+                  </p>
+                  <p className="mt-1 text-xs font-semibold text-[#64748B]">
+                    {customerPhone ?? "No phone captured"}
+                  </p>
+                </div>
+                <Badge tone={effectiveStatus === "missed" ? "amber" : "blue"}>
+                  {formatCallStatus(effectiveStatus)}
+                </Badge>
+              </div>
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Badge tone={hasRecording ? "blue" : "slate"}>
+                  {hasRecording ? "Recording" : "No recording yet"}
+                </Badge>
+                <Badge tone={hasTranscript ? "emerald" : "slate"}>
+                  {hasTranscript ? "Transcript" : "No transcript yet"}
+                </Badge>
+              </div>
+
+              {canRetryTranscript ? (
+                <button
+                  className="mt-3 text-xs font-black text-[#0F6BFF]"
+                  onClick={() => onRetryTranscript(call.id)}
+                  type="button"
+                >
+                  Retry transcription
+                </button>
+              ) : retryingTranscriptCallId === call.id ? (
+                <p className="mt-3 text-xs font-black text-[#64748B]">
+                  Retrying transcription...
+                </p>
+              ) : null}
+
+              {transcript?.transcript_text ? (
+                <TranscriptPanel
+                  expanded={isTranscriptExpanded}
+                  onToggle={() => onToggleTranscript(call.id)}
+                  segments={getTranscriptDialogueSegments(transcript.speaker_segments)}
+                  text={transcript.transcript_text}
+                />
+              ) : null}
+
+              {hasRecording ? (
+                <div className="mt-3">
+                  <RecordingPlayer recordingState={recordingState} />
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function Badge({
   children,
   tone = "slate",
@@ -3056,13 +3332,9 @@ function PreviewBlock({
   );
 }
 
-function RecordingPlayer({
-  audioUrl,
-  recordingState,
-}: {
-  audioUrl: string | null;
-  recordingState: RecordingState;
-}) {
+function RecordingPlayer({ recordingState }: { recordingState: RecordingState }) {
+  const audioUrl = recordingState.status === "ready" ? recordingState.audioUrl : null;
+
   return (
     <div className="rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3">
       <p className="text-sm font-semibold leading-6 text-[#334155]">
@@ -3088,15 +3360,54 @@ function RecordingPlayer({
   );
 }
 
+type TranscriptDialogueSegment = {
+  speaker: "agent" | "customer";
+  text: string;
+};
+
+function getTranscriptDialogueSegments(value: Json): TranscriptDialogueSegment[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item): TranscriptDialogueSegment | null => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return null;
+      }
+
+      const record = item as Record<string, unknown>;
+      const speaker = record.speaker === "agent" || record.speaker === "customer"
+        ? record.speaker
+        : null;
+      const text = typeof record.text === "string" && record.text.trim()
+        ? record.text.trim()
+        : null;
+
+      return speaker && text ? { speaker, text } : null;
+    })
+    .filter((segment): segment is TranscriptDialogueSegment => Boolean(segment));
+}
+
 function TranscriptPanel({
   expanded,
   onToggle,
+  segments,
   text,
 }: {
   expanded: boolean;
   onToggle: () => void;
+  segments: TranscriptDialogueSegment[];
   text: string;
 }) {
+  const previewText =
+    segments[0]?.text ??
+    text
+      .split("\n")
+      .map((line) => line.trim())
+      .find(Boolean) ??
+    "Transcript available.";
+
   return (
     <div className="mt-4 rounded-xl bg-[#F8FAFC] p-4">
       <div className="flex items-center justify-between gap-3">
@@ -3111,13 +3422,29 @@ function TranscriptPanel({
           {expanded ? "Hide transcript" : "Show transcript"}
         </button>
       </div>
-      <p
-        className={`mt-2 whitespace-pre-line text-sm font-medium leading-6 text-[#334155] ${
-          expanded ? "" : "line-clamp-4"
-        }`}
-      >
-        {text}
-      </p>
+      {!expanded ? (
+        <p className="mt-2 line-clamp-1 text-sm font-medium leading-6 text-[#334155]">
+          {previewText}
+        </p>
+      ) : segments.length > 0 ? (
+        <div className="mt-3 space-y-1.5">
+          {segments.map((segment, index) => (
+            <p
+              className="whitespace-pre-line text-sm font-medium leading-5 text-[#334155]"
+              key={`${segment.speaker}-${index}`}
+            >
+              <span className="font-black uppercase text-[#475569]">
+                {segment.speaker === "agent" ? "Agent" : "Customer"}:
+              </span>{" "}
+              {segment.text}
+            </p>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-2 whitespace-pre-line text-sm font-medium leading-6 text-[#334155]">
+          {text}
+        </p>
+      )}
     </div>
   );
 }
