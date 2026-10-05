@@ -101,6 +101,12 @@ type ActionState =
   | { status: "success"; message: string }
   | { status: "error"; message: string };
 
+type CustomerDesktopFinancialDetail =
+  | { type: "estimate"; estimate: ServiceRequestEstimateRow }
+  | { type: "invoice"; invoice: ServiceRequestInvoiceRow }
+  | { type: "payment"; payment: ServiceRequestPaymentRow }
+  | null;
+
 type AssetPhotoScanState =
   | { status: "idle"; message: null }
   | { status: "processing"; message: string }
@@ -398,6 +404,8 @@ function CustomerDesktopWorkspace({
   servicePhotos: ServiceRequestPhotoRow[];
   serviceRequests: ServiceRequestRow[];
 }) {
+  const [financialDetail, setFinancialDetail] =
+    useState<CustomerDesktopFinancialDetail>(null);
   const primaryAddress = getCustomerPrimaryAddress(addresses);
   const selectedJob =
     serviceRequests.find((request) => request.id === selectedJobId) ?? serviceRequests[0] ?? null;
@@ -435,7 +443,7 @@ function CustomerDesktopWorkspace({
   ];
 
   return (
-    <div className="w-full px-5 pb-6 pt-3 xl:px-6">
+    <div className="w-full px-5 pb-6 pt-3 xl:px-7 2xl:px-8">
       <div className="mb-2 flex items-center justify-between gap-4">
         <Link className="inline-flex items-center gap-2 text-sm font-semibold text-[#0F6BFF]" href={returnTo}>
           <CustomerOverviewIcon className="h-4 w-4" name="back" />
@@ -555,14 +563,27 @@ function CustomerDesktopWorkspace({
               invoices={selectedJobInvoices}
               job={selectedJob}
               notes={selectedJobNotes}
+              onOpenInvoice={(invoice) => setFinancialDetail({ type: "invoice", invoice })}
               payments={selectedJobPayments}
               customerId={customer.id}
             />
           </div>
           <div className="grid items-start gap-3 xl:grid-cols-3">
-            <CustomerDesktopEstimateCard estimates={selectedJobEstimates} onViewAll={() => onTabChange("estimates")} />
-            <CustomerDesktopInvoiceCard invoices={selectedJobInvoices} onViewAll={() => onTabChange("invoices")} />
-            <CustomerDesktopPaymentCard payments={selectedJobPayments} onViewAll={() => onTabChange("payments")} />
+            <CustomerDesktopEstimateCard
+              estimates={selectedJobEstimates}
+              onOpenEstimate={(estimate) => setFinancialDetail({ type: "estimate", estimate })}
+              onViewAll={() => onTabChange("estimates")}
+            />
+            <CustomerDesktopInvoiceCard
+              invoices={selectedJobInvoices}
+              onOpenInvoice={(invoice) => setFinancialDetail({ type: "invoice", invoice })}
+              onViewAll={() => onTabChange("invoices")}
+            />
+            <CustomerDesktopPaymentCard
+              onOpenPayment={(payment) => setFinancialDetail({ type: "payment", payment })}
+              payments={selectedJobPayments}
+              onViewAll={() => onTabChange("payments")}
+            />
           </div>
           <div className="grid items-start gap-3 xl:grid-cols-[1fr_0.9fr_0.7fr]">
             <CustomerDesktopDocumentsPanel
@@ -629,13 +650,27 @@ function CustomerDesktopWorkspace({
       ) : null}
 
       {activeTab === "estimates" ? (
-        <CustomerDesktopAllEstimates estimates={estimates} requests={serviceRequests} />
+        <CustomerDesktopAllEstimates
+          estimates={estimates}
+          onOpenEstimate={(estimate) => setFinancialDetail({ type: "estimate", estimate })}
+          requests={serviceRequests}
+        />
       ) : null}
       {activeTab === "invoices" ? (
-        <CustomerDesktopAllInvoices invoices={invoices} requests={serviceRequests} />
+        <CustomerDesktopAllInvoices
+          invoices={invoices}
+          onOpenInvoice={(invoice) => setFinancialDetail({ type: "invoice", invoice })}
+          requests={serviceRequests}
+        />
       ) : null}
       {activeTab === "payments" ? (
-        <CustomerDesktopAllPayments payments={payments} requests={serviceRequests} invoices={invoices} />
+        <CustomerDesktopAllPayments
+          invoices={invoices}
+          onOpenInvoice={(invoice) => setFinancialDetail({ type: "invoice", invoice })}
+          onOpenPayment={(payment) => setFinancialDetail({ type: "payment", payment })}
+          payments={payments}
+          requests={serviceRequests}
+        />
       ) : null}
       {activeTab === "notes" ? (
         <div className="mt-4">
@@ -676,6 +711,16 @@ function CustomerDesktopWorkspace({
           </div>
         </div>
       ) : null}
+      <CustomerDesktopFinancialDetailModal
+        customer={customer}
+        detail={financialDetail}
+        estimates={estimates}
+        invoices={invoices}
+        onClose={() => setFinancialDetail(null)}
+        onOpenEstimate={(estimate) => setFinancialDetail({ type: "estimate", estimate })}
+        onOpenInvoice={(invoice) => setFinancialDetail({ type: "invoice", invoice })}
+        requests={serviceRequests}
+      />
     </div>
   );
 }
@@ -802,6 +847,7 @@ function CustomerDesktopJobDetail({
   invoices,
   job,
   notes,
+  onOpenInvoice,
   payments,
 }: {
   appliances: CustomerApplianceRow[];
@@ -811,6 +857,7 @@ function CustomerDesktopJobDetail({
   invoices: ServiceRequestInvoiceRow[];
   job: ServiceRequestRow | null;
   notes: ServiceRequestNoteRow[];
+  onOpenInvoice: (invoice: ServiceRequestInvoiceRow) => void;
   payments: ServiceRequestPaymentRow[];
 }) {
   if (!job) {
@@ -873,12 +920,22 @@ function CustomerDesktopJobDetail({
         <div className="flex items-center gap-3">
           <p className="text-base font-black text-slate-950">Total: {formatMoney(total)}</p>
           {invoice ? (
-            <Link
-              className="rounded-md border border-blue-100 bg-blue-50 px-3 py-1.5 text-sm font-black text-[#0F6BFF]"
-              href={`/dashboard/leads/${job.id}?tab=finance`}
-            >
-              View Invoice
-            </Link>
+            invoice.source_system === "workiz" ? (
+              <button
+                className="rounded-md border border-blue-100 bg-blue-50 px-3 py-1.5 text-sm font-black text-[#0F6BFF]"
+                onClick={() => onOpenInvoice(invoice)}
+                type="button"
+              >
+                View Invoice
+              </button>
+            ) : (
+              <Link
+                className="rounded-md border border-blue-100 bg-blue-50 px-3 py-1.5 text-sm font-black text-[#0F6BFF]"
+                href={`/dashboard/leads/${job.id}?tab=finance`}
+              >
+                View Invoice
+              </Link>
+            )
           ) : null}
         </div>
       </div>
@@ -951,9 +1008,11 @@ function DesktopInfoCard({
 
 function CustomerDesktopEstimateCard({
   estimates,
+  onOpenEstimate,
   onViewAll,
 }: {
   estimates: ServiceRequestEstimateRow[];
+  onOpenEstimate: (estimate: ServiceRequestEstimateRow) => void;
   onViewAll: () => void;
 }) {
   return (
@@ -966,7 +1025,24 @@ function CustomerDesktopEstimateCard({
           <tbody>
             {estimates.slice(0, 4).map((estimate) => (
               <tr className="border-t border-slate-100" key={estimate.id}>
-                <td className="px-3 py-2 font-semibold text-[#0F6BFF]">{estimate.estimate_number || estimate.id.slice(0, 8)}</td>
+                <td className="px-3 py-2">
+                  {estimate.source_system === "workiz" ? (
+                    <button
+                      className="font-semibold text-[#0F6BFF] hover:underline"
+                      onClick={() => onOpenEstimate(estimate)}
+                      type="button"
+                    >
+                      {estimate.estimate_number || estimate.id.slice(0, 8)}
+                    </button>
+                  ) : (
+                    <Link
+                      className="font-semibold text-[#0F6BFF] hover:underline"
+                      href={`/dashboard/leads/${estimate.service_request_id}?tab=finance&estimateId=${encodeURIComponent(estimate.id)}`}
+                    >
+                      {estimate.estimate_number || estimate.id.slice(0, 8)}
+                    </Link>
+                  )}
+                </td>
                 <td>{formatDate(estimate.created_at)}</td>
                 <td>{formatMoney(estimate.total)}</td>
                 <td><StatusPill value={estimate.estimate_status} /></td>
@@ -983,9 +1059,11 @@ function CustomerDesktopEstimateCard({
 
 function CustomerDesktopInvoiceCard({
   invoices,
+  onOpenInvoice,
   onViewAll,
 }: {
   invoices: ServiceRequestInvoiceRow[];
+  onOpenInvoice: (invoice: ServiceRequestInvoiceRow) => void;
   onViewAll: () => void;
 }) {
   return (
@@ -998,7 +1076,24 @@ function CustomerDesktopInvoiceCard({
           <tbody>
             {invoices.slice(0, 4).map((invoice) => (
               <tr className="border-t border-slate-100" key={invoice.id}>
-                <td className="px-3 py-2 font-semibold text-[#0F6BFF]">{invoice.invoice_number}</td>
+                <td className="px-3 py-2">
+                  {invoice.source_system === "workiz" ? (
+                    <button
+                      className="font-semibold text-[#0F6BFF] hover:underline"
+                      onClick={() => onOpenInvoice(invoice)}
+                      type="button"
+                    >
+                      {invoice.invoice_number}
+                    </button>
+                  ) : (
+                    <Link
+                      className="font-semibold text-[#0F6BFF] hover:underline"
+                      href={`/dashboard/leads/${invoice.service_request_id}?tab=finance`}
+                    >
+                      {invoice.invoice_number}
+                    </Link>
+                  )}
+                </td>
                 <td>{formatDate(invoice.created_at)}</td>
                 <td>{formatMoney(invoice.total)}</td>
                 <td><StatusPill value={invoice.invoice_status} /></td>
@@ -1014,9 +1109,11 @@ function CustomerDesktopInvoiceCard({
 }
 
 function CustomerDesktopPaymentCard({
+  onOpenPayment,
   payments,
   onViewAll,
 }: {
+  onOpenPayment: (payment: ServiceRequestPaymentRow) => void;
   payments: ServiceRequestPaymentRow[];
   onViewAll: () => void;
 }) {
@@ -1031,7 +1128,15 @@ function CustomerDesktopPaymentCard({
             {payments.slice(0, 4).map((payment) => (
               <tr className="border-t border-slate-100" key={payment.id}>
                 <td className="px-3 py-2">{formatDate(payment.paid_at ?? payment.payment_date ?? payment.created_at)}</td>
-                <td>{formatMoney(payment.amount)}</td>
+                <td>
+                  <button
+                    className="font-semibold text-[#0F6BFF] hover:underline"
+                    onClick={() => onOpenPayment(payment)}
+                    type="button"
+                  >
+                    {formatMoney(payment.amount)}
+                  </button>
+                </td>
                 <td>{formatPaymentMethod(payment)}</td>
                 <td><StatusPill value={payment.payment_status} /></td>
               </tr>
@@ -1356,9 +1461,11 @@ function CustomerDesktopOverview({
 
 function CustomerDesktopAllEstimates({
   estimates,
+  onOpenEstimate,
   requests,
 }: {
   estimates: ServiceRequestEstimateRow[];
+  onOpenEstimate: (estimate: ServiceRequestEstimateRow) => void;
   requests: ServiceRequestRow[];
 }) {
   return (
@@ -1370,7 +1477,24 @@ function CustomerDesktopAllEstimates({
             rows={estimates.map((estimate) => {
               const request = requests.find((item) => item.id === estimate.service_request_id);
               return [
-                estimate.estimate_number || estimate.id.slice(0, 8),
+                estimate.source_system === "workiz" ? (
+                  <button
+                    className="font-semibold text-[#0F6BFF] hover:underline"
+                    key={estimate.id}
+                    onClick={() => onOpenEstimate(estimate)}
+                    type="button"
+                  >
+                    {estimate.estimate_number || estimate.id.slice(0, 8)}
+                  </button>
+                ) : (
+                  <Link
+                    className="font-semibold text-[#0F6BFF] hover:underline"
+                    href={`/dashboard/leads/${estimate.service_request_id}?tab=finance&estimateId=${encodeURIComponent(estimate.id)}`}
+                    key={estimate.id}
+                  >
+                    {estimate.estimate_number || estimate.id.slice(0, 8)}
+                  </Link>
+                ),
                 request ? getDesktopJobNumber(request) : "Linked job",
                 formatDate(estimate.created_at),
                 formatMoney(estimate.total),
@@ -1388,9 +1512,11 @@ function CustomerDesktopAllEstimates({
 
 function CustomerDesktopAllInvoices({
   invoices,
+  onOpenInvoice,
   requests,
 }: {
   invoices: ServiceRequestInvoiceRow[];
+  onOpenInvoice: (invoice: ServiceRequestInvoiceRow) => void;
   requests: ServiceRequestRow[];
 }) {
   return (
@@ -1402,7 +1528,24 @@ function CustomerDesktopAllInvoices({
             rows={invoices.map((invoice) => {
               const request = requests.find((item) => item.id === invoice.service_request_id);
               return [
-                invoice.invoice_number,
+                invoice.source_system === "workiz" ? (
+                  <button
+                    className="font-semibold text-[#0F6BFF] hover:underline"
+                    key={invoice.id}
+                    onClick={() => onOpenInvoice(invoice)}
+                    type="button"
+                  >
+                    {invoice.invoice_number}
+                  </button>
+                ) : (
+                  <Link
+                    className="font-semibold text-[#0F6BFF] hover:underline"
+                    href={`/dashboard/leads/${invoice.service_request_id}?tab=finance`}
+                    key={invoice.id}
+                  >
+                    {invoice.invoice_number}
+                  </Link>
+                ),
                 request ? getDesktopJobNumber(request) : "Linked job",
                 formatDate(invoice.created_at),
                 formatMoney(invoice.total),
@@ -1421,10 +1564,14 @@ function CustomerDesktopAllInvoices({
 
 function CustomerDesktopAllPayments({
   invoices,
+  onOpenInvoice,
+  onOpenPayment,
   payments,
   requests,
 }: {
   invoices: ServiceRequestInvoiceRow[];
+  onOpenInvoice: (invoice: ServiceRequestInvoiceRow) => void;
+  onOpenPayment: (payment: ServiceRequestPaymentRow) => void;
   payments: ServiceRequestPaymentRow[];
   requests: ServiceRequestRow[];
 }) {
@@ -1440,8 +1587,36 @@ function CustomerDesktopAllPayments({
               return [
                 formatDate(payment.paid_at ?? payment.payment_date ?? payment.created_at),
                 request ? getDesktopJobNumber(request) : "Linked job",
-                invoice?.invoice_number ?? "—",
-                formatMoney(payment.amount),
+                invoice ? (
+                  invoice.source_system === "workiz" ? (
+                    <button
+                      className="font-semibold text-[#0F6BFF] hover:underline"
+                      key={invoice.id}
+                      onClick={() => onOpenInvoice(invoice)}
+                      type="button"
+                    >
+                      {invoice.invoice_number}
+                    </button>
+                  ) : (
+                    <Link
+                      className="font-semibold text-[#0F6BFF] hover:underline"
+                      href={`/dashboard/leads/${invoice.service_request_id}?tab=finance`}
+                      key={invoice.id}
+                    >
+                      {invoice.invoice_number}
+                    </Link>
+                  )
+                ) : (
+                  "—"
+                ),
+                <button
+                  className="font-semibold text-[#0F6BFF] hover:underline"
+                  key={payment.id}
+                  onClick={() => onOpenPayment(payment)}
+                  type="button"
+                >
+                  {formatMoney(payment.amount)}
+                </button>,
                 formatPaymentMethod(payment),
                 payment.payment_status,
               ];
@@ -1520,7 +1695,7 @@ function CustomerDesktopRecordTable({
   rows,
 }: {
   headers: string[];
-  rows: string[][];
+  rows: ReactNode[][];
 }) {
   return (
     <div className="overflow-x-auto">
@@ -1540,6 +1715,227 @@ function CustomerDesktopRecordTable({
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function CustomerDesktopFinancialDetailModal({
+  customer,
+  detail,
+  estimates,
+  invoices,
+  onClose,
+  onOpenEstimate,
+  onOpenInvoice,
+  requests,
+}: {
+  customer: CustomerRow;
+  detail: CustomerDesktopFinancialDetail;
+  estimates: ServiceRequestEstimateRow[];
+  invoices: ServiceRequestInvoiceRow[];
+  onClose: () => void;
+  onOpenEstimate: (estimate: ServiceRequestEstimateRow) => void;
+  onOpenInvoice: (invoice: ServiceRequestInvoiceRow) => void;
+  requests: ServiceRequestRow[];
+}) {
+  if (!detail) {
+    return null;
+  }
+
+  const serviceRequestId =
+    detail.type === "estimate"
+      ? detail.estimate.service_request_id
+      : detail.type === "invoice"
+        ? detail.invoice.service_request_id
+        : detail.payment.service_request_id;
+  const request = requests.find((item) => item.id === serviceRequestId) ?? null;
+  const relatedInvoice =
+    detail.type === "estimate"
+      ? invoices.find((invoice) => invoice.estimate_id === detail.estimate.id) ??
+        (invoices.filter((invoice) => invoice.service_request_id === detail.estimate.service_request_id).length === 1
+          ? invoices.find((invoice) => invoice.service_request_id === detail.estimate.service_request_id) ?? null
+          : null)
+      : detail.type === "payment" && detail.payment.invoice_id
+        ? invoices.find((invoice) => invoice.id === detail.payment.invoice_id) ?? null
+        : null;
+  const relatedEstimate =
+    detail.type === "invoice" && detail.invoice.estimate_id
+      ? estimates.find((estimate) => estimate.id === detail.invoice.estimate_id) ?? null
+      : null;
+  const title =
+    detail.type === "estimate"
+      ? "Historical Estimate Summary"
+      : detail.type === "invoice"
+        ? "Historical Invoice Summary"
+        : "Payment Detail";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
+      <section className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-slate-200 bg-white p-5 shadow-xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-3">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-xl font-black text-slate-950">{title}</h2>
+              {detail.type !== "payment" &&
+              (detail.type === "estimate"
+                ? detail.estimate.source_system === "workiz"
+                : detail.invoice.source_system === "workiz") ? (
+                <WorkizBadge />
+              ) : null}
+            </div>
+            <p className="mt-1 text-sm font-semibold text-slate-600">
+              {request ? `Job ${getDesktopJobNumber(request)}` : "Linked job"} · {getCustomerName(customer)}
+            </p>
+          </div>
+          <button
+            aria-label="Close financial detail"
+            className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-900"
+            onClick={onClose}
+            type="button"
+          >
+            ×
+          </button>
+        </div>
+
+        {detail.type === "estimate" ? (
+          <div className="mt-4 space-y-4">
+            <p className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm font-semibold leading-6 text-slate-700">
+              Detailed line items were not included in the Workiz export.
+            </p>
+            <CustomerDesktopDetailGrid
+              items={[
+                ["Estimate #", detail.estimate.estimate_number || detail.estimate.external_estimate_id || detail.estimate.id],
+                ["Status", formatHumanSourceLabel(detail.estimate.estimate_status)],
+                ["Created", formatDate(detail.estimate.created_at)],
+                ["Subtotal", formatMoney(detail.estimate.subtotal)],
+                ["Discount", formatMoney(detail.estimate.discount_amount ?? null)],
+                ["Tax", formatMoney(detail.estimate.tax)],
+                ["Total", formatMoney(detail.estimate.total)],
+                ["Workiz source", readRecordString(detail.estimate.import_metadata, "raw_source") ?? "Imported historical estimate"],
+              ]}
+            />
+            <CustomerDesktopDetailActions
+              invoice={relatedInvoice}
+              onOpenInvoice={onOpenInvoice}
+              request={request}
+            />
+          </div>
+        ) : null}
+
+        {detail.type === "invoice" ? (
+          <div className="mt-4 space-y-4">
+            <p className="rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-sm font-semibold leading-6 text-slate-700">
+              Detailed line items were not included in the Workiz export.
+            </p>
+            <CustomerDesktopDetailGrid
+              items={[
+                ["Invoice #", detail.invoice.invoice_number],
+                ["Status", formatHumanSourceLabel(detail.invoice.invoice_status)],
+                ["Created", formatDate(detail.invoice.created_at)],
+                ["Paid", detail.invoice.paid_at ? formatDate(detail.invoice.paid_at) : "Not recorded"],
+                ["Subtotal", formatMoney(detail.invoice.subtotal)],
+                ["Discount", formatMoney(detail.invoice.discount_amount ?? null)],
+                ["Tax", formatMoney(detail.invoice.tax)],
+                ["Total", formatMoney(detail.invoice.total)],
+                ["Amount due", formatMoney(detail.invoice.amount_due ?? null)],
+              ]}
+            />
+            <CustomerDesktopDetailActions
+              estimate={relatedEstimate}
+              onOpenEstimate={onOpenEstimate}
+              request={request}
+            />
+          </div>
+        ) : null}
+
+        {detail.type === "payment" ? (
+          <div className="mt-4 space-y-4">
+            <CustomerDesktopDetailGrid
+              items={[
+                ["Amount", formatMoney(detail.payment.amount)],
+                ["Date", formatDate(detail.payment.paid_at ?? detail.payment.payment_date ?? detail.payment.created_at)],
+                ["Method", formatPaymentMethod(detail.payment)],
+                ["Status", formatHumanSourceLabel(detail.payment.payment_status)],
+                ["Type", detail.payment.payment_type || "Payment"],
+                ["Card", detail.payment.card_last4 ? `•••• ${detail.payment.card_last4}` : "Not stored"],
+                ["Confirmation", detail.payment.confirmation_code || detail.payment.reference_code || "—"],
+                ["Service fee", formatMoney(detail.payment.service_fee)],
+                ["Net", formatMoney(detail.payment.net_amount)],
+                ["Tip", formatMoney(detail.payment.tip_amount)],
+                ["Description", detail.payment.description || "—"],
+                ["Related invoice", relatedInvoice?.invoice_number ?? "—"],
+              ]}
+            />
+            <CustomerDesktopDetailActions
+              invoice={relatedInvoice}
+              onOpenInvoice={onOpenInvoice}
+              request={request}
+            />
+          </div>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
+function CustomerDesktopDetailGrid({
+  items,
+}: {
+  items: [string, string][];
+}) {
+  return (
+    <div className="grid gap-2 sm:grid-cols-2">
+      {items.map(([label, value]) => (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3" key={label}>
+          <p className="text-xs font-black uppercase tracking-[0.12em] text-slate-500">{label}</p>
+          <p className="mt-1 text-sm font-bold text-slate-950">{value || "—"}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CustomerDesktopDetailActions({
+  estimate,
+  invoice,
+  onOpenEstimate,
+  onOpenInvoice,
+  request,
+}: {
+  estimate?: ServiceRequestEstimateRow | null;
+  invoice?: ServiceRequestInvoiceRow | null;
+  onOpenEstimate?: (estimate: ServiceRequestEstimateRow) => void;
+  onOpenInvoice?: (invoice: ServiceRequestInvoiceRow) => void;
+  request: ServiceRequestRow | null;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-4">
+      {request ? (
+        <Link
+          className="rounded-md border border-slate-200 px-3 py-2 text-sm font-black text-slate-700 transition hover:border-[#0F6BFF] hover:text-[#0F6BFF]"
+          href={`/dashboard/leads/${request.id}?tab=finance`}
+        >
+          View Job
+        </Link>
+      ) : null}
+      {invoice && onOpenInvoice ? (
+        <button
+          className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-sm font-black text-[#0F6BFF]"
+          onClick={() => onOpenInvoice(invoice)}
+          type="button"
+        >
+          View Invoice
+        </button>
+      ) : null}
+      {estimate && onOpenEstimate ? (
+        <button
+          className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-sm font-black text-[#0F6BFF]"
+          onClick={() => onOpenEstimate(estimate)}
+          type="button"
+        >
+          View Estimate
+        </button>
+      ) : null}
     </div>
   );
 }

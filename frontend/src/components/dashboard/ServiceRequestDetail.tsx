@@ -1822,7 +1822,7 @@ export function ServiceRequestDetail({
   const [editingEstimateId, setEditingEstimateId] = useState<string | null>(
     null,
   );
-  const [, setViewingEstimateId] = useState<string | null>(
+  const [viewingEstimateId, setViewingEstimateId] = useState<string | null>(
     null,
   );
   const [allowNewDraftWithActiveDraft, setAllowNewDraftWithActiveDraft] =
@@ -7435,11 +7435,18 @@ export function ServiceRequestDetail({
   }
 
   function openEstimateFromList(estimate: DashboardServiceRequestEstimate) {
+    if (estimate.sourceSystem === "workiz") {
+      setViewingEstimateId(estimate.id);
+      setViewingInvoiceId(null);
+      return;
+    }
+
     openSavedManualEstimateEditor(estimate);
   }
 
   function renderEstimateCard(estimate: DashboardServiceRequestEstimate) {
     const linkedInvoice = invoicesByEstimateId.get(estimate.id) ?? null;
+    const isImportedWorkiz = estimate.sourceSystem === "workiz";
 
     return (
       <article
@@ -7466,7 +7473,9 @@ export function ServiceRequestDetail({
               {formatServiceRequestSource(estimate.estimateStatus)}
             </span>
             <span>
-              {estimate.items.length} line{estimate.items.length === 1 ? "" : "s"}
+              {isImportedWorkiz
+                ? "Historical Workiz estimate"
+                : `${estimate.items.length} line${estimate.items.length === 1 ? "" : "s"}`}
             </span>
             <span aria-hidden="true">·</span>
             <span className="min-w-0 truncate">
@@ -7482,12 +7491,28 @@ export function ServiceRequestDetail({
             ) : null}
           </div>
         </div>
+        {isImportedWorkiz && viewingEstimateId === estimate.id ? (
+          <div className="mx-1.5 mt-3 rounded-md border border-blue-100 bg-blue-50 p-3 text-sm leading-6 text-[#334155] sm:mx-2">
+            <p className="font-black text-[#0F172A]">Historical Estimate Summary</p>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <p><span className="font-black">Estimate #:</span> {estimate.estimateNumber}</p>
+              <p><span className="font-black">Status:</span> {formatServiceRequestSource(estimate.estimateStatus)}</p>
+              <p><span className="font-black">Created:</span> {formatServiceRequestDate(estimate.createdAt)}</p>
+              <p><span className="font-black">Subtotal:</span> {formatServiceRequestMoney(estimate.subtotal)}</p>
+              <p><span className="font-black">Discount:</span> {formatServiceRequestMoney(estimate.discountAmount)}</p>
+              <p><span className="font-black">Tax:</span> {formatServiceRequestMoney(estimate.tax ?? 0)}</p>
+              <p><span className="font-black">Total:</span> {formatServiceRequestMoney(estimate.total)}</p>
+              <p><span className="font-black">Workiz ID:</span> {estimate.externalEstimateId ?? "—"}</p>
+            </div>
+          </div>
+        ) : null}
       </article>
     );
   }
 
   function renderInvoiceCard(invoice: DashboardServiceRequestInvoice) {
     const isExpanded = viewingInvoice?.id === invoice.id;
+    const isImportedWorkiz = invoice.sourceSystem === "workiz";
     const sourceEstimate = estimatesState.estimates.find(
       (estimate) => estimate.id === invoice.estimateId,
     );
@@ -7516,7 +7541,9 @@ export function ServiceRequestDetail({
                 {formatServiceRequestSource(invoice.invoiceStatus)}
               </span>
               <span className="rounded-full border border-[#E5E7EB] px-2 py-1 text-[#64748B]">
-                {invoice.items.length} line{invoice.items.length === 1 ? "" : "s"}
+                {isImportedWorkiz
+                  ? "Historical Workiz invoice"
+                  : `${invoice.items.length} line${invoice.items.length === 1 ? "" : "s"}`}
               </span>
             </div>
             <p className="mt-2 text-xs font-semibold text-[#64748B]">
@@ -7537,7 +7564,7 @@ export function ServiceRequestDetail({
               >
                 {isExpanded ? "Hide" : "View Invoice"}
               </button>
-              {invoice.invoiceStatus === "draft" ? (
+              {!isImportedWorkiz && invoice.invoiceStatus === "draft" ? (
                 <button
                   className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-[#0F6BFF] transition hover:bg-[#0F6BFF]/20 disabled:cursor-not-allowed disabled:opacity-60"
                   disabled={invoiceActionState.status === "saving"}
@@ -7547,8 +7574,9 @@ export function ServiceRequestDetail({
                   {invoiceActionId === invoice.id ? "Sending..." : "Send Invoice"}
                 </button>
               ) : null}
-              {invoice.invoiceStatus === "draft" ||
-              invoice.invoiceStatus === "sent" ? (
+              {!isImportedWorkiz &&
+              (invoice.invoiceStatus === "draft" ||
+                invoice.invoiceStatus === "sent") ? (
                 <button
                   className="rounded-md border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-xs font-bold text-emerald-700 transition hover:bg-emerald-300/20 disabled:cursor-not-allowed disabled:opacity-60"
                   disabled={invoiceActionState.status === "saving"}
@@ -7558,7 +7586,7 @@ export function ServiceRequestDetail({
                   {invoiceActionId === invoice.id ? "Saving..." : "Mark Paid"}
                 </button>
               ) : null}
-              {invoice.invoiceStatus !== "paid" &&
+              {!isImportedWorkiz && invoice.invoiceStatus !== "paid" &&
               invoice.invoiceStatus !== "void" ? (
                 <button
                   className="rounded-md border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs font-bold text-amber-800 transition hover:bg-amber-300/20 disabled:cursor-not-allowed disabled:opacity-60"
@@ -7596,24 +7624,40 @@ export function ServiceRequestDetail({
               </p>
             </div>
             <div className="mt-4 divide-y divide-[#E5E7EB] overflow-hidden rounded-md border border-[#E5E7EB]">
-              {invoice.items.map((item) => (
-                <div
-                  className="flex flex-col gap-2 bg-[#F8FAFC] p-3 text-sm sm:flex-row sm:items-center sm:justify-between"
-                  key={item.id}
-                >
-                  <div>
-                    <p className="font-bold text-[#0F172A]">
-                      {item.quantity}x {item.itemTitle}
-                    </p>
-                    {item.notes ? (
-                      <p className="mt-1 text-xs text-[#64748B]">{item.notes}</p>
-                    ) : null}
+              {isImportedWorkiz ? (
+                <div className="bg-[#F8FAFC] p-3 text-sm leading-6 text-[#64748B]">
+                  <p className="font-black text-[#0F172A]">Historical Invoice Summary</p>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    <p><span className="font-black">Invoice #:</span> {invoice.invoiceNumber}</p>
+                    <p><span className="font-black">Status:</span> {formatServiceRequestSource(invoice.invoiceStatus)}</p>
+                    <p><span className="font-black">Created:</span> {formatServiceRequestDate(invoice.createdAt)}</p>
+                    <p><span className="font-black">Paid:</span> {invoice.paidAt ? formatServiceRequestDate(invoice.paidAt) : "Not recorded"}</p>
+                    <p><span className="font-black">Subtotal:</span> {formatServiceRequestMoney(invoice.subtotal)}</p>
+                    <p><span className="font-black">Discount:</span> {formatServiceRequestMoney(invoice.discountAmount ?? 0)}</p>
+                    <p><span className="font-black">Tax:</span> {formatServiceRequestMoney(invoice.tax ?? 0)}</p>
+                    <p><span className="font-black">Amount due:</span> {invoice.amountDue === null ? "—" : formatServiceRequestMoney(invoice.amountDue)}</p>
                   </div>
-                  <p className="font-black text-emerald-700">
-                    {formatServiceRequestMoney(item.lineTotal)}
-                  </p>
                 </div>
-              ))}
+              ) : (
+                invoice.items.map((item) => (
+                  <div
+                    className="flex flex-col gap-2 bg-[#F8FAFC] p-3 text-sm sm:flex-row sm:items-center sm:justify-between"
+                    key={item.id}
+                  >
+                    <div>
+                      <p className="font-bold text-[#0F172A]">
+                        {item.quantity}x {item.itemTitle}
+                      </p>
+                      {item.notes ? (
+                        <p className="mt-1 text-xs text-[#64748B]">{item.notes}</p>
+                      ) : null}
+                    </div>
+                    <p className="font-black text-emerald-700">
+                      {formatServiceRequestMoney(item.lineTotal)}
+                    </p>
+                  </div>
+                ))
+              )}
             </div>
             <div className="mt-4 flex items-center justify-between border-t border-[#E5E7EB] pt-4">
               <p className="text-sm font-black text-[#0F172A]">Total</p>

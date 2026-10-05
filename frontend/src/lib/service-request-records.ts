@@ -209,6 +209,10 @@ export type DashboardServiceRequestEstimate = {
   archivedAt: string | null;
   archivedByProfileId: string | null;
   archiveReason: string | null;
+  sourceSystem: "native" | "workiz";
+  externalEstimateId: string | null;
+  externalImportKey: string | null;
+  importMetadata: unknown;
   createdAt: string;
   updatedAt: string;
   items: DashboardServiceRequestEstimateItem[];
@@ -239,6 +243,12 @@ export type DashboardServiceRequestInvoice = {
   sentAt: string | null;
   paidAt: string | null;
   voidedAt: string | null;
+  sourceSystem: "native" | "workiz";
+  externalInvoiceId: string | null;
+  externalImportKey: string | null;
+  amountDue: number | null;
+  discountAmount: number | null;
+  importMetadata: unknown;
   createdAt: string;
   updatedAt: string;
   items: DashboardServiceRequestInvoiceItem[];
@@ -461,6 +471,10 @@ export const SERVICE_REQUEST_ESTIMATE_SELECT_COLUMNS = [
   "customer_responded_at",
   "approval_source",
   "approved_by_profile_id",
+  "source_system",
+  "external_estimate_id",
+  "external_import_key",
+  "import_metadata",
   "created_at",
   "updated_at",
   "service_request_estimate_items(id,estimate_id,pricing_catalog_item_id,item_title,quantity,unit_price,line_total,technician_cost,taxable,warranty_text,line_type,internal_name,customer_name,public_description,internal_cost,sell_price,service_catalog_repair_item_id,estimate_template_line_id,notes,created_at)",
@@ -479,6 +493,12 @@ export const SERVICE_REQUEST_INVOICE_SELECT_COLUMNS = [
   "sent_at",
   "paid_at",
   "voided_at",
+  "source_system",
+  "external_invoice_id",
+  "external_import_key",
+  "amount_due",
+  "discount_amount",
+  "import_metadata",
   "created_at",
   "updated_at",
   "service_request_invoice_items(id,invoice_id,source_estimate_item_id,item_title,quantity,unit_price,line_total,notes,created_at)",
@@ -732,6 +752,10 @@ export function mapServiceRequestEstimateRow(
     archivedAt: row.archived_at ?? null,
     archivedByProfileId: row.archived_by_profile_id ?? null,
     archiveReason: row.archive_reason ?? null,
+    sourceSystem: row.source_system ?? "native",
+    externalEstimateId: row.external_estimate_id ?? null,
+    externalImportKey: row.external_import_key ?? null,
+    importMetadata: row.import_metadata ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     items: (row.service_request_estimate_items ?? []).map(
@@ -774,6 +798,12 @@ export function mapServiceRequestInvoiceRow(
     sentAt: row.sent_at,
     paidAt: row.paid_at,
     voidedAt: row.voided_at,
+    sourceSystem: row.source_system ?? "native",
+    externalInvoiceId: row.external_invoice_id ?? null,
+    externalImportKey: row.external_import_key ?? null,
+    amountDue: row.amount_due ?? null,
+    discountAmount: row.discount_amount ?? null,
+    importMetadata: row.import_metadata ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     items: (row.service_request_invoice_items ?? []).map(
