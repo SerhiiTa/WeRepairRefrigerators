@@ -443,7 +443,7 @@ function CustomerDesktopWorkspace({
   ];
 
   return (
-    <div className="w-full px-5 pb-6 pt-3 xl:px-7 2xl:px-8">
+    <div className="dashboard-customer-detail-full-width w-full px-5 pb-6 pt-3 xl:px-6 2xl:px-8">
       <div className="mb-2 flex items-center justify-between gap-4">
         <Link className="inline-flex items-center gap-2 text-sm font-semibold text-[#0F6BFF]" href={returnTo}>
           <CustomerOverviewIcon className="h-4 w-4" name="back" />
