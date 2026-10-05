@@ -1,11 +1,21 @@
 import { createHash, randomUUID } from "node:crypto";
 
-import { registerRetellBridgeProofPhoneCall } from "./retell-phone-call";
+import {
+  registerRetellBridgeProofPhoneCall,
+  resolveRetellBridgeProofTransferContext,
+} from "./retell-phone-call";
 
 const TELNYX_CALLS_URL = "https://api.telnyx.com/v2/calls";
 const TEST_NUMBER = "+13464138813";
 
 type TelnyxBridgeProofResult = {
+  ok: boolean;
+  message: string;
+  status: number;
+  telnyx?: Record<string, unknown> | null;
+};
+
+export type TelnyxHumanHandoffResult = {
   ok: boolean;
   message: string;
   status: number;
@@ -35,6 +45,11 @@ type TelnyxWebhookPayload = {
 
 const dialedInboundCalls = new Set<string>();
 const retellDialedInboundCalls = new Set<string>();
+const transferRequestedSessions = new Set<string>();
+const retellLegByRetellCallId = new Map<string, string>();
+const retellLegByTransferSessionNonce = new Map<string, string>();
+const retellCallByInboundCallControlId = new Map<string, string>();
+const retellCallByOwnerCallControlId = new Map<string, string>();
 
 function cleanString(value: unknown, maxLength = 500): string | null {
   return typeof value === "string" && value.trim()
@@ -180,6 +195,15 @@ async function sendTelnyxCommand({
   return { ok: true, status: 200, message: "ok", telnyx: payload };
 }
 
+async function hangUpCall(callControlId: string): Promise<TelnyxBridgeProofResult> {
+  return sendTelnyxCommand({
+    path: `/${encodeURIComponent(callControlId)}/actions/hangup`,
+    body: {
+      command_id: deterministicCommandId(`comm-09c4-hangup:${callControlId}`),
+    },
+  });
+}
+
 async function answerInboundCall(callControlId: string): Promise<TelnyxBridgeProofResult> {
   return sendTelnyxCommand({
     path: `/${encodeURIComponent(callControlId)}/actions/answer`,
@@ -217,6 +241,46 @@ async function dialOwnerAndBridge(inboundCallControlId: string): Promise<TelnyxB
       command_id: deterministicCommandId(`comm-09c3-owner-dial:${inboundCallControlId}`),
       client_state: Buffer.from(
         JSON.stringify({ proof: "comm-09c3", leg: "owner-mobile" }),
+      ).toString("base64"),
+    },
+  });
+}
+
+async function dialOwnerAndBridgeForRetellHandoff({
+  inboundCallControlId,
+  transferSessionNonce,
+}: {
+  inboundCallControlId: string;
+  transferSessionNonce: string;
+}): Promise<TelnyxBridgeProofResult> {
+  const connectionId = getTelnyxCallControlConnectionId();
+  const ownerMobile = getOwnerMobileNumber();
+  if (!connectionId || !ownerMobile) {
+    return {
+      ok: false,
+      status: 503,
+      message:
+        "TELNYX_BRIDGE_PROOF_CONNECTION_ID and WRA_BRIDGE_PROOF_OWNER_PHONE must be configured.",
+    };
+  }
+
+  return sendTelnyxCommand({
+    path: "",
+    body: {
+      connection_id: connectionId,
+      from: TEST_NUMBER,
+      to: ownerMobile,
+      link_to: inboundCallControlId,
+      bridge_intent: true,
+      bridge_on_answer: true,
+      timeout_secs: 30,
+      command_id: deterministicCommandId(`comm-09c4-owner-handoff:${inboundCallControlId}`),
+      client_state: Buffer.from(
+        JSON.stringify({
+          proof: "comm-09c4",
+          leg: "owner-mobile",
+          transfer_session_nonce: transferSessionNonce,
+        }),
       ).toString("base64"),
     },
   });
@@ -263,6 +327,8 @@ async function dialRetellAiAndBridge({
     retellCallId: retellCall.callId,
   });
 
+  retellCallByInboundCallControlId.set(inboundCallControlId, retellCall.callId);
+
   return sendTelnyxCommand({
     path: "",
     body: {
@@ -279,10 +345,83 @@ async function dialRetellAiAndBridge({
           proof: "comm-09c4",
           leg: "retell-ai",
           retell_call_id: retellCall.callId,
+          transfer_session_nonce: retellCall.transferSessionNonce,
         }),
       ).toString("base64"),
     },
   });
+}
+
+export async function requestRetellHumanHandoff({
+  transferSessionId,
+}: {
+  transferSessionId: string;
+}): Promise<TelnyxHumanHandoffResult> {
+  const context = resolveRetellBridgeProofTransferContext(transferSessionId);
+  if (!context.ok) {
+    console.warn("[telnyx-bridge-proof-handoff-rejected]", {
+      status: context.status,
+      message: context.message,
+    });
+    return {
+      ok: false,
+      status: context.status,
+      message: context.message,
+      telnyx: null,
+    };
+  }
+
+  if (context.testNumber !== TEST_NUMBER) {
+    return {
+      ok: false,
+      status: 403,
+      message: "Human handoff is limited to the COMM-09C.4 test number.",
+    };
+  }
+
+  if (transferRequestedSessions.has(context.nonce)) {
+    console.info("[telnyx-bridge-proof-handoff-duplicate-skipped]", {
+      transferSessionNonce: context.nonce,
+      inboundCallControlIdPresent: true,
+    });
+    return {
+      ok: true,
+      status: 200,
+      message: "Human handoff already requested.",
+    };
+  }
+
+  transferRequestedSessions.add(context.nonce);
+
+  console.info("[telnyx-bridge-proof-handoff-requested]", {
+    transferSessionNonce: context.nonce,
+    inboundCallControlIdPresent: true,
+    ownerDialAttempted: true,
+  });
+
+  const result = await dialOwnerAndBridgeForRetellHandoff({
+    inboundCallControlId: context.inboundCallControlId,
+    transferSessionNonce: context.nonce,
+  });
+  const responseData =
+    result.telnyx && typeof result.telnyx.data === "object" && result.telnyx.data !== null
+      ? (result.telnyx.data as Record<string, unknown>)
+      : null;
+  const ownerCallControlId = cleanString(responseData?.call_control_id, 300);
+  if (ownerCallControlId) {
+    retellCallByOwnerCallControlId.set(ownerCallControlId, context.nonce);
+  }
+
+  console.info("[telnyx-bridge-proof-handoff-result]", {
+    ok: result.ok,
+    status: result.status,
+    transferSessionNonce: context.nonce,
+    ownerCallControlIdPresent: Boolean(ownerCallControlId),
+    ownerCallLegIdPresent: Boolean(responseData?.call_leg_id),
+    ownerCallSessionIdPresent: Boolean(responseData?.call_session_id),
+  });
+
+  return result;
 }
 
 export async function handleTelnyxBridgeProofWebhook(
@@ -310,6 +449,52 @@ export async function handleTelnyxBridgeProofWebhook(
       typeof clientState?.proof === "string" ? clientState.proof.slice(0, 40) : null,
     clientStateLeg: typeof clientState?.leg === "string" ? clientState.leg.slice(0, 40) : null,
   });
+
+  if (clientState?.proof === "comm-09c4" && clientState?.leg === "retell-ai") {
+    const retellCallId = cleanString(clientState.retell_call_id, 300);
+    const transferSessionNonce = cleanString(clientState.transfer_session_nonce, 120);
+    if (retellCallId) {
+      retellLegByRetellCallId.set(retellCallId, callControlId);
+    }
+    if (transferSessionNonce) {
+      retellLegByTransferSessionNonce.set(transferSessionNonce, callControlId);
+    }
+    if (retellCallId || transferSessionNonce) {
+      console.info("[telnyx-bridge-proof-retell-leg-tracked]", {
+        eventType,
+        retellCallId: retellCallId ?? null,
+        transferSessionNonce: transferSessionNonce ?? null,
+        retellSipLegCallControlIdPresent: true,
+      });
+    }
+  }
+
+  if (clientState?.proof === "comm-09c4" && clientState?.leg === "owner-mobile") {
+    const transferSessionNonce = cleanString(clientState.transfer_session_nonce, 120);
+    if (transferSessionNonce) {
+      retellCallByOwnerCallControlId.set(callControlId, transferSessionNonce);
+    }
+
+    if (eventType === "call.answered" && transferSessionNonce) {
+      const retellLegCallControlId = retellLegByTransferSessionNonce.get(
+        transferSessionNonce,
+      );
+      console.info("[telnyx-bridge-proof-owner-answered]", {
+        transferSessionNonce,
+        ownerCallControlIdPresent: true,
+        retellSipLegKnown: Boolean(retellLegCallControlId),
+      });
+
+      if (retellLegCallControlId) {
+        const hangupResult = await hangUpCall(retellLegCallControlId);
+        console.info("[telnyx-bridge-proof-retell-leg-hangup-result]", {
+          ok: hangupResult.ok,
+          status: hangupResult.status,
+          transferSessionNonce,
+        });
+      }
+    }
+  }
 
   const isInboundDirection = direction === "incoming" || direction === "inbound";
   const isTestInboundCall =
