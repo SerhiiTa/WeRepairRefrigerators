@@ -178,9 +178,11 @@ export function DashboardTopbar() {
   return (
     <header
       className={`border-b border-[#E5E7EB] bg-white px-4 py-4 shadow-[0_8px_24px_rgba(15,23,42,0.04)] sm:px-6 lg:px-8 ${
-        isJobWorkspace || isCustomerWorkspace || isCommunicationLeadsWorkspace
-          ? "hidden lg:block"
-          : ""
+        isCustomerWorkspace
+          ? "hidden"
+          : isJobWorkspace || isCommunicationLeadsWorkspace
+            ? "hidden lg:block"
+            : ""
       }`}
     >
       <div className="mb-4 flex items-center justify-between gap-4 lg:hidden">

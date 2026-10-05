@@ -36,6 +36,14 @@ type CommunicationTimelineEventRow =
   PublicSchema["Tables"]["communication_timeline_events"]["Row"];
 type CustomerAppliancePhotoRow =
   PublicSchema["Tables"]["customer_appliance_photos"]["Row"];
+type ServiceRequestAttachmentRow =
+  PublicSchema["Tables"]["service_request_attachments"]["Row"];
+type ServiceRequestFinancialSnapshotRow =
+  PublicSchema["Tables"]["service_request_financial_snapshots"]["Row"];
+type ServiceRequestPaymentRow =
+  PublicSchema["Tables"]["service_request_payments"]["Row"];
+type ServiceRequestPhotoRow =
+  PublicSchema["Tables"]["service_request_photos"]["Row"];
 
 type CustomerListState =
   | { status: "loading" }
@@ -63,6 +71,12 @@ type CustomerDetailState =
       customerNotes: CustomerInternalNoteRow[];
       conversations: CommunicationConversationRow[];
       communicationEvents: CommunicationTimelineEventRow[];
+      payments: ServiceRequestPaymentRow[];
+      financialSnapshots: ServiceRequestFinancialSnapshotRow[];
+      servicePhotos: ServiceRequestPhotoRow[];
+      servicePhotoUrls: Record<string, string>;
+      attachments: ServiceRequestAttachmentRow[];
+      attachmentUrls: Record<string, string>;
       assetPhotos: CustomerAppliancePhotoRow[];
       assetCoverUrls: Record<string, string>;
       assetPhotoUrls: Record<string, string>;
@@ -142,6 +156,15 @@ type CustomerStatusFilter = "all" | "active" | "inactive";
 type CustomerExtraFilter = "all" | "hasOpenJobs" | "hasAssets" | "hasAddress" | "noAddress";
 type CustomerWorkspaceTab = "overview" | "jobs" | "assets" | "more" | "activity";
 type CustomerJobsFilter = "all" | "open" | "completed";
+type CustomerDesktopTab =
+  | "overview"
+  | "serviceHistory"
+  | "estimates"
+  | "invoices"
+  | "payments"
+  | "notes"
+  | "documents"
+  | "communication";
 type CustomerSortOption =
   | "lastJobNewest"
   | "lastJobOldest"
@@ -312,6 +335,1338 @@ function hasAddressFormData(form: CustomerFormState): boolean {
       form.city.trim() ||
       form.zipCode.trim(),
   );
+}
+
+function CustomerDesktopWorkspace({
+  activeTab,
+  addresses,
+  appliances,
+  attachmentAction,
+  attachments,
+  attachmentUrls,
+  conversations,
+  communicationEvents,
+  customer,
+  customerNotes,
+  estimates,
+  financialSnapshots,
+  invoices,
+  notes,
+  onAddNote,
+  onCallCustomer,
+  onEditCustomer,
+  onNewJob,
+  onOpenActions,
+  onOpenAssets,
+  onSelectJob,
+  onTabChange,
+  onUploadFiles,
+  payments,
+  returnTo,
+  selectedJobId,
+  servicePhotoUrls,
+  servicePhotos,
+  serviceRequests,
+}: {
+  activeTab: CustomerDesktopTab;
+  addresses: CustomerAddressRow[];
+  appliances: CustomerApplianceRow[];
+  attachmentAction: ActionState;
+  attachments: ServiceRequestAttachmentRow[];
+  attachmentUrls: Record<string, string>;
+  conversations: CommunicationConversationRow[];
+  communicationEvents: CommunicationTimelineEventRow[];
+  customer: CustomerRow;
+  customerNotes: CustomerInternalNoteRow[];
+  estimates: ServiceRequestEstimateRow[];
+  financialSnapshots: ServiceRequestFinancialSnapshotRow[];
+  invoices: ServiceRequestInvoiceRow[];
+  notes: ServiceRequestNoteRow[];
+  onAddNote: () => void;
+  onCallCustomer: () => void;
+  onEditCustomer: () => void;
+  onNewJob: () => void;
+  onOpenActions: () => void;
+  onOpenAssets: () => void;
+  onSelectJob: (jobId: string) => void;
+  onTabChange: (tab: CustomerDesktopTab) => void;
+  onUploadFiles: (requestId: string | null, files: FileList | null) => void;
+  payments: ServiceRequestPaymentRow[];
+  returnTo: string;
+  selectedJobId: string | null;
+  servicePhotoUrls: Record<string, string>;
+  servicePhotos: ServiceRequestPhotoRow[];
+  serviceRequests: ServiceRequestRow[];
+}) {
+  const primaryAddress = getCustomerPrimaryAddress(addresses);
+  const selectedJob =
+    serviceRequests.find((request) => request.id === selectedJobId) ?? serviceRequests[0] ?? null;
+  const selectedJobEstimates = selectedJob
+    ? estimates.filter((estimate) => estimate.service_request_id === selectedJob.id)
+    : [];
+  const selectedJobInvoices = selectedJob
+    ? invoices.filter((invoice) => invoice.service_request_id === selectedJob.id)
+    : [];
+  const selectedJobPayments = selectedJob
+    ? payments.filter((payment) => payment.service_request_id === selectedJob.id)
+    : [];
+  const selectedJobPhotos = selectedJob
+    ? servicePhotos.filter((photo) => photo.service_request_id === selectedJob.id)
+    : [];
+  const selectedJobAttachments = selectedJob
+    ? attachments.filter((attachment) => attachment.service_request_id === selectedJob.id)
+    : [];
+  const selectedJobNotes = selectedJob
+    ? notes.filter((note) => note.service_request_id === selectedJob.id)
+    : [];
+  const totalSpent = calculateCustomerTotalSpent({ invoices, payments });
+  const customerSince = getCustomerSinceLabel(customer, serviceRequests);
+  const customerType = readRecordString(customer.import_metadata, "customer_type") ?? "Customer";
+  const isWorkizCustomer = customer.source_system === "workiz";
+  const tabs: { id: CustomerDesktopTab; label: string; count?: number }[] = [
+    { id: "overview", label: "Overview" },
+    { id: "serviceHistory", label: "Service History" },
+    { id: "estimates", label: "Estimates", count: estimates.length },
+    { id: "invoices", label: "Invoices", count: invoices.length },
+    { id: "payments", label: "Payments", count: payments.length },
+    { id: "notes", label: "Notes", count: customerNotes.length + notes.length },
+    { id: "documents", label: "Documents", count: attachments.length + servicePhotos.length },
+    { id: "communication", label: "Communication", count: conversations.length },
+  ];
+
+  return (
+    <div className="w-full px-5 pb-6 pt-3 xl:px-6">
+      <div className="mb-2 flex items-center justify-between gap-4">
+        <Link className="inline-flex items-center gap-2 text-sm font-semibold text-[#0F6BFF]" href={returnTo}>
+          <CustomerOverviewIcon className="h-4 w-4" name="back" />
+          Back to customers
+        </Link>
+        <div className="flex items-center gap-2">
+          <button
+            className="rounded-lg bg-[#0F6BFF] px-4 py-2 text-sm font-black text-white shadow-sm transition hover:bg-[#0057D9]"
+            onClick={onEditCustomer}
+            type="button"
+          >
+            Edit Customer
+          </button>
+          <button
+            aria-label="More customer actions"
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50"
+            onClick={onOpenActions}
+            type="button"
+          >
+            <CustomerOverviewIcon className="h-4 w-4" name="more" />
+          </button>
+        </div>
+      </div>
+
+      <section className="grid items-center gap-5 border-b border-slate-200 pb-3 xl:grid-cols-[minmax(0,1fr)_520px]">
+        <div className="min-w-0">
+          <div className="flex items-center gap-3">
+            <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-slate-200 text-2xl font-black text-slate-900">
+              {getCustomerInitials(customer)}
+            </div>
+            <div className="min-w-0">
+              <h1 className="truncate text-3xl font-black tracking-[-0.01em] text-slate-950">
+                {getCustomerName(customer)}
+              </h1>
+              <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                <StatusPill value={customer.customer_status} />
+                {isWorkizCustomer ? <WorkizBadge /> : null}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-sm font-semibold text-slate-700">
+            <button
+              className="inline-flex items-center gap-2 text-left transition hover:text-[#0F6BFF]"
+              disabled={!customer.phone}
+              onClick={customer.phone ? onCallCustomer : undefined}
+              type="button"
+            >
+              <CustomerOverviewIcon className="h-4 w-4 text-[#0F6BFF]" name="phone" />
+              {customer.phone || "No phone"}
+            </button>
+            <a className="inline-flex items-center gap-2 transition hover:text-[#0F6BFF]" href={customer.email ? `mailto:${customer.email}` : undefined}>
+              <CustomerOverviewIcon className="h-4 w-4 text-[#0F6BFF]" name="mail" />
+              {customer.email || "No email"}
+            </a>
+            <span className="inline-flex min-w-0 items-center gap-2">
+              <CustomerOverviewIcon className="h-4 w-4 shrink-0 text-[#0F6BFF]" name="pin" />
+              <span className="truncate">{primaryAddress ? getAddressLabel(primaryAddress) : "No primary address"}</span>
+            </span>
+            {primaryAddress ? (
+              <a
+                className="inline-flex items-center gap-1 text-[#0F6BFF]"
+                href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(getAddressLabel(primaryAddress))}`}
+                rel="noreferrer"
+                target="_blank"
+              >
+                <CustomerOverviewIcon className="h-4 w-4" name="map" />
+                View on Map
+              </a>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-4 gap-3">
+          <CustomerDesktopKpi label="Total Jobs" value={serviceRequests.length.toString()} />
+          <CustomerDesktopKpi label="Total Spent" value={formatMoney(totalSpent)} />
+          <CustomerDesktopKpi label="Customer Since" value={customerSince.primary} detail={customerSince.secondary} />
+          <CustomerDesktopKpi label="Customer Type" value={customerType} icon="home" />
+        </div>
+      </section>
+
+      <nav className="flex gap-6 overflow-x-auto border-b border-slate-200 text-sm font-semibold text-slate-600">
+        {tabs.map((tab) => (
+          <button
+            className={`flex shrink-0 items-center gap-2 border-b-2 px-1 py-3 transition ${
+              activeTab === tab.id
+                ? "border-[#0F6BFF] text-[#0F6BFF]"
+                : "border-transparent hover:text-slate-950"
+            }`}
+            key={tab.id}
+            onClick={() => onTabChange(tab.id)}
+            type="button"
+          >
+            {tab.label}
+            {typeof tab.count === "number" ? <span className="text-slate-400">({tab.count})</span> : null}
+          </button>
+        ))}
+      </nav>
+
+      {activeTab === "serviceHistory" ? (
+        <div className="mt-3 grid gap-3">
+          <div className="grid items-start gap-3 xl:grid-cols-[0.82fr_1.08fr]">
+            <CustomerDesktopServiceHistory
+              estimates={estimates}
+              financialSnapshots={financialSnapshots}
+              invoices={invoices}
+              onNewJob={onNewJob}
+              onSelectJob={onSelectJob}
+              payments={payments}
+              requests={serviceRequests}
+              selectedJobId={selectedJob?.id ?? null}
+            />
+            <CustomerDesktopJobDetail
+              appliances={appliances}
+              estimates={selectedJobEstimates}
+              financialSnapshots={financialSnapshots}
+              invoices={selectedJobInvoices}
+              job={selectedJob}
+              notes={selectedJobNotes}
+              payments={selectedJobPayments}
+              customerId={customer.id}
+            />
+          </div>
+          <div className="grid items-start gap-3 xl:grid-cols-3">
+            <CustomerDesktopEstimateCard estimates={selectedJobEstimates} onViewAll={() => onTabChange("estimates")} />
+            <CustomerDesktopInvoiceCard invoices={selectedJobInvoices} onViewAll={() => onTabChange("invoices")} />
+            <CustomerDesktopPaymentCard payments={selectedJobPayments} onViewAll={() => onTabChange("payments")} />
+          </div>
+          <div className="grid items-start gap-3 xl:grid-cols-[1fr_0.9fr_0.7fr]">
+            <CustomerDesktopDocumentsPanel
+              actionState={attachmentAction}
+              attachments={selectedJobAttachments}
+              attachmentUrls={attachmentUrls}
+              onUpload={(files) => onUploadFiles(selectedJob?.id ?? null, files)}
+              photos={selectedJobPhotos}
+              photoUrls={servicePhotoUrls}
+            />
+            <CustomerDesktopTimelinePanel
+              communicationEvents={communicationEvents}
+              estimates={selectedJobEstimates}
+              invoices={selectedJobInvoices}
+              job={selectedJob}
+              notes={selectedJobNotes}
+              payments={selectedJobPayments}
+            />
+            <CustomerDesktopQuickActions
+              customer={customer}
+              onAddNote={onAddNote}
+              onCall={onCallCustomer}
+              onCreateJob={onNewJob}
+              onUpload={(files) => onUploadFiles(selectedJob?.id ?? null, files)}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      {activeTab === "overview" ? (
+        <CustomerDesktopOverview
+          addresses={addresses}
+          appliances={appliances}
+          conversations={conversations}
+          customer={customer}
+          customerNotes={customerNotes}
+          onEditCustomer={onEditCustomer}
+          onOpenAssets={onOpenAssets}
+          serviceRequests={serviceRequests}
+          timeline={buildCustomerTimeline({
+            status: "ready",
+            customer,
+            serviceRequests,
+            appliances,
+            addresses,
+            estimates,
+            invoices,
+            notes,
+            customerNotes,
+            conversations,
+            communicationEvents,
+            payments,
+            financialSnapshots,
+            servicePhotos,
+            servicePhotoUrls,
+            attachments,
+            attachmentUrls,
+            assetPhotos: [],
+            assetCoverUrls: {},
+            assetPhotoUrls: {},
+            currentRole: null,
+          })}
+        />
+      ) : null}
+
+      {activeTab === "estimates" ? (
+        <CustomerDesktopAllEstimates estimates={estimates} requests={serviceRequests} />
+      ) : null}
+      {activeTab === "invoices" ? (
+        <CustomerDesktopAllInvoices invoices={invoices} requests={serviceRequests} />
+      ) : null}
+      {activeTab === "payments" ? (
+        <CustomerDesktopAllPayments payments={payments} requests={serviceRequests} invoices={invoices} />
+      ) : null}
+      {activeTab === "notes" ? (
+        <div className="mt-4">
+          <CustomerNotesPanel
+            actionState={{ status: "idle", message: null }}
+            customerNotes={customerNotes}
+            jobNotes={notes}
+            noteBody=""
+            onNoteBodyChange={() => undefined}
+            onSubmit={onAddNote}
+            serviceRequests={serviceRequests}
+          />
+        </div>
+      ) : null}
+      {activeTab === "documents" ? (
+        <CustomerDesktopAllDocuments
+          attachments={attachments}
+          attachmentUrls={attachmentUrls}
+          photos={servicePhotos}
+          photoUrls={servicePhotoUrls}
+          requests={serviceRequests}
+        />
+      ) : null}
+      {activeTab === "communication" ? (
+        <div className="mt-4">
+          <ConversationList conversations={conversations} />
+          <div className="mt-4">
+            <TimelineList
+              items={communicationEvents.map((event) => ({
+                id: event.id,
+                at: event.event_time,
+                title: event.title,
+                body: event.body,
+                category: "call",
+                href: "/dashboard/communications",
+              }))}
+            />
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function WorkizBadge() {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-black text-[#0F6BFF]">
+      <CustomerOverviewIcon className="h-3.5 w-3.5" name="status" />
+      Imported from Workiz
+    </span>
+  );
+}
+
+function CustomerDesktopKpi({
+  detail,
+  icon,
+  label,
+  value,
+}: {
+  detail?: string;
+  icon?: CustomerOverviewIconName;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="min-h-[68px] rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+      <div className="flex items-center gap-2">
+        {icon ? <CustomerOverviewIcon className="h-4 w-4 text-slate-700" name={icon} /> : null}
+        <p className="text-lg font-black leading-5 text-slate-950">{value}</p>
+      </div>
+      <p className="mt-1 text-xs font-medium text-slate-600">{label}</p>
+      {detail ? <p className="mt-0.5 text-xs font-medium leading-4 text-slate-500">{detail}</p> : null}
+    </div>
+  );
+}
+
+function CustomerDesktopServiceHistory({
+  estimates,
+  financialSnapshots,
+  invoices,
+  onNewJob,
+  onSelectJob,
+  payments,
+  requests,
+  selectedJobId,
+}: {
+  estimates: ServiceRequestEstimateRow[];
+  financialSnapshots: ServiceRequestFinancialSnapshotRow[];
+  invoices: ServiceRequestInvoiceRow[];
+  onNewJob: () => void;
+  onSelectJob: (jobId: string) => void;
+  payments: ServiceRequestPaymentRow[];
+  requests: ServiceRequestRow[];
+  selectedJobId: string | null;
+}) {
+  return (
+    <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+      <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-2.5">
+        <h2 className="text-lg font-black text-slate-950">Service History ({requests.length})</h2>
+        <div className="flex items-center gap-2">
+          <select className="h-8 rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700">
+            <option>All Jobs</option>
+          </select>
+          <button className="h-8 rounded-md bg-[#0F6BFF] px-3 text-sm font-black text-white" onClick={onNewJob} type="button">
+            + New Job
+          </button>
+        </div>
+      </div>
+      {requests.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[560px] text-left text-sm">
+            <thead className="bg-slate-50 text-xs font-black text-slate-600">
+              <tr>
+                <th className="px-4 py-1.5">Date</th>
+                <th className="px-3 py-1.5">Job #</th>
+                <th className="px-3 py-1.5">Appliance</th>
+                <th className="px-3 py-1.5">Status</th>
+                <th className="px-3 py-1.5 text-right">Total</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {requests.map((request) => (
+                <tr
+                  className={`cursor-pointer transition hover:bg-blue-50 ${
+                    selectedJobId === request.id ? "bg-blue-50" : ""
+                  }`}
+                  key={request.id}
+                  onClick={() => onSelectJob(request.id)}
+                >
+                  <td className="whitespace-nowrap px-4 py-2 font-semibold text-slate-900">{formatDate(request.created_at)}</td>
+                  <td className="whitespace-nowrap px-3 py-2 font-semibold text-slate-800">{getDesktopJobNumber(request)}</td>
+                  <td className="px-3 py-2 font-semibold text-slate-800">{request.appliance_type || "Appliance"}</td>
+                  <td className="px-3 py-2"><StatusPill value={request.status} /></td>
+                  <td className="whitespace-nowrap px-3 py-2 text-right font-semibold text-slate-900">
+                    {formatMoney(
+                      getRequestDisplayedTotal(
+                        request,
+                        estimates,
+                        invoices,
+                        payments,
+                        financialSnapshots.find(
+                          (snapshot) => snapshot.service_request_id === request.id,
+                        ),
+                      ),
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <EmptyMessage>No jobs for this customer yet.</EmptyMessage>
+      )}
+    </section>
+  );
+}
+
+function CustomerDesktopJobDetail({
+  appliances,
+  customerId,
+  estimates,
+  financialSnapshots,
+  invoices,
+  job,
+  notes,
+  payments,
+}: {
+  appliances: CustomerApplianceRow[];
+  customerId: string;
+  estimates: ServiceRequestEstimateRow[];
+  financialSnapshots: ServiceRequestFinancialSnapshotRow[];
+  invoices: ServiceRequestInvoiceRow[];
+  job: ServiceRequestRow | null;
+  notes: ServiceRequestNoteRow[];
+  payments: ServiceRequestPaymentRow[];
+}) {
+  if (!job) {
+    return (
+      <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+        <EmptyMessage>Select a job to view service history details.</EmptyMessage>
+      </section>
+    );
+  }
+
+  const linkedAsset = job.customer_appliance_id
+    ? appliances.find((asset) => asset.id === job.customer_appliance_id) ?? null
+    : null;
+  const snapshot = financialSnapshots.find(
+    (item) => item.service_request_id === job.id,
+  );
+  const total = getRequestDisplayedTotal(job, estimates, invoices, payments, snapshot);
+  const invoice = invoices[0] ?? null;
+  const resolution = readRecordString(job.import_metadata, "resolution") ??
+    readRecordString(job.import_metadata, "work_performed") ??
+    readRecordString(job.import_metadata, "work_done");
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-xl font-black text-slate-950">
+              Job {getDesktopJobNumber(job)}
+            </h2>
+            {job.source_system === "workiz" ? <WorkizBadge /> : null}
+          </div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-600">
+            <span>{formatDate(job.created_at)}</span>
+            <span>•</span>
+            <StatusPill value={job.status} />
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Link
+            className="rounded-md border border-slate-200 px-3 py-1.5 text-sm font-black text-slate-700 transition hover:border-[#0F6BFF] hover:text-[#0F6BFF]"
+            href={getCustomerJobHref(customerId, job.id)}
+          >
+            Open in New Tab
+          </Link>
+          <button
+            aria-label="More job actions"
+            className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-500"
+            type="button"
+          >
+            <CustomerOverviewIcon className="h-4 w-4" name="more" />
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-2 flex items-center justify-between gap-3 border-b border-slate-100 pb-2">
+        <div className="text-sm font-semibold text-slate-600">
+          {getCustomerJobScheduleLabel(job)}
+        </div>
+        <div className="flex items-center gap-3">
+          <p className="text-base font-black text-slate-950">Total: {formatMoney(total)}</p>
+          {invoice ? (
+            <Link
+              className="rounded-md border border-blue-100 bg-blue-50 px-3 py-1.5 text-sm font-black text-[#0F6BFF]"
+              href={`/dashboard/leads/${job.id}?tab=finance`}
+            >
+              View Invoice
+            </Link>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-2 md:grid-cols-2">
+        <DesktopInfoCard
+          icon="briefcase"
+          label="Appliance"
+          value={[
+            job.appliance_type || linkedAsset?.appliance_type || "Not captured",
+            [job.appliance_brand || linkedAsset?.brand, linkedAsset?.model_number]
+              .filter(Boolean)
+              .join(" "),
+          ]
+            .filter(Boolean)
+            .join("\n")}
+        />
+        <DesktopInfoCard
+          icon="tool"
+          label="Problem"
+          value={job.issue_description || "No problem description captured."}
+        />
+        <DesktopInfoCard icon="pin" label="Address" value={getJobAddress(job)} />
+        <DesktopInfoCard
+          icon="status"
+          label="Resolution"
+          value={resolution || "No resolution or work performed notes saved yet."}
+        />
+        <DesktopInfoCard
+          icon="user"
+          label="Assigned Technician"
+          value={job.selected_technician_business_name || "Unassigned"}
+        />
+        <DesktopInfoCard
+          icon="tag"
+          label="Source"
+          value={getJobSourceLabel(job)}
+        />
+        <div className="md:col-span-2">
+          <DesktopInfoCard
+            icon="edit"
+            label={job.source_system === "workiz" ? "Job Notes (from Workiz)" : "Job Notes"}
+            value={notes.length > 0 ? notes.map((note) => note.body).join("\n\n") : "No job notes saved."}
+          />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function DesktopInfoCard({
+  icon,
+  label,
+  value,
+}: {
+  icon: CustomerOverviewIconName;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="grid grid-cols-[28px_minmax(0,1fr)] gap-2 rounded-lg border border-slate-200 bg-white p-3">
+      <CustomerOverviewIcon className="mt-1 h-4 w-4 text-slate-700" name={icon} />
+      <div>
+        <p className="text-sm font-black leading-5 text-slate-950">{label}</p>
+        <p className="mt-0.5 whitespace-pre-line text-sm leading-5 text-slate-700">{value || "—"}</p>
+      </div>
+    </div>
+  );
+}
+
+function CustomerDesktopEstimateCard({
+  estimates,
+  onViewAll,
+}: {
+  estimates: ServiceRequestEstimateRow[];
+  onViewAll: () => void;
+}) {
+  return (
+    <DesktopDataCard title={`Estimates (${estimates.length})`} icon="document" onViewAll={onViewAll}>
+      {estimates.length > 0 ? (
+        <table className="w-full text-left text-sm">
+          <thead className="bg-slate-50 text-xs text-slate-600">
+              <tr><th className="px-3 py-1.5">#</th><th>Date</th><th>Total</th><th>Status</th></tr>
+          </thead>
+          <tbody>
+            {estimates.slice(0, 4).map((estimate) => (
+              <tr className="border-t border-slate-100" key={estimate.id}>
+                <td className="px-3 py-2 font-semibold text-[#0F6BFF]">{estimate.estimate_number || estimate.id.slice(0, 8)}</td>
+                <td>{formatDate(estimate.created_at)}</td>
+                <td>{formatMoney(estimate.total)}</td>
+                <td><StatusPill value={estimate.estimate_status} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <EmptyMessage>No estimates for this job.</EmptyMessage>
+      )}
+    </DesktopDataCard>
+  );
+}
+
+function CustomerDesktopInvoiceCard({
+  invoices,
+  onViewAll,
+}: {
+  invoices: ServiceRequestInvoiceRow[];
+  onViewAll: () => void;
+}) {
+  return (
+    <DesktopDataCard title={`Invoices (${invoices.length})`} icon="document" onViewAll={onViewAll}>
+      {invoices.length > 0 ? (
+        <table className="w-full text-left text-sm">
+          <thead className="bg-slate-50 text-xs text-slate-600">
+            <tr><th className="px-3 py-1.5">#</th><th>Date</th><th>Total</th><th>Status</th></tr>
+          </thead>
+          <tbody>
+            {invoices.slice(0, 4).map((invoice) => (
+              <tr className="border-t border-slate-100" key={invoice.id}>
+                <td className="px-3 py-2 font-semibold text-[#0F6BFF]">{invoice.invoice_number}</td>
+                <td>{formatDate(invoice.created_at)}</td>
+                <td>{formatMoney(invoice.total)}</td>
+                <td><StatusPill value={invoice.invoice_status} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <EmptyMessage>No invoices for this job.</EmptyMessage>
+      )}
+    </DesktopDataCard>
+  );
+}
+
+function CustomerDesktopPaymentCard({
+  payments,
+  onViewAll,
+}: {
+  payments: ServiceRequestPaymentRow[];
+  onViewAll: () => void;
+}) {
+  return (
+    <DesktopDataCard title={`Payments (${payments.length})`} icon="briefcase" onViewAll={onViewAll}>
+      {payments.length > 0 ? (
+        <table className="w-full text-left text-sm">
+          <thead className="bg-slate-50 text-xs text-slate-600">
+            <tr><th className="px-3 py-1.5">Date</th><th>Amount</th><th>Method</th><th>Status</th></tr>
+          </thead>
+          <tbody>
+            {payments.slice(0, 4).map((payment) => (
+              <tr className="border-t border-slate-100" key={payment.id}>
+                <td className="px-3 py-2">{formatDate(payment.paid_at ?? payment.payment_date ?? payment.created_at)}</td>
+                <td>{formatMoney(payment.amount)}</td>
+                <td>{formatPaymentMethod(payment)}</td>
+                <td><StatusPill value={payment.payment_status} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <EmptyMessage>No payment records for this job.</EmptyMessage>
+      )}
+    </DesktopDataCard>
+  );
+}
+
+function DesktopDataCard({
+  children,
+  icon,
+  onViewAll,
+  title,
+}: {
+  children: ReactNode;
+  icon: CustomerOverviewIconName;
+  onViewAll?: () => void;
+  title: string;
+}) {
+  return (
+    <section className="overflow-hidden rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <h3 className="flex items-center gap-2 text-base font-black text-slate-950">
+          <CustomerOverviewIcon className="h-4 w-4" name={icon} />
+          {title}
+        </h3>
+        {onViewAll ? (
+          <button className="text-sm font-black text-[#0F6BFF]" onClick={onViewAll} type="button">
+            View All
+          </button>
+        ) : null}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function CustomerDesktopDocumentsPanel({
+  actionState,
+  attachments,
+  attachmentUrls,
+  onUpload,
+  photos,
+  photoUrls,
+}: {
+  actionState: ActionState;
+  attachments: ServiceRequestAttachmentRow[];
+  attachmentUrls: Record<string, string>;
+  onUpload: (files: FileList | null) => void;
+  photos: ServiceRequestPhotoRow[];
+  photoUrls: Record<string, string>;
+}) {
+  const items = [
+    ...photos.map((photo) => ({
+      id: `photo-${photo.id}`,
+      name: photo.original_filename || photo.photo_type.replaceAll("_", " "),
+      date: photo.created_at,
+      href: photoUrls[photo.id] ?? null,
+      isImage: true,
+    })),
+    ...attachments.map((attachment) => ({
+      id: `attachment-${attachment.id}`,
+      name: attachment.original_filename || attachment.attachment_category.replaceAll("_", " "),
+      date: attachment.created_at,
+      href: attachmentUrls[attachment.id] ?? null,
+      isImage: (attachment.mime_type ?? "").startsWith("image/"),
+    })),
+  ];
+
+  return (
+    <DesktopDataCard title={`Photos & Documents (${items.length})`} icon="document">
+      <div className="grid gap-3 md:grid-cols-[108px_minmax(0,1fr)]">
+        <label className="flex min-h-[104px] cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-blue-200 bg-blue-50 px-3 text-center text-sm font-black text-[#0F6BFF] transition hover:bg-blue-100">
+          <CustomerOverviewIcon className="mb-1.5 h-5 w-5" name="upload" />
+          Add Files
+          <span className="mt-1 text-xs font-medium text-slate-500">Drag & drop or click</span>
+          <input
+            className="sr-only"
+            multiple
+            onChange={(event) => {
+              onUpload(event.target.files);
+              event.target.value = "";
+            }}
+            type="file"
+          />
+        </label>
+        {items.length > 0 ? (
+          <div className="grid grid-cols-3 gap-2">
+            {items.slice(0, 6).map((item) => (
+              <a
+                className="min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white transition hover:border-[#0F6BFF]"
+                href={item.href ?? undefined}
+                key={item.id}
+                rel="noreferrer"
+                target="_blank"
+              >
+                {item.isImage && item.href ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img alt={item.name} className="aspect-[4/3] w-full object-cover" src={item.href} />
+                ) : (
+                  <div className="flex aspect-[4/3] items-center justify-center bg-slate-100 text-slate-500">
+                    <CustomerOverviewIcon className="h-8 w-8" name="document" />
+                  </div>
+                )}
+                <p className="truncate px-2 pt-1.5 text-sm font-semibold text-slate-950">{item.name}</p>
+                <p className="px-2 pb-1.5 text-xs text-slate-500">{formatDate(item.date)}</p>
+              </a>
+            ))}
+          </div>
+        ) : (
+          <EmptyMessage>No photos or documents for this job yet.</EmptyMessage>
+        )}
+      </div>
+      <div className="mt-3">
+        <ActionMessage actionState={actionState} />
+      </div>
+    </DesktopDataCard>
+  );
+}
+
+function CustomerDesktopTimelinePanel({
+  estimates,
+  invoices,
+  job,
+  notes,
+  payments,
+}: {
+  communicationEvents: CommunicationTimelineEventRow[];
+  estimates: ServiceRequestEstimateRow[];
+  invoices: ServiceRequestInvoiceRow[];
+  job: ServiceRequestRow | null;
+  notes: ServiceRequestNoteRow[];
+  payments: ServiceRequestPaymentRow[];
+}) {
+  const items: TimelineItem[] = [];
+  if (job) {
+    items.push({
+      id: `job-${job.id}`,
+      at: job.created_at,
+      title: "Job created",
+      body: job.issue_description,
+      category: "job",
+      href: `/dashboard/leads/${job.id}`,
+    });
+    if (CLOSED_JOB_STATUSES.has(job.status)) {
+      items.push({
+        id: `job-updated-${job.id}`,
+        at: job.updated_at ?? job.created_at,
+        title: "Status changed",
+        body: job.status,
+        category: "repair",
+        href: `/dashboard/leads/${job.id}`,
+      });
+    }
+  }
+  for (const estimate of estimates) {
+    items.push({
+      id: `estimate-${estimate.id}`,
+      at: estimate.sent_at ?? estimate.created_at,
+      title: `Estimate ${estimate.estimate_status}`,
+      body: `${estimate.estimate_number || "Estimate"} · ${formatMoney(estimate.total)}`,
+      category: "estimate",
+    });
+  }
+  for (const invoice of invoices) {
+    items.push({
+      id: `invoice-${invoice.id}`,
+      at: invoice.paid_at ?? invoice.sent_at ?? invoice.created_at,
+      title: invoice.paid_at ? "Invoice paid" : "Invoice created",
+      body: `${invoice.invoice_number} · ${formatMoney(invoice.total)}`,
+      category: "invoice",
+    });
+  }
+  for (const payment of payments) {
+    items.push({
+      id: `payment-${payment.id}`,
+      at: payment.paid_at ?? payment.payment_date ?? payment.created_at,
+      title: "Payment recorded",
+      body: `${formatMoney(payment.amount)} · ${payment.payment_status}`,
+      category: "payment",
+    });
+  }
+  for (const note of notes) {
+    items.push({
+      id: `note-${note.id}`,
+      at: note.created_at,
+      title: "Note added",
+      body: note.body,
+      category: "note",
+    });
+  }
+
+  return (
+    <DesktopDataCard title="Timeline" icon="calendar">
+      <TimelineList items={items.sort((left, right) => Date.parse(right.at) - Date.parse(left.at)).slice(0, 8)} />
+    </DesktopDataCard>
+  );
+}
+
+function CustomerDesktopQuickActions({
+  customer,
+  onAddNote,
+  onCall,
+  onCreateJob,
+  onUpload,
+}: {
+  customer: CustomerRow;
+  onAddNote: () => void;
+  onCall: () => void;
+  onCreateJob: () => void;
+  onUpload: (files: FileList | null) => void;
+}) {
+  return (
+    <DesktopDataCard title="Quick Actions" icon="briefcase">
+      <div className="grid grid-cols-3 gap-2">
+        <button className="rounded-lg border border-slate-200 p-3 text-sm font-black text-[#0F6BFF] transition hover:bg-blue-50" onClick={onCall} type="button">
+          <CustomerOverviewIcon className="mx-auto mb-1.5 h-5 w-5" name="phone" />
+          Call Customer
+        </button>
+        <a className="rounded-lg border border-slate-200 p-3 text-center text-sm font-black text-emerald-700 transition hover:bg-emerald-50" href={customer.phone ? `sms:${cleanPhone(customer.phone)}` : undefined}>
+          <CustomerOverviewIcon className="mx-auto mb-1.5 h-5 w-5" name="message" />
+          Send SMS
+        </a>
+        <a className="rounded-lg border border-slate-200 p-3 text-center text-sm font-black text-[#0F6BFF] transition hover:bg-blue-50" href={customer.email ? `mailto:${customer.email}` : undefined}>
+          <CustomerOverviewIcon className="mx-auto mb-1.5 h-5 w-5" name="mail" />
+          Send Email
+        </a>
+        <button className="rounded-lg border border-slate-200 p-3 text-sm font-black text-slate-800 transition hover:bg-slate-50" onClick={onAddNote} type="button">
+          <CustomerOverviewIcon className="mx-auto mb-1.5 h-5 w-5" name="edit" />
+          Add Note
+        </button>
+        <label className="cursor-pointer rounded-lg border border-slate-200 p-3 text-center text-sm font-black text-slate-800 transition hover:bg-slate-50">
+          <CustomerOverviewIcon className="mx-auto mb-1.5 h-5 w-5" name="upload" />
+          Upload Files
+          <input className="sr-only" multiple onChange={(event) => { onUpload(event.target.files); event.target.value = ""; }} type="file" />
+        </label>
+        <button className="rounded-lg border border-slate-200 p-3 text-sm font-black text-[#0F6BFF] transition hover:bg-blue-50" onClick={onCreateJob} type="button">
+          <CustomerOverviewIcon className="mx-auto mb-1.5 h-5 w-5" name="plus" />
+          Create Job
+        </button>
+      </div>
+    </DesktopDataCard>
+  );
+}
+
+function CustomerDesktopOverview({
+  addresses,
+  appliances,
+  conversations,
+  customer,
+  customerNotes,
+  onEditCustomer,
+  onOpenAssets,
+  serviceRequests,
+  timeline,
+}: {
+  addresses: CustomerAddressRow[];
+  appliances: CustomerApplianceRow[];
+  conversations: CommunicationConversationRow[];
+  customer: CustomerRow;
+  customerNotes: CustomerInternalNoteRow[];
+  onEditCustomer: () => void;
+  onOpenAssets: () => void;
+  serviceRequests: ServiceRequestRow[];
+  timeline: TimelineItem[];
+}) {
+  return (
+    <div className="mt-3 grid items-start gap-3 xl:grid-cols-[1fr_1fr]">
+      <CustomerMoreWorkspace
+        addresses={addresses}
+        customer={customer}
+        customerNotes={customerNotes}
+        lastServiceDate={getLastServiceDate(serviceRequests)}
+        noteAction={{ status: "idle", message: null }}
+        noteBody=""
+        onAddAddress={onEditCustomer}
+        onAddNote={() => undefined}
+        onEditAddress={onEditCustomer}
+        onEditCustomer={onEditCustomer}
+        onNoteBodyChange={() => undefined}
+        serviceRequestCount={serviceRequests.length}
+        totalAssets={appliances.length}
+      />
+      <div className="grid gap-3">
+        <DesktopDataCard title={`Assets / Appliances (${appliances.length})`} icon="tool" onViewAll={onOpenAssets}>
+          {appliances.length > 0 ? (
+            <div className="grid gap-2">
+              {appliances.slice(0, 5).map((asset) => (
+                <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2.5" key={asset.id}>
+                  <div>
+                    <p className="font-black text-slate-950">{getAssetDisplayName(asset)}</p>
+                    <p className="text-sm text-slate-500">
+                      {getAssetPlaceholderLabel(asset.appliance_type)} · {getAssetAddressLabel(asset, addresses)}
+                    </p>
+                  </div>
+                  <StatusPill value={getAssetStatusLabel(asset)} />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <EmptyMessage>No assets saved yet.</EmptyMessage>
+          )}
+        </DesktopDataCard>
+        <DesktopDataCard title={`Recent Jobs (${serviceRequests.length})`} icon="briefcase">
+          <JobList requests={serviceRequests.slice(0, 4)} estimates={[]} empty="No jobs yet." />
+        </DesktopDataCard>
+        <DesktopDataCard title={`Communication (${conversations.length})`} icon="message">
+          <ConversationList conversations={conversations.slice(0, 4)} />
+        </DesktopDataCard>
+        <DesktopDataCard title="Recent Activity" icon="calendar">
+          <TimelineList items={timeline.slice(-6).reverse()} />
+        </DesktopDataCard>
+      </div>
+    </div>
+  );
+}
+
+function CustomerDesktopAllEstimates({
+  estimates,
+  requests,
+}: {
+  estimates: ServiceRequestEstimateRow[];
+  requests: ServiceRequestRow[];
+}) {
+  return (
+    <div className="mt-4">
+      <DesktopDataCard title={`All Estimates (${estimates.length})`} icon="document">
+        {estimates.length > 0 ? (
+          <CustomerDesktopRecordTable
+            headers={["Estimate #", "Job", "Date", "Total", "Status"]}
+            rows={estimates.map((estimate) => {
+              const request = requests.find((item) => item.id === estimate.service_request_id);
+              return [
+                estimate.estimate_number || estimate.id.slice(0, 8),
+                request ? getDesktopJobNumber(request) : "Linked job",
+                formatDate(estimate.created_at),
+                formatMoney(estimate.total),
+                estimate.estimate_status,
+              ];
+            })}
+          />
+        ) : (
+          <EmptyMessage>No estimates linked to this customer.</EmptyMessage>
+        )}
+      </DesktopDataCard>
+    </div>
+  );
+}
+
+function CustomerDesktopAllInvoices({
+  invoices,
+  requests,
+}: {
+  invoices: ServiceRequestInvoiceRow[];
+  requests: ServiceRequestRow[];
+}) {
+  return (
+    <div className="mt-4">
+      <DesktopDataCard title={`All Invoices (${invoices.length})`} icon="document">
+        {invoices.length > 0 ? (
+          <CustomerDesktopRecordTable
+            headers={["Invoice #", "Job", "Date", "Total", "Amount Due", "Status"]}
+            rows={invoices.map((invoice) => {
+              const request = requests.find((item) => item.id === invoice.service_request_id);
+              return [
+                invoice.invoice_number,
+                request ? getDesktopJobNumber(request) : "Linked job",
+                formatDate(invoice.created_at),
+                formatMoney(invoice.total),
+                formatMoney(invoice.amount_due ?? null),
+                invoice.invoice_status,
+              ];
+            })}
+          />
+        ) : (
+          <EmptyMessage>No invoices linked to this customer.</EmptyMessage>
+        )}
+      </DesktopDataCard>
+    </div>
+  );
+}
+
+function CustomerDesktopAllPayments({
+  invoices,
+  payments,
+  requests,
+}: {
+  invoices: ServiceRequestInvoiceRow[];
+  payments: ServiceRequestPaymentRow[];
+  requests: ServiceRequestRow[];
+}) {
+  return (
+    <div className="mt-4">
+      <DesktopDataCard title={`All Payments (${payments.length})`} icon="payment">
+        {payments.length > 0 ? (
+          <CustomerDesktopRecordTable
+            headers={["Date", "Job", "Invoice", "Amount", "Method", "Status"]}
+            rows={payments.map((payment) => {
+              const request = requests.find((item) => item.id === payment.service_request_id);
+              const invoice = invoices.find((item) => item.id === payment.invoice_id);
+              return [
+                formatDate(payment.paid_at ?? payment.payment_date ?? payment.created_at),
+                request ? getDesktopJobNumber(request) : "Linked job",
+                invoice?.invoice_number ?? "—",
+                formatMoney(payment.amount),
+                formatPaymentMethod(payment),
+                payment.payment_status,
+              ];
+            })}
+          />
+        ) : (
+          <EmptyMessage>No payment records linked to this customer.</EmptyMessage>
+        )}
+      </DesktopDataCard>
+    </div>
+  );
+}
+
+function CustomerDesktopAllDocuments({
+  attachments,
+  attachmentUrls,
+  photos,
+  photoUrls,
+  requests,
+}: {
+  attachments: ServiceRequestAttachmentRow[];
+  attachmentUrls: Record<string, string>;
+  photos: ServiceRequestPhotoRow[];
+  photoUrls: Record<string, string>;
+  requests: ServiceRequestRow[];
+}) {
+  const items = [
+    ...photos.map((photo) => ({
+      id: `photo-${photo.id}`,
+      job: requests.find((request) => request.id === photo.service_request_id),
+      name: photo.original_filename || photo.photo_type.replaceAll("_", " "),
+      date: photo.created_at,
+      href: photoUrls[photo.id] ?? null,
+      type: photo.photo_type.replaceAll("_", " "),
+    })),
+    ...attachments.map((attachment) => ({
+      id: `attachment-${attachment.id}`,
+      job: requests.find((request) => request.id === attachment.service_request_id),
+      name: attachment.original_filename || attachment.attachment_category.replaceAll("_", " "),
+      date: attachment.created_at,
+      href: attachmentUrls[attachment.id] ?? null,
+      type: attachment.attachment_category.replaceAll("_", " "),
+    })),
+  ];
+
+  return (
+    <div className="mt-4">
+      <DesktopDataCard title={`Documents (${items.length})`} icon="document">
+        {items.length > 0 ? (
+          <div className="grid gap-2">
+            {items.map((item) => (
+              <a
+                className="grid grid-cols-[1fr_130px_120px_90px] items-center gap-3 rounded-lg border border-slate-200 p-3 text-sm transition hover:border-[#0F6BFF]"
+                href={item.href ?? undefined}
+                key={item.id}
+                rel="noreferrer"
+                target="_blank"
+              >
+                <span className="font-black text-slate-950">{item.name}</span>
+                <span>{item.job ? getDesktopJobNumber(item.job) : "Job"}</span>
+                <span className="capitalize">{item.type}</span>
+                <span>{formatDate(item.date)}</span>
+              </a>
+            ))}
+          </div>
+        ) : (
+          <EmptyMessage>No photos or documents linked to this customer.</EmptyMessage>
+        )}
+      </DesktopDataCard>
+    </div>
+  );
+}
+
+function CustomerDesktopRecordTable({
+  headers,
+  rows,
+}: {
+  headers: string[];
+  rows: string[][];
+}) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[720px] text-left text-sm">
+        <thead className="bg-slate-50 text-xs font-black text-slate-600">
+          <tr>{headers.map((header) => <th className="px-3 py-2" key={header}>{header}</th>)}</tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {rows.map((row, index) => (
+            <tr key={`${row[0]}-${index}`}>
+              {row.map((cell, cellIndex) => (
+                <td className="px-3 py-2.5 font-semibold text-slate-800" key={`${cell}-${cellIndex}`}>
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function calculateCustomerTotalSpent({
+  invoices,
+  payments,
+}: {
+  invoices: ServiceRequestInvoiceRow[];
+  payments: ServiceRequestPaymentRow[];
+}) {
+  if (payments.length > 0) {
+    return payments.reduce((total, payment) => total + Number(payment.amount ?? 0), 0);
+  }
+
+  return invoices
+    .filter((invoice) => invoice.invoice_status === "paid")
+    .reduce((total, invoice) => total + Number(invoice.total ?? 0), 0);
+}
+
+function getCustomerSinceLabel(customer: CustomerRow, requests: ServiceRequestRow[]) {
+  const dates = [
+    customer.imported_at,
+    customer.created_at,
+    ...requests.map((request) => request.imported_at ?? request.created_at),
+  ].filter((value): value is string => Boolean(value));
+  const earliest = dates.sort((left, right) => Date.parse(left) - Date.parse(right))[0] ?? customer.created_at;
+  const years = Math.max(0, Math.floor((Date.now() - Date.parse(earliest)) / (365.25 * 24 * 60 * 60 * 1000)));
+
+  return {
+    primary: years > 0 ? `${years} year${years === 1 ? "" : "s"}` : "New",
+    secondary: formatDate(earliest),
+  };
+}
+
+function getDesktopJobNumber(request: ServiceRequestRow): string {
+  if (request.source_system === "workiz" && request.external_job_id) {
+    return request.external_job_id;
+  }
+
+  return getShortJobNumber(request);
+}
+
+function getRequestDisplayedTotal(
+  request: ServiceRequestRow,
+  estimates: ServiceRequestEstimateRow[],
+  invoices: ServiceRequestInvoiceRow[],
+  payments: ServiceRequestPaymentRow[],
+  snapshot?: ServiceRequestFinancialSnapshotRow | null,
+) {
+  if (snapshot?.total != null) {
+    return Number(snapshot.total);
+  }
+
+  const requestPayments = payments.filter((payment) => payment.service_request_id === request.id);
+  if (requestPayments.length > 0) {
+    return requestPayments.reduce((total, payment) => total + Number(payment.amount ?? 0), 0);
+  }
+
+  const requestInvoices = invoices.filter((invoice) => invoice.service_request_id === request.id);
+  if (requestInvoices.length > 0) {
+    return requestInvoices.reduce((total, invoice) => total + Number(invoice.total ?? 0), 0);
+  }
+
+  const requestEstimates = estimates.filter((estimate) => estimate.service_request_id === request.id);
+  if (requestEstimates.length > 0) {
+    return requestEstimates.reduce((total, estimate) => total + Number(estimate.total ?? 0), 0);
+  }
+
+  return 0;
+}
+
+function getJobSourceLabel(request: ServiceRequestRow): string {
+  if (request.source_system === "workiz") {
+    return "Workiz";
+  }
+
+  const source = readRecordString(request.attribution, "source") ??
+    readRecordString(request.attribution, "provider");
+
+  if (source) {
+    return formatHumanSourceLabel(source);
+  }
+
+  if (request.inbound_source_id && !isUuidLike(request.inbound_source_id)) {
+    return formatHumanSourceLabel(request.inbound_source_id);
+  }
+
+  return "—";
+}
+
+function isUuidLike(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function formatHumanSourceLabel(value: string): string {
+  const normalized = value.trim().toLowerCase().replace(/[_-]+/g, " ");
+  const knownLabels: Record<string, string> = {
+    google: "Google",
+    manual: "Manual",
+    other: "Other",
+    phone: "Phone",
+    referral: "Referral",
+    "repeat customer": "Repeat Customer",
+    website: "Website",
+    workiz: "Workiz",
+    wra: "WRA",
+  };
+
+  if (knownLabels[normalized]) {
+    return knownLabels[normalized];
+  }
+
+  if (isUuidLike(value)) {
+    return "—";
+  }
+
+  return normalized
+    .split(" ")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ") || "—";
+}
+
+function formatPaymentMethod(payment: ServiceRequestPaymentRow): string {
+  const method = payment.payment_method || payment.payment_type || "Payment";
+  return payment.card_last4 ? `${method} •••• ${payment.card_last4}` : method;
 }
 
 function normalizeAddressText(value: string | null | undefined): string {
@@ -949,7 +2304,9 @@ type CustomerOverviewIconName =
   | "calendar"
   | "chevron"
   | "close"
+  | "document"
   | "edit"
+  | "home"
   | "mail"
   | "map"
   | "message"
@@ -957,9 +2314,12 @@ type CustomerOverviewIconName =
   | "payment"
   | "phone"
   | "pin"
+  | "plus"
   | "search"
   | "status"
+  | "tag"
   | "tool"
+  | "upload"
   | "user";
 
 function CustomerOverviewIcon({
@@ -1084,6 +2444,48 @@ function CustomerOverviewIcon({
       <svg className={className} fill="none" viewBox="0 0 24 24" aria-hidden="true">
         <path d="M4 7h16v10H4V7Z" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
         <path d="M4 10h16M15 14h2" stroke="currentColor" strokeLinecap="round" strokeWidth="1.9" />
+      </svg>
+    );
+  }
+
+  if (name === "document") {
+    return (
+      <svg className={className} fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M7 3.5h7l3 3V20H7V3.5Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.9" />
+        <path d="M14 3.8V7h3M9.5 11h5M9.5 14h5M9.5 17h3" stroke="currentColor" strokeLinecap="round" strokeWidth="1.8" />
+      </svg>
+    );
+  }
+
+  if (name === "upload") {
+    return (
+      <svg className={className} fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 15V4M8 8l4-4 4 4M5 16v3h14v-3" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+      </svg>
+    );
+  }
+
+  if (name === "plus") {
+    return (
+      <svg className={className} fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 5v14M5 12h14" stroke="currentColor" strokeLinecap="round" strokeWidth="2.1" />
+      </svg>
+    );
+  }
+
+  if (name === "home") {
+    return (
+      <svg className={className} fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m4 11 8-7 8 7v9h-5v-6H9v6H4v-9Z" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+      </svg>
+    );
+  }
+
+  if (name === "tag") {
+    return (
+      <svg className={className} fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 5v6.5L12.5 20 20 12.5 11.5 4H5a1 1 0 0 0-1 1Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.9" />
+        <path d="M8 8h.01" stroke="currentColor" strokeLinecap="round" strokeWidth="3" />
       </svg>
     );
   }
@@ -2424,6 +3826,8 @@ export function DashboardCustomerDetail({
 
     return new URLSearchParams(window.location.search).get("asset");
   });
+  const [desktopTab, setDesktopTab] = useState<CustomerDesktopTab>("serviceHistory");
+  const [selectedDesktopJobId, setSelectedDesktopJobId] = useState<string | null>(null);
   const [jobsFilter, setJobsFilter] = useState<CustomerJobsFilter>("all");
   const [showArchivedAssets, setShowArchivedAssets] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
@@ -2448,6 +3852,10 @@ export function DashboardCustomerDetail({
   const [isAssetFormOpen, setIsAssetFormOpen] = useState(false);
   const [isAddressEditorOpen, setIsAddressEditorOpen] = useState(false);
   const [noteAction, setNoteAction] = useState<ActionState>({
+    status: "idle",
+    message: null,
+  });
+  const [attachmentAction, setAttachmentAction] = useState<ActionState>({
     status: "idle",
     message: null,
   });
@@ -2551,7 +3959,16 @@ export function DashboardCustomerDetail({
         (conversationsResult.data ?? []) as CommunicationConversationRow[]
       ).map((conversation) => conversation.id);
 
-      const [estimatesResult, invoicesResult, notesResult, timelineResult] =
+      const [
+        estimatesResult,
+        invoicesResult,
+        notesResult,
+        timelineResult,
+        paymentsResult,
+        financialSnapshotsResult,
+        servicePhotosResult,
+        attachmentsResult,
+      ] =
         serviceRequestIds.length > 0 || conversationIds.length > 0
           ? await Promise.all([
               serviceRequestIds.length > 0
@@ -2582,8 +3999,40 @@ export function DashboardCustomerDetail({
                     .in("conversation_id", conversationIds)
                     .order("event_time", { ascending: true })
                 : Promise.resolve({ data: [], error: null }),
+              serviceRequestIds.length > 0
+                ? supabase
+                    .from("service_request_payments")
+                    .select("*")
+                    .in("service_request_id", serviceRequestIds)
+                    .order("created_at", { ascending: false })
+                : Promise.resolve({ data: [], error: null }),
+              serviceRequestIds.length > 0
+                ? supabase
+                    .from("service_request_financial_snapshots")
+                    .select("*")
+                    .in("service_request_id", serviceRequestIds)
+                    .order("created_at", { ascending: false })
+                : Promise.resolve({ data: [], error: null }),
+              serviceRequestIds.length > 0
+                ? supabase
+                    .from("service_request_photos")
+                    .select("*")
+                    .in("service_request_id", serviceRequestIds)
+                    .order("created_at", { ascending: false })
+                : Promise.resolve({ data: [], error: null }),
+              serviceRequestIds.length > 0
+                ? supabase
+                    .from("service_request_attachments")
+                    .select("*")
+                    .in("service_request_id", serviceRequestIds)
+                    .order("created_at", { ascending: false })
+                : Promise.resolve({ data: [], error: null }),
             ])
           : [
+              { data: [], error: null },
+              { data: [], error: null },
+              { data: [], error: null },
+              { data: [], error: null },
               { data: [], error: null },
               { data: [], error: null },
               { data: [], error: null },
@@ -2591,7 +4040,11 @@ export function DashboardCustomerDetail({
             ];
       const coverPhotoUrls: Record<string, string> = {};
       const assetPhotoUrls: Record<string, string> = {};
+      const servicePhotoUrls: Record<string, string> = {};
+      const attachmentUrls: Record<string, string> = {};
       let loadedAssetPhotos: CustomerAppliancePhotoRow[] = [];
+      const loadedServicePhotos = (servicePhotosResult.data ?? []) as ServiceRequestPhotoRow[];
+      const loadedAttachments = (attachmentsResult.data ?? []) as ServiceRequestAttachmentRow[];
 
       if (coverPhotoIds.length > 0) {
         const { data: coverPhotos } = await supabase
@@ -2644,6 +4097,34 @@ export function DashboardCustomerDetail({
         );
       }
 
+      if (loadedServicePhotos.length > 0) {
+        await Promise.all(
+          loadedServicePhotos.map(async (photo) => {
+            const { data: signedUrlData } = await supabase.storage
+              .from(SERVICE_REQUEST_PHOTO_BUCKET)
+              .createSignedUrl(photo.storage_path, 60 * 30);
+
+            if (signedUrlData?.signedUrl) {
+              servicePhotoUrls[photo.id] = signedUrlData.signedUrl;
+            }
+          }),
+        );
+      }
+
+      if (loadedAttachments.length > 0) {
+        await Promise.all(
+          loadedAttachments.map(async (attachment) => {
+            const { data: signedUrlData } = await supabase.storage
+              .from(attachment.storage_bucket)
+              .createSignedUrl(attachment.storage_path, 60 * 30);
+
+            if (signedUrlData?.signedUrl) {
+              attachmentUrls[attachment.id] = signedUrlData.signedUrl;
+            }
+          }),
+        );
+      }
+
       if (isMounted) {
         setState({
           status: "ready",
@@ -2657,6 +4138,12 @@ export function DashboardCustomerDetail({
           customerNotes: (customerNotesResult.data ?? []) as CustomerInternalNoteRow[],
           conversations: (conversationsResult.data ?? []) as CommunicationConversationRow[],
           communicationEvents: (timelineResult.data ?? []) as CommunicationTimelineEventRow[],
+          payments: (paymentsResult.data ?? []) as ServiceRequestPaymentRow[],
+          financialSnapshots: (financialSnapshotsResult.data ?? []) as ServiceRequestFinancialSnapshotRow[],
+          servicePhotos: loadedServicePhotos,
+          servicePhotoUrls,
+          attachments: loadedAttachments,
+          attachmentUrls,
           assetPhotos: loadedAssetPhotos,
           assetCoverUrls: coverPhotoUrls,
           assetPhotoUrls,
@@ -3107,6 +4594,71 @@ export function DashboardCustomerDetail({
     return true;
   }
 
+  async function uploadSelectedJobAttachments({
+    requestId,
+    files,
+  }: {
+    requestId: string | null;
+    files: FileList | File[] | null | undefined;
+  }) {
+    const selectedFiles = Array.from(files ?? []);
+
+    if (!requestId) {
+      setAttachmentAction({ status: "error", message: "Select a job before uploading files." });
+      return;
+    }
+
+    if (selectedFiles.length === 0) {
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      setAttachmentAction({ status: "error", message: "Attachment upload is not configured." });
+      return;
+    }
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData.session?.access_token;
+
+    if (!accessToken) {
+      setAttachmentAction({ status: "error", message: "A logged-in dashboard session is required." });
+      return;
+    }
+
+    const formData = new FormData();
+    for (const file of selectedFiles) {
+      formData.append("files", file);
+    }
+
+    setAttachmentAction({ status: "saving", message: "Uploading files..." });
+
+    const response = await fetch(
+      `/api/service-requests/${encodeURIComponent(requestId)}/attachments`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}` },
+        body: formData,
+      },
+    );
+    const data = (await response.json().catch(() => null)) as unknown;
+
+    if (!response.ok) {
+      setAttachmentAction({
+        status: "error",
+        message: readRecordString(data, "message") ?? "Files could not be uploaded.",
+      });
+      return;
+    }
+
+    const uploadedCount = readNumber(asRecord(data), "uploadedCount") ?? selectedFiles.length;
+    setAttachmentAction({
+      status: "success",
+      message: `${uploadedCount} file${uploadedCount === 1 ? "" : "s"} uploaded.`,
+    });
+    refreshCustomer();
+  }
+
   function openCustomerActions() {
     setCustomerAction({ status: "idle", message: null });
     setIsQuickNoteComposerOpen(false);
@@ -3252,7 +4804,46 @@ export function DashboardCustomerDetail({
   const shouldRenderLegacyDetails = false;
 
   return (
-    <div className="mx-auto w-full max-w-[430px] bg-[#F8FAFC] px-3 pb-6 pt-3 sm:px-4 lg:max-w-3xl lg:rounded-[28px] lg:border lg:border-slate-200 lg:p-6 lg:shadow-[0_12px_32px_rgba(15,23,42,0.06)]">
+    <>
+      <div className="hidden lg:block">
+        <CustomerDesktopWorkspace
+          activeTab={desktopTab}
+          addresses={state.addresses}
+          appliances={state.appliances}
+          attachmentAction={attachmentAction}
+          attachments={state.attachments}
+          attachmentUrls={state.attachmentUrls}
+          conversations={state.conversations}
+          communicationEvents={state.communicationEvents}
+          customer={customer}
+          customerNotes={state.customerNotes}
+          estimates={state.estimates}
+          financialSnapshots={state.financialSnapshots}
+          invoices={state.invoices}
+          notes={state.notes}
+          onCallCustomer={() => setIsBrowserCallOpen(true)}
+          onAddNote={() => void addCustomerNote()}
+          onEditCustomer={() => setIsProfileEditorOpen(true)}
+          onNewJob={() => {
+            router.push(`/dashboard/leads?newJob=1&customerId=${encodeURIComponent(customer.id)}`);
+          }}
+          onOpenActions={openCustomerActions}
+          onOpenAssets={() => selectWorkspaceTab("assets")}
+          onSelectJob={setSelectedDesktopJobId}
+          onTabChange={setDesktopTab}
+          onUploadFiles={(requestId, files) =>
+            void uploadSelectedJobAttachments({ requestId, files })
+          }
+          payments={state.payments}
+          returnTo={returnTo}
+          selectedJobId={selectedDesktopJobId}
+          servicePhotoUrls={state.servicePhotoUrls}
+          servicePhotos={state.servicePhotos}
+          serviceRequests={state.serviceRequests}
+        />
+      </div>
+
+    <div className="mx-auto w-full max-w-[430px] bg-[#F8FAFC] px-3 pb-6 pt-3 sm:px-4 lg:hidden">
       <header className="rounded-[22px] bg-white px-3 pb-4 pt-3 shadow-[0_10px_30px_rgba(15,23,42,0.06)] ring-1 ring-slate-200/80">
         <div className="flex items-center justify-between gap-3">
           <Link
@@ -3976,6 +5567,7 @@ export function DashboardCustomerDetail({
         </div>
       ) : null}
     </div>
+    </>
   );
 }
 
