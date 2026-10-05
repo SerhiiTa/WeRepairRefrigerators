@@ -1,11 +1,10 @@
 import { NextResponse } from "next/server";
 
-import { createUserScopedServerClient } from "@/server/onboarding/supabase";
 import {
   fetchRetellCallRecording,
   getBestRetellRecordingAudioUrl,
 } from "@/server/communications/retell-recording";
-import { extractBearerToken } from "@/server/intake/intake-service";
+import { requireHomeFixPrivateAccess } from "@/server/security/homefix-private-access";
 import type { Json } from "@/lib/supabase/types";
 
 function fail(message: string, status = 400) {
@@ -114,16 +113,11 @@ async function buildTelnyxRecording(call: {
 }
 
 export async function GET(request: Request) {
-  const accessToken = extractBearerToken(request);
-
-  if (!accessToken) {
-    return fail("A logged-in dashboard session is required.", 401);
+  const privateAccess = await requireHomeFixPrivateAccess(request);
+  if (!privateAccess.ok) {
+    return privateAccess.response;
   }
-
-  const supabase = createUserScopedServerClient(accessToken);
-  if (!supabase) {
-    return fail("Supabase is not configured for recording lookup.", 503);
-  }
+  const supabase = privateAccess.context.supabase;
 
   const url = new URL(request.url);
   const conversationId = url.searchParams.get("conversationId")?.trim();
@@ -131,13 +125,6 @@ export async function GET(request: Request) {
 
   if (!conversationId && !callId) {
     return fail("Conversation or call is required.", 400);
-  }
-
-  const { data: userData, error: userError } =
-    await supabase.auth.getUser(accessToken);
-
-  if (userError || !userData.user) {
-    return fail("A valid dashboard session is required.", 401);
   }
 
   const { data: conversation, error } = conversationId

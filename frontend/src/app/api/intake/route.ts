@@ -2,22 +2,22 @@ import { NextResponse } from "next/server";
 
 import {
   createIntakeRequest,
-  extractBearerToken,
   formatIntakeError,
   listIntakeRequests,
   type IntakeWritePayload,
 } from "@/server/intake/intake-service";
+import { requireHomeFixPrivateAccess } from "@/server/security/homefix-private-access";
 
 function fail(message: string, status = 400) {
   return NextResponse.json({ ok: false, message }, { status });
 }
 
 export async function GET(request: Request) {
-  const accessToken = extractBearerToken(request);
-
-  if (!accessToken) {
-    return fail("A logged-in dashboard session is required.", 401);
+  const privateAccess = await requireHomeFixPrivateAccess(request);
+  if (!privateAccess.ok) {
+    return privateAccess.response;
   }
+  const accessToken = privateAccess.context.accessToken;
 
   try {
     const result = await listIntakeRequests(accessToken);
@@ -32,11 +32,11 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const accessToken = extractBearerToken(request);
-
-  if (!accessToken) {
-    return fail("A logged-in dashboard session is required.", 401);
+  const privateAccess = await requireHomeFixPrivateAccess(request);
+  if (!privateAccess.ok) {
+    return privateAccess.response;
   }
+  const accessToken = privateAccess.context.accessToken;
 
   let payload: IntakeWritePayload;
 

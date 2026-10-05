@@ -3,8 +3,7 @@ import { Buffer } from "node:buffer";
 
 import { getSupabaseServiceRoleClient } from "@/lib/supabase/service-role";
 import type { Database } from "@/lib/supabase/types";
-import { extractBearerToken } from "@/server/intake/intake-service";
-import { createUserScopedServerClient } from "@/server/onboarding/supabase";
+import { requireHomeFixPrivateAccess } from "@/server/security/homefix-private-access";
 
 export const dynamic = "force-dynamic";
 
@@ -80,24 +79,11 @@ async function requireAvatarOwner(
     }
   | { ok: false; response: NextResponse }
 > {
-  const accessToken = extractBearerToken(request);
-
-  if (!accessToken) {
-    return { ok: false, response: fail("A logged-in dashboard session is required.", 401) };
+  const privateAccess = await requireHomeFixPrivateAccess(request);
+  if (!privateAccess.ok) {
+    return { ok: false, response: privateAccess.response };
   }
-
-  const userScopedSupabase = createUserScopedServerClient(accessToken);
-
-  if (!userScopedSupabase) {
-    return { ok: false, response: fail("Supabase is not configured for client avatars.", 503) };
-  }
-
-  const { data: userData, error: userError } =
-    await userScopedSupabase.auth.getUser(accessToken);
-
-  if (userError || !userData.user) {
-    return { ok: false, response: fail("A valid authenticated session is required.", 401) };
-  }
+  const userScopedSupabase = privateAccess.context.supabase;
 
   const { data: requestRow, error: requestError } = await userScopedSupabase
     .from("service_requests")
@@ -152,7 +138,7 @@ async function requireAvatarOwner(
 
     return {
       ok: true,
-      accessToken,
+      accessToken: privateAccess.context.accessToken,
       owner: {
         type: "customer",
         id: customerId,
@@ -166,7 +152,7 @@ async function requireAvatarOwner(
 
   return {
     ok: true,
-    accessToken,
+    accessToken: privateAccess.context.accessToken,
     owner: {
       type: "service_request",
       id,

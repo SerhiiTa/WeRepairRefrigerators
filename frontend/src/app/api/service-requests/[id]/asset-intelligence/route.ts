@@ -8,7 +8,7 @@ import {
   analyzeAssetLabelImage,
   toAssetIntelligenceRpcIdentity,
 } from "@/server/asset-intelligence/vision";
-import { createUserScopedServerClient } from "@/server/onboarding/supabase";
+import { requireHomeFixPrivateAccess } from "@/server/security/homefix-private-access";
 
 type AssetIntelligenceRouteProps = {
   params: Promise<{
@@ -18,18 +18,6 @@ type AssetIntelligenceRouteProps = {
 
 function fail(message: string, status = 400) {
   return NextResponse.json({ ok: false, message }, { status });
-}
-
-function extractBearerToken(request: Request): string | null {
-  const header = request.headers.get("authorization");
-
-  if (!header?.startsWith("Bearer ")) {
-    return null;
-  }
-
-  const token = header.slice("Bearer ".length).trim();
-
-  return token.length > 0 ? token : null;
 }
 
 function isUuid(value: string): boolean {
@@ -79,10 +67,9 @@ export async function POST(
   request: Request,
   { params }: AssetIntelligenceRouteProps,
 ) {
-  const accessToken = extractBearerToken(request);
-
-  if (!accessToken) {
-    return fail("A logged-in dashboard session is required.", 401);
+  const privateAccess = await requireHomeFixPrivateAccess(request);
+  if (!privateAccess.ok) {
+    return privateAccess.response;
   }
 
   let payload: { photoId?: unknown; retry?: unknown };
@@ -101,18 +88,7 @@ export async function POST(
   }
 
   const { id: requestId } = await params;
-  const supabase = createUserScopedServerClient(accessToken);
-
-  if (!supabase) {
-    return fail("Supabase is not configured for Asset Intelligence.", 503);
-  }
-
-  const { data: userData, error: userError } =
-    await supabase.auth.getUser(accessToken);
-
-  if (userError || !userData.user) {
-    return fail("A valid authenticated session is required.", 401);
-  }
+  const supabase = privateAccess.context.supabase;
 
   const { data: photo, error: photoError } = await supabase
     .from("service_request_photos")

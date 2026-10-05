@@ -10,7 +10,6 @@ import {
   type RepairProposalGenerationInput,
 } from "@/server/finance/repair-proposal-providers";
 import { repairProposalDraftToEstimateDraftAgentResult } from "@/server/finance/repair-proposal-schema";
-import { extractBearerToken } from "@/server/intake/intake-service";
 import { createUserScopedServerClient } from "@/server/onboarding/supabase";
 import {
   rankPriceBookRepairSolutions,
@@ -20,6 +19,7 @@ import {
   type PriceBookSelectionGroup,
   type PriceBookSelectionItem,
 } from "@/server/price-book/selection";
+import { requireHomeFixPrivateAccess } from "@/server/security/homefix-private-access";
 
 export const dynamic = "force-dynamic";
 
@@ -141,24 +141,17 @@ async function loadPriceBookCandidates({
 }
 
 export async function POST(request: Request) {
-  const accessToken = extractBearerToken(request);
-
-  if (!accessToken) {
-    return fail("A logged-in dashboard session is required.", 401);
+  const privateAccess = await requireHomeFixPrivateAccess(request);
+  if (!privateAccess.ok) {
+    return privateAccess.response;
   }
+  const accessToken = privateAccess.context.accessToken;
 
   const userScoped = createUserScopedServerClient(accessToken);
   const serviceRole = getSupabaseServiceRoleClient();
 
   if (!userScoped) {
     return fail("Repair Proposal generation is not configured.", 503);
-  }
-
-  const { data: userData, error: userError } =
-    await userScoped.auth.getUser(accessToken);
-
-  if (userError || !userData.user) {
-    return fail("A valid authenticated session is required.", 401);
   }
 
   let payload: Record<string, unknown>;
@@ -231,7 +224,7 @@ export async function POST(request: Request) {
     ? await loadPriceBookCandidates({
         userScoped: userScoped as unknown as DashboardCompanyContextClient,
         serviceRole: serviceRole as unknown as DashboardCompanyContextClient & PriceBookDb,
-        profileId: userData.user.id,
+        profileId: privateAccess.context.userId,
         context: {
           serviceRequestId,
           applianceType: generationInput.applianceType,

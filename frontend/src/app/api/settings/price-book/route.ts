@@ -5,8 +5,7 @@ import {
   resolveDashboardCompanyContext,
   type DashboardCompanyContextClient,
 } from "@/server/dashboard/company-context";
-import { extractBearerToken } from "@/server/intake/intake-service";
-import { createUserScopedServerClient } from "@/server/onboarding/supabase";
+import { requireHomeFixPrivateAccess } from "@/server/security/homefix-private-access";
 
 export const dynamic = "force-dynamic";
 
@@ -315,38 +314,20 @@ async function readDevMembershipDiagnostics({
 }
 
 async function requireSession(request: Request) {
-  const accessToken = extractBearerToken(request);
+  const privateAccess = await requireHomeFixPrivateAccess(request);
 
-  if (!accessToken) {
+  if (!privateAccess.ok) {
     return {
       ok: false as const,
-      response: fail("A logged-in dashboard session is required.", 401),
+      response: privateAccess.response,
     };
   }
-
-  const userScoped = createUserScopedServerClient(accessToken);
-
-  if (!userScoped) {
-    return {
-      ok: false as const,
-      response: fail("Supabase is not configured for Price Book.", 503),
-    };
-  }
-
-  const { data: userData, error: userError } =
-    await userScoped.auth.getUser(accessToken);
-
-  if (userError || !userData.user) {
-    return {
-      ok: false as const,
-      response: fail("A valid authenticated session is required.", 401),
-    };
-  }
+  const userScoped = privateAccess.context.supabase;
 
   const { data: profile, error: profileError } = await userScoped
     .from("profiles")
     .select("id,email,full_name,role,status")
-    .eq("id", userData.user.id)
+    .eq("id", privateAccess.context.userId)
     .maybeSingle();
 
   if (profileError || !profile) {

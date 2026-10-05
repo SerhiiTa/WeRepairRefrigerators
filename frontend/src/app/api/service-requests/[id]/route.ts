@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { createUserScopedServerClient } from "@/server/onboarding/supabase";
+import { requireHomeFixPrivateAccess } from "@/server/security/homefix-private-access";
 
 type ServiceRequestRouteProps = {
   params: Promise<{
@@ -10,18 +10,6 @@ type ServiceRequestRouteProps = {
 
 function fail(message: string, status = 400) {
   return NextResponse.json({ ok: false, message }, { status });
-}
-
-function extractBearerToken(request: Request): string | null {
-  const header = request.headers.get("authorization");
-
-  if (!header?.startsWith("Bearer ")) {
-    return null;
-  }
-
-  const token = header.slice("Bearer ".length).trim();
-
-  return token.length > 0 ? token : null;
 }
 
 function isUuid(value: string): boolean {
@@ -63,24 +51,11 @@ function formatDeleteJobError(message: string): string {
 }
 
 export async function DELETE(request: Request, { params }: ServiceRequestRouteProps) {
-  const accessToken = extractBearerToken(request);
-
-  if (!accessToken) {
-    return fail("A logged-in dashboard session is required.", 401);
+  const privateAccess = await requireHomeFixPrivateAccess(request);
+  if (!privateAccess.ok) {
+    return privateAccess.response;
   }
-
-  const supabase = createUserScopedServerClient(accessToken);
-
-  if (!supabase) {
-    return fail("Supabase is not configured for jobs.", 503);
-  }
-
-  const { data: userData, error: userError } =
-    await supabase.auth.getUser(accessToken);
-
-  if (userError || !userData.user) {
-    return fail("A valid authenticated session is required.", 401);
-  }
+  const supabase = privateAccess.context.supabase;
 
   const { id } = await params;
 

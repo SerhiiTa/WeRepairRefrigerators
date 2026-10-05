@@ -14,6 +14,7 @@ import {
   getCurrentUserProfile,
   type CurrentUserProfileStep,
 } from "@/lib/auth/profile";
+import { evaluateHomeFixPrivateAccess } from "@/lib/auth/homefix-private-access";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type DashboardAuthGateProps = {
@@ -140,10 +141,18 @@ export function DashboardAuthGate({ children }: DashboardAuthGateProps) {
         recordStep({
           name: "evaluating_access",
           status: "checking",
-          message: "Evaluating dashboard role, status, and onboarding access.",
+          message:
+            "Evaluating dashboard role, status, onboarding, and HomeFix access.",
         });
 
-        const decision = evaluateDashboardAccess({ pathname, profileResult });
+        const homeFixAccess = await evaluateHomeFixPrivateAccess(
+          getSupabaseBrowserClient(),
+        );
+        const decision = evaluateDashboardAccess({
+          pathname,
+          profileResult,
+          homeFixPrivateAccessAllowed: homeFixAccess.allowed,
+        });
         recordStep({
           name: "final_decision",
           status: decision.allowed ? "success" : "warning",

@@ -2,10 +2,9 @@ import { NextResponse } from "next/server";
 
 import {
   convertIntakeRequest,
-  extractBearerToken,
   formatIntakeError,
 } from "@/server/intake/intake-service";
-import { createUserScopedServerClient } from "@/server/onboarding/supabase";
+import { requireHomeFixPrivateAccess } from "@/server/security/homefix-private-access";
 
 type ConversationCreateJobRouteProps = {
   params: Promise<{
@@ -66,18 +65,14 @@ export async function POST(
   request: Request,
   { params }: ConversationCreateJobRouteProps,
 ) {
-  const accessToken = extractBearerToken(request);
-
-  if (!accessToken) {
-    return fail("A logged-in dashboard session is required.", 401);
+  const privateAccess = await requireHomeFixPrivateAccess(request);
+  if (!privateAccess.ok) {
+    return privateAccess.response;
   }
+  const accessToken = privateAccess.context.accessToken;
 
   const { id } = await params;
-  const supabase = createUserScopedServerClient(accessToken);
-
-  if (!supabase) {
-    return fail("Communications is not configured for job creation.", 503);
-  }
+  const supabase = privateAccess.context.supabase;
 
   try {
     const body = (await request.json().catch(() => ({}))) as {

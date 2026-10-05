@@ -11,6 +11,7 @@ export type DashboardAccessBlockReason =
   | "onboarding_required"
   | "inactive_profile"
   | "role_not_allowed"
+  | "homefix_private_required"
   | "dev_bypass"
   | "allowed";
 
@@ -77,9 +78,11 @@ export function isProfileOnboardingComplete(profile: ProfileRow): boolean {
 export function evaluateDashboardAccess({
   pathname,
   profileResult,
+  homeFixPrivateAccessAllowed = true,
 }: {
   pathname: string;
   profileResult: CurrentUserProfileResult | null;
+  homeFixPrivateAccessAllowed?: boolean;
 }): DashboardAccessDecision {
   if (isDashboardDevPath(pathname)) {
     return {
@@ -165,6 +168,17 @@ export function evaluateDashboardAccess({
       title: "Dashboard role required",
       description:
         "This account does not have a technician, company owner, or admin dashboard role.",
+    };
+  }
+
+  if (!homeFixPrivateAccessAllowed) {
+    return {
+      allowed: false,
+      reason: "homefix_private_required",
+      redirectTo: createAccountStatusRedirect("homefix-private"),
+      title: "HomeFix access required",
+      description:
+        "HomeFixOS is a private internal HomeFix system. Dashboard access is limited to platform admin and authorized HomeFix team members.",
     };
   }
 

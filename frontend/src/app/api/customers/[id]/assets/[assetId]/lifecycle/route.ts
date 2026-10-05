@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getSupabaseServiceRoleClient } from "@/lib/supabase/service-role";
-import { createUserScopedServerClient } from "@/server/onboarding/supabase";
+import { requireHomeFixPrivateAccess } from "@/server/security/homefix-private-access";
 
 const CUSTOMER_APPLIANCE_PHOTO_BUCKET = "customer-appliance-photos";
 
@@ -16,18 +16,6 @@ function fail(message: string, status = 400) {
   return NextResponse.json({ ok: false, message }, { status });
 }
 
-function extractBearerToken(request: Request): string | null {
-  const header = request.headers.get("authorization");
-
-  if (!header?.startsWith("Bearer ")) {
-    return null;
-  }
-
-  const token = header.slice("Bearer ".length).trim();
-
-  return token.length > 0 ? token : null;
-}
-
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
     value,
@@ -35,27 +23,15 @@ function isUuid(value: string): boolean {
 }
 
 async function requireAssetAccess(request: Request, customerId: string, assetId: string) {
-  const accessToken = extractBearerToken(request);
-
-  if (!accessToken) {
-    return { ok: false as const, response: fail("A logged-in dashboard session is required.", 401) };
-  }
-
   if (!isUuid(customerId) || !isUuid(assetId)) {
     return { ok: false as const, response: fail("Choose a valid asset.") };
   }
 
-  const supabase = createUserScopedServerClient(accessToken);
-
-  if (!supabase) {
-    return { ok: false as const, response: fail("Customer CRM is not configured.", 503) };
+  const privateAccess = await requireHomeFixPrivateAccess(request);
+  if (!privateAccess.ok) {
+    return { ok: false as const, response: privateAccess.response };
   }
-
-  const { data: userData, error: userError } = await supabase.auth.getUser(accessToken);
-
-  if (userError || !userData.user) {
-    return { ok: false as const, response: fail("A valid authenticated session is required.", 401) };
-  }
+  const supabase = privateAccess.context.supabase;
 
   const { data: canManage, error: manageError } = await supabase.rpc(
     "can_manage_customer_crm",

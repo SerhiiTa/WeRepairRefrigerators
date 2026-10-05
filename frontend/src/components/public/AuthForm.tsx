@@ -89,38 +89,11 @@ export function AuthForm({ mode }: AuthFormProps) {
     }
 
     if (isSignup) {
-      try {
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-          // The profiles trigger may copy role_intent into public.profiles.
-          // Route access still depends on later server checks/RLS, not this UI value.
-          options: {
-            emailRedirectTo: `${window.location.origin}/login`,
-            data: {
-              role_intent: roleIntent,
-            },
-          },
-        });
-
-        setStatus(
-          error
-            ? {
-                tone: "error",
-                message: getFriendlyAuthErrorMessage(error.message),
-              }
-            : {
-                tone: "success",
-                message:
-                  "Signup request completed. Check email confirmation if your Supabase project requires it, then log in.",
-              },
-        );
-      } catch (error) {
-        setStatus({
-          tone: "error",
-          message: getFriendlyAuthErrorMessage(error),
-        });
-      }
+      setStatus({
+        tone: "info",
+        message:
+          "Public signup is disabled. HomeFixOS access is limited to authorized HomeFix users.",
+      });
     } else {
       try {
         const { data, error } = await supabase.auth.signInWithPassword({
@@ -302,23 +275,23 @@ export function AuthForm({ mode }: AuthFormProps) {
 
       <button
         type="submit"
-        disabled={isSubmitting}
+        disabled={isSubmitting || isSignup}
         className="mt-6 inline-flex w-full items-center justify-center rounded-full bg-blue-700 px-5 py-3 text-base font-black text-white shadow-lg shadow-blue-700/20 transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-400"
       >
         {isSubmitting
           ? "Checking..."
           : isSignup
-            ? "Create account"
+            ? "Signup disabled"
             : "Log in"}
       </button>
 
       <p className="mt-5 text-center text-sm font-bold text-slate-600">
-        {isSignup ? "Already have an account?" : "Need an account?"}{" "}
+        {isSignup ? "Already have an account?" : "Need access?"}{" "}
         <Link
           href={isSignup ? "/login" : "/signup"}
           className="text-blue-700 hover:text-blue-900"
         >
-          {isSignup ? "Log in" : "Sign up"}
+          {isSignup ? "Log in" : "Contact admin"}
         </Link>
       </p>
 

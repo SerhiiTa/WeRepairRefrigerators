@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { getSupabaseServiceRoleClient } from "@/lib/supabase/service-role";
 import type { Database } from "@/lib/supabase/types";
-import { extractBearerToken } from "@/server/intake/intake-service";
 import {
   calculateDrivingDistance,
   type MapsDistanceOriginSource,
 } from "@/server/maps/distance";
-import { createUserScopedServerClient } from "@/server/onboarding/supabase";
+import { requireHomeFixPrivateAccess } from "@/server/security/homefix-private-access";
 
 export const dynamic = "force-dynamic";
 
@@ -136,7 +136,7 @@ function logOriginResolution(result: OriginResult) {
 
 async function resolveOriginAddress(
   supabase: ReturnType<typeof getSupabaseServiceRoleClient>,
-  userScopedSupabase: ReturnType<typeof createUserScopedServerClient>,
+  userScopedSupabase: SupabaseClient<Database> | null,
   userId: string,
 ): Promise<OriginResult> {
   let companyId: string | null = null;
@@ -294,24 +294,12 @@ export async function GET(
   request: Request,
   { params }: ClientCardRouteProps,
 ) {
-  const accessToken = extractBearerToken(request);
-
-  if (!accessToken) {
-    return fail("A logged-in dashboard session is required.", 401);
+  const privateAccess = await requireHomeFixPrivateAccess(request);
+  if (!privateAccess.ok) {
+    return privateAccess.response;
   }
-
-  const userScopedSupabase = createUserScopedServerClient(accessToken);
-
-  if (!userScopedSupabase) {
-    return fail("Supabase is not configured for client card context.", 503);
-  }
-
-  const { data: userData, error: userError } =
-    await userScopedSupabase.auth.getUser(accessToken);
-
-  if (userError || !userData.user) {
-    return fail("A valid authenticated session is required.", 401);
-  }
+  const userScopedSupabase = privateAccess.context.supabase;
+  const userId = privateAccess.context.userId;
 
   const { id } = await params;
   const { data: requestRow, error: requestError } = await userScopedSupabase
@@ -367,7 +355,7 @@ export async function GET(
   const origin = await resolveOriginAddress(
     serviceRole,
     userScopedSupabase,
-    userData.user.id,
+    userId,
   );
   const destination = buildServiceAddress(typedRequest);
   const distance = await calculateDrivingDistance({

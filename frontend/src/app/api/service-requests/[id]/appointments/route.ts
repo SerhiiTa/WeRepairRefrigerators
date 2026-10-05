@@ -4,6 +4,7 @@ import { createHash } from "crypto";
 import { getSupabaseServiceRoleClient } from "@/lib/supabase/service-role";
 import { syncAppointmentCreatedToCalendar } from "@/server/integrations/calendar/appointment-calendar-sync";
 import { createUserScopedServerClient } from "@/server/onboarding/supabase";
+import { requireHomeFixPrivateAccess } from "@/server/security/homefix-private-access";
 
 type AppointmentRouteProps = {
   params: Promise<{
@@ -100,18 +101,6 @@ type AvailabilityDecision = {
 
 function fail(message: string, status = 400) {
   return NextResponse.json({ ok: false, message }, { status });
-}
-
-function extractBearerToken(request: Request): string | null {
-  const header = request.headers.get("authorization");
-
-  if (!header?.startsWith("Bearer ")) {
-    return null;
-  }
-
-  const token = header.slice("Bearer ".length).trim();
-
-  return token.length > 0 ? token : null;
 }
 
 function isUuid(value: unknown): value is string {
@@ -793,11 +782,11 @@ export async function POST(
   request: Request,
   { params }: AppointmentRouteProps,
 ) {
-  const accessToken = extractBearerToken(request);
-
-  if (!accessToken) {
-    return fail("A logged-in dashboard session is required.", 401);
+  const privateAccess = await requireHomeFixPrivateAccess(request);
+  if (!privateAccess.ok) {
+    return privateAccess.response;
   }
+  const accessToken = privateAccess.context.accessToken;
 
   let payload: AppointmentPayload;
 
@@ -918,11 +907,11 @@ export async function PATCH(
   request: Request,
   { params }: AppointmentRouteProps,
 ) {
-  const accessToken = extractBearerToken(request);
-
-  if (!accessToken) {
-    return fail("A logged-in dashboard session is required.", 401);
+  const privateAccess = await requireHomeFixPrivateAccess(request);
+  if (!privateAccess.ok) {
+    return privateAccess.response;
   }
+  const accessToken = privateAccess.context.accessToken;
 
   let payload: AppointmentUpdatePayload;
 
@@ -1157,11 +1146,11 @@ export async function PUT(
   request: Request,
   { params }: AppointmentRouteProps,
 ) {
-  const accessToken = extractBearerToken(request);
-
-  if (!accessToken) {
-    return fail("A logged-in dashboard session is required.", 401);
+  const privateAccess = await requireHomeFixPrivateAccess(request);
+  if (!privateAccess.ok) {
+    return privateAccess.response;
   }
+  const accessToken = privateAccess.context.accessToken;
 
   let payload: AppointmentUpsertPayload;
 

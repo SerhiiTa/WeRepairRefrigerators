@@ -5,8 +5,8 @@ import {
   resolveDashboardCompanyContext,
   type DashboardCompanyContextClient,
 } from "@/server/dashboard/company-context";
-import { extractBearerToken } from "@/server/intake/intake-service";
 import { createUserScopedServerClient } from "@/server/onboarding/supabase";
+import { requireHomeFixPrivateAccess } from "@/server/security/homefix-private-access";
 import {
   rankPriceBookRepairSolutions,
   type PriceBookSelectionAlias,
@@ -74,11 +74,11 @@ function normalizeContext(payload: Record<string, unknown>): PriceBookSelectionC
 }
 
 export async function POST(request: Request) {
-  const accessToken = extractBearerToken(request);
-
-  if (!accessToken) {
-    return fail("A logged-in dashboard session is required.", 401);
+  const privateAccess = await requireHomeFixPrivateAccess(request);
+  if (!privateAccess.ok) {
+    return privateAccess.response;
   }
+  const accessToken = privateAccess.context.accessToken;
 
   const userScoped = createUserScopedServerClient(accessToken);
   const serviceRole = getSupabaseServiceRoleClient();
@@ -87,17 +87,10 @@ export async function POST(request: Request) {
     return fail("Price Book selection is not configured.", 503);
   }
 
-  const { data: userData, error: userError } =
-    await userScoped.auth.getUser(accessToken);
-
-  if (userError || !userData.user) {
-    return fail("A valid authenticated session is required.", 401);
-  }
-
   const companyContext = await resolveDashboardCompanyContext({
     client: userScoped as unknown as DashboardCompanyContextClient,
     trustedClient: serviceRole as unknown as DashboardCompanyContextClient,
-    profileId: userData.user.id,
+    profileId: privateAccess.context.userId,
     operation: "price_book_repair_solutions",
   });
 

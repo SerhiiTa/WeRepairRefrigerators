@@ -12,7 +12,7 @@ import {
   analyzeAssetLabelImage,
   toAssetIntelligenceRpcIdentity,
 } from "@/server/asset-intelligence/vision";
-import { createUserScopedServerClient } from "@/server/onboarding/supabase";
+import { requireHomeFixPrivateAccess } from "@/server/security/homefix-private-access";
 
 const CUSTOMER_APPLIANCE_PHOTO_BUCKET = "customer-appliance-photos";
 
@@ -22,18 +22,6 @@ type CustomerAssetIntelligenceRouteProps = {
 
 function fail(message: string, status = 400) {
   return NextResponse.json({ ok: false, message }, { status });
-}
-
-function extractBearerToken(request: Request): string | null {
-  const header = request.headers.get("authorization");
-
-  if (!header?.startsWith("Bearer ")) {
-    return null;
-  }
-
-  const token = header.slice("Bearer ".length).trim();
-
-  return token.length > 0 ? token : null;
 }
 
 function isUuid(value: string): boolean {
@@ -101,10 +89,9 @@ export async function POST(
   request: Request,
   { params }: CustomerAssetIntelligenceRouteProps,
 ) {
-  const accessToken = extractBearerToken(request);
-
-  if (!accessToken) {
-    return fail("A logged-in dashboard session is required.", 401);
+  const privateAccess = await requireHomeFixPrivateAccess(request);
+  if (!privateAccess.ok) {
+    return privateAccess.response;
   }
 
   const { id: customerId } = await params;
@@ -113,17 +100,8 @@ export async function POST(
     return fail("Choose a valid customer before scanning an asset.");
   }
 
-  const supabase = createUserScopedServerClient(accessToken);
-
-  if (!supabase) {
-    return fail("Supabase is not configured for Asset Intelligence.", 503);
-  }
-
-  const { data: userData, error: userError } = await supabase.auth.getUser(accessToken);
-
-  if (userError || !userData.user) {
-    return fail("A valid authenticated session is required.", 401);
-  }
+  const supabase = privateAccess.context.supabase;
+  const userId = privateAccess.context.userId;
 
   const { data: customer, error: customerError } = await supabase
     .from("customers")
@@ -187,7 +165,7 @@ export async function POST(
       customer_id: customerId,
       company_id: customer.company_id,
       customer_appliance_id: null,
-      uploaded_by_profile_id: userData.user.id,
+      uploaded_by_profile_id: userId,
       storage_path: storagePath,
       original_filename: file.name.slice(0, 180),
       photo_type: photoType,

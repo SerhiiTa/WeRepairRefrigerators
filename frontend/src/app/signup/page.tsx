@@ -1,14 +1,12 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 
-import { AuthForm } from "@/components/public/AuthForm";
 import { PublicSiteHeader } from "@/components/public/PublicSiteHeader";
 import { RefrigerationBackground } from "@/components/public/visuals/RefrigerationBackground";
 
 export const metadata: Metadata = {
-  title: "Sign Up | WeRepairRefrigerators",
+  title: "Private Access | HomeFixOS",
   description:
-    "Create a WeRepairRefrigerators account for Supabase Auth QA and future marketplace access.",
+    "HomeFixOS account creation is closed during the private Workiz Exit phase.",
 };
 
 export default function SignupPage() {
@@ -17,39 +15,26 @@ export default function SignupPage() {
       <PublicSiteHeader />
       <section className="relative overflow-hidden px-5 pb-16 pt-8 sm:px-6 lg:pb-24">
         <RefrigerationBackground />
-        <div className="relative z-10 mx-auto grid max-w-7xl gap-10 lg:grid-cols-[1fr_30rem] lg:items-center">
+        <div className="relative z-10 mx-auto max-w-4xl">
           <div className="max-w-2xl">
             <p className="text-sm font-black uppercase tracking-[0.2em] text-blue-600">
-              Account preview
+              Private access
             </p>
             <h2 className="mt-4 text-4xl font-black tracking-tight text-slate-950 sm:text-5xl">
-              Create an account for the connected Supabase auth flow.
+              HomeFixOS account creation is closed.
             </h2>
             <p className="mt-5 text-lg leading-8 text-slate-600">
-              Signup sends customer or technician intent to Supabase metadata so
-              the profiles trigger can create the expected role/status. Protected
-              dashboard access now depends on login, profile status, onboarding,
-              and role checks.
+              WRA is currently a private internal HomeFix system for the Workiz
+              Exit phase. Sign in with an already-authorized HomeFix account, or
+              contact the platform admin if access is required.
             </p>
-            <div className="mt-8 grid gap-3 text-sm font-bold text-slate-600 sm:grid-cols-3">
-              <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
-                Public marketplace stays open.
-              </div>
-              <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
-                Dashboard checks real auth.
-              </div>
-              <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
-                Profiles show role/status after login.
-              </div>
-            </div>
-            <Link
-              href="/find-technician"
-              className="mt-8 inline-flex rounded-full border border-blue-200 bg-white px-5 py-3 text-sm font-black text-blue-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-50"
+            <a
+              href="/login"
+              className="mt-8 inline-flex rounded-full bg-blue-600 px-5 py-3 text-sm font-black text-white shadow-lg shadow-blue-600/20 transition hover:bg-blue-700"
             >
-              Browse technicians
-            </Link>
+              Sign in
+            </a>
           </div>
-          <AuthForm mode="signup" />
         </div>
       </section>
     </main>

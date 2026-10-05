@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import type { Json } from "@/lib/supabase/types";
-import { createUserScopedServerClient } from "@/server/onboarding/supabase";
+import { requireHomeFixPrivateAccess } from "@/server/security/homefix-private-access";
 
 type DispatcherPreviewRouteProps = {
   params: Promise<{
@@ -36,18 +36,6 @@ const VALID_ORCHESTRATOR_STATUSES = [
 
 function fail(message: string, status = 400) {
   return NextResponse.json({ ok: false, message }, { status });
-}
-
-function extractBearerToken(request: Request): string | null {
-  const header = request.headers.get("authorization");
-
-  if (!header?.startsWith("Bearer ")) {
-    return null;
-  }
-
-  const token = header.slice("Bearer ".length).trim();
-
-  return token.length > 0 ? token : null;
 }
 
 function cleanNullableText(value: unknown, maxLength = 1000): string | null {
@@ -122,37 +110,17 @@ function formatDispatcherPreviewError(message: string): string {
 }
 
 async function getAuthedSupabase(request: Request) {
-  const accessToken = extractBearerToken(request);
-
-  if (!accessToken) {
+  const privateAccess = await requireHomeFixPrivateAccess(request);
+  if (!privateAccess.ok) {
     return {
       ok: false as const,
-      response: fail("A logged-in dashboard session is required.", 401),
-    };
-  }
-
-  const supabase = createUserScopedServerClient(accessToken);
-
-  if (!supabase) {
-    return {
-      ok: false as const,
-      response: fail("Supabase is not configured for dispatcher snapshots.", 503),
-    };
-  }
-
-  const { data: userData, error: userError } =
-    await supabase.auth.getUser(accessToken);
-
-  if (userError || !userData.user) {
-    return {
-      ok: false as const,
-      response: fail("A valid authenticated session is required.", 401),
+      response: privateAccess.response,
     };
   }
 
   return {
     ok: true as const,
-    supabase,
+    supabase: privateAccess.context.supabase,
   };
 }
 
