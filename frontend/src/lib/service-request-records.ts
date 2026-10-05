@@ -229,7 +229,7 @@ export type DashboardServiceRequestInvoiceItem = {
 export type DashboardServiceRequestInvoice = {
   id: string;
   serviceRequestId: string;
-  estimateId: string;
+  estimateId: string | null;
   createdByProfileId: string | null;
   invoiceNumber: string;
   subtotal: number;

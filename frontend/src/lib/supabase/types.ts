@@ -768,6 +768,10 @@ export type Database = {
           preferred_contact_method: DatabaseCustomerContactMethod | null;
           customer_status: DatabaseCustomerStatus;
           notes: string | null;
+          source_system?: "native" | "workiz";
+          external_customer_id?: string | null;
+          imported_at?: string | null;
+          import_metadata?: Json;
         };
         Insert: Partial<Database["public"]["Tables"]["customers"]["Row"]>;
         Update: Partial<Database["public"]["Tables"]["customers"]["Row"]>;
@@ -853,6 +857,10 @@ export type Database = {
           updated_by: string | null;
           created_at: string;
           updated_at: string;
+          source_system?: "native" | "workiz";
+          external_address_key?: string | null;
+          imported_at?: string | null;
+          import_metadata?: Json;
         };
         Insert: Partial<Database["public"]["Tables"]["customer_addresses"]["Row"]>;
         Update: Partial<Database["public"]["Tables"]["customer_addresses"]["Row"]>;
@@ -958,6 +966,11 @@ export type Database = {
           archived_at: string | null;
           archived_by_profile_id: string | null;
           archive_reason: string | null;
+          source_system?: "native" | "workiz";
+          external_estimate_id?: string | null;
+          external_import_key?: string | null;
+          imported_at?: string | null;
+          import_metadata?: Json;
           created_at: string;
           updated_at: string;
           service_request_estimate_items?: Database["public"]["Tables"]["service_request_estimate_items"]["Row"][];
@@ -1011,7 +1024,7 @@ export type Database = {
         Row: {
           id: string;
           service_request_id: string;
-          estimate_id: string;
+          estimate_id: string | null;
           created_by_profile_id: string | null;
           invoice_number: string;
           subtotal: number;
@@ -1021,12 +1034,83 @@ export type Database = {
           sent_at: string | null;
           paid_at: string | null;
           voided_at: string | null;
+          source_system?: "native" | "workiz";
+          external_invoice_id?: string | null;
+          external_import_key?: string | null;
+          amount_due?: number | null;
+          discount_amount?: number | null;
+          imported_at?: string | null;
+          import_metadata?: Json;
           created_at: string;
           updated_at: string;
           service_request_invoice_items?: Database["public"]["Tables"]["service_request_invoice_items"]["Row"][];
         };
         Insert: Partial<Database["public"]["Tables"]["service_request_invoices"]["Row"]>;
         Update: Partial<Database["public"]["Tables"]["service_request_invoices"]["Row"]>;
+        Relationships: [];
+      };
+      service_request_payments: {
+        Row: {
+          id: string;
+          company_id: string | null;
+          service_request_id: string;
+          invoice_id: string | null;
+          source_system: "native" | "workiz";
+          external_payment_id: string | null;
+          external_import_key: string | null;
+          payment_status:
+            | "paid"
+            | "refunded"
+            | "partially_refunded"
+            | "void"
+            | "imported";
+          payment_type: string | null;
+          payment_method: string | null;
+          amount: number;
+          service_fee: number | null;
+          net_amount: number | null;
+          tip_amount: number | null;
+          payment_date: string | null;
+          paid_at: string | null;
+          confirmation_code: string | null;
+          reference_code: string | null;
+          card_last4: string | null;
+          raw_document: string | null;
+          description: string | null;
+          imported_at: string | null;
+          import_metadata: Json;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Partial<Database["public"]["Tables"]["service_request_payments"]["Row"]>;
+        Update: Partial<Database["public"]["Tables"]["service_request_payments"]["Row"]>;
+        Relationships: [];
+      };
+      service_request_financial_snapshots: {
+        Row: {
+          id: string;
+          company_id: string | null;
+          service_request_id: string;
+          source_system: "workiz";
+          external_job_id: string | null;
+          subtotal: number | null;
+          total: number | null;
+          cost: number | null;
+          labor_cost: number | null;
+          card_expenses: number | null;
+          technician_expenses: number | null;
+          paid_amount: number | null;
+          due_amount: number | null;
+          tax_amount: number | null;
+          profit: number | null;
+          tip_amount: number | null;
+          invoice_number: string | null;
+          snapshot_metadata: Json;
+          imported_at: string | null;
+          created_at: string;
+        };
+        Insert: Partial<Database["public"]["Tables"]["service_request_financial_snapshots"]["Row"]>;
+        Update: Partial<Database["public"]["Tables"]["service_request_financial_snapshots"]["Row"]>;
         Relationships: [];
       };
       service_request_notes: {
@@ -1065,6 +1149,37 @@ export type Database = {
         };
         Insert: Partial<Database["public"]["Tables"]["service_request_photos"]["Row"]>;
         Update: Partial<Database["public"]["Tables"]["service_request_photos"]["Row"]>;
+        Relationships: [];
+      };
+      service_request_attachments: {
+        Row: {
+          id: string;
+          company_id: string | null;
+          service_request_id: string;
+          uploaded_by_profile_id: string | null;
+          storage_bucket: "service-request-attachments";
+          storage_path: string;
+          original_filename: string | null;
+          mime_type: string | null;
+          file_size_bytes: number | null;
+          attachment_category:
+            | "appliance_photo"
+            | "model_serial_photo"
+            | "before_photo"
+            | "after_photo"
+            | "screenshot"
+            | "pdf"
+            | "invoice_document"
+            | "other";
+          source_system: "native" | "workiz";
+          external_import_key: string | null;
+          imported_at: string | null;
+          attachment_metadata: Json;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Partial<Database["public"]["Tables"]["service_request_attachments"]["Row"]>;
+        Update: Partial<Database["public"]["Tables"]["service_request_attachments"]["Row"]>;
         Relationships: [];
       };
       dispatcher_preview_snapshots: {
@@ -1138,6 +1253,10 @@ export type Database = {
           inbound_source_id?: string | null;
           source_account_id?: string | null;
           attribution?: Json;
+          source_system?: "native" | "workiz";
+          external_job_id?: string | null;
+          imported_at?: string | null;
+          import_metadata?: Json;
           created_at: string;
           updated_at: string;
         };
