@@ -23,7 +23,7 @@ type RetellBridgeProofTransferContextResult =
   | {
       ok: true;
       inboundCallControlId: string;
-      testNumber: string;
+      businessNumber: string;
       nonce: string;
     }
   | {
@@ -77,11 +77,11 @@ function safeEqualText(left: string, right: string): boolean {
 }
 
 function createTransferSession({
+  businessNumber,
   inboundCallControlId,
-  testNumber,
 }: {
+  businessNumber: string;
   inboundCallControlId: string;
-  testNumber: string;
 }): { transferSessionId: string; nonce: string } | null {
   const secret = getTransferSigningSecret();
   if (!secret) {
@@ -93,8 +93,8 @@ function createTransferSession({
     JSON.stringify({
       v: TRANSFER_SESSION_VERSION,
       proof: "comm-09c4-retell-handoff",
+      business_number: businessNumber,
       inbound_call_control_id: inboundCallControlId,
-      test_number: testNumber,
       nonce,
     }),
   );
@@ -108,18 +108,18 @@ function createTransferSession({
 
 export async function registerRetellBridgeProofPhoneCall({
   fromNumber,
+  businessNumber,
   inboundCallControlId,
-  toNumber,
 }: {
   fromNumber: string | null;
+  businessNumber: string;
   inboundCallControlId: string;
-  toNumber: string;
 }): Promise<RegisterRetellPhoneCallResult> {
   const apiKey = getRetellApiKey();
   const agentId = getRetellHomeFixAgentId();
   const transferSession = createTransferSession({
+    businessNumber,
     inboundCallControlId,
-    testNumber: toNumber,
   });
 
   if (!apiKey || !agentId || !transferSession) {
@@ -141,12 +141,12 @@ export async function registerRetellBridgeProofPhoneCall({
     body: JSON.stringify({
       agent_id: agentId,
       from_number: fromNumber ?? "unknown",
-      to_number: toNumber,
+      to_number: businessNumber,
       direction: "inbound",
       metadata: {
         proof: "comm-09c4-retell-leg",
+        telnyx_business_number: businessNumber,
         telnyx_inbound_call_control_id: inboundCallControlId,
-        telnyx_test_number: toNumber,
         wra_transfer_session_id: transferSession.transferSessionId,
         wra_transfer_session_nonce: transferSession.nonce,
       },
@@ -250,15 +250,15 @@ export function resolveRetellBridgeProofTransferContext(
 
   const proof = cleanString(parsed?.proof, 80);
   const version = typeof parsed?.v === "number" ? parsed.v : null;
+  const businessNumber = cleanString(parsed?.business_number, 40);
   const inboundCallControlId = cleanString(parsed?.inbound_call_control_id, 300);
-  const testNumber = cleanString(parsed?.test_number, 40);
   const nonce = cleanString(parsed?.nonce, 120);
 
   if (
     version !== TRANSFER_SESSION_VERSION ||
     proof !== "comm-09c4-retell-handoff" ||
+    !businessNumber ||
     !inboundCallControlId ||
-    !testNumber ||
     !nonce
   ) {
     return {
@@ -270,8 +270,8 @@ export function resolveRetellBridgeProofTransferContext(
 
   return {
     ok: true,
+    businessNumber,
     inboundCallControlId,
-    testNumber,
     nonce,
   };
 }

@@ -6,7 +6,7 @@ import {
 } from "./retell-phone-call";
 
 const TELNYX_CALLS_URL = "https://api.telnyx.com/v2/calls";
-const TEST_NUMBER = "+13464138813";
+const ALLOWED_BUSINESS_NUMBERS = new Set(["+13464138813", "+13466461949"]);
 
 type TelnyxBridgeProofResult = {
   ok: boolean;
@@ -117,6 +117,10 @@ function getOwnerMobileNumber(): string | null {
   return normalizePhone(process.env.WRA_BRIDGE_PROOF_OWNER_PHONE);
 }
 
+function isAllowedBusinessNumber(value: string | null): value is string {
+  return Boolean(value && ALLOWED_BUSINESS_NUMBERS.has(value));
+}
+
 function getBridgeProofTarget(): "retell_ai" | "owner_mobile" {
   return process.env.WRA_BRIDGE_PROOF_TARGET?.trim() === "owner_mobile"
     ? "owner_mobile"
@@ -216,7 +220,13 @@ async function answerInboundCall(callControlId: string): Promise<TelnyxBridgePro
   });
 }
 
-async function dialOwnerAndBridge(inboundCallControlId: string): Promise<TelnyxBridgeProofResult> {
+async function dialOwnerAndBridge({
+  businessNumber,
+  inboundCallControlId,
+}: {
+  businessNumber: string;
+  inboundCallControlId: string;
+}): Promise<TelnyxBridgeProofResult> {
   const connectionId = getTelnyxCallControlConnectionId();
   const ownerMobile = getOwnerMobileNumber();
   if (!connectionId || !ownerMobile) {
@@ -232,7 +242,7 @@ async function dialOwnerAndBridge(inboundCallControlId: string): Promise<TelnyxB
     path: "",
     body: {
       connection_id: connectionId,
-      from: TEST_NUMBER,
+      from: businessNumber,
       to: ownerMobile,
       link_to: inboundCallControlId,
       bridge_intent: true,
@@ -247,9 +257,11 @@ async function dialOwnerAndBridge(inboundCallControlId: string): Promise<TelnyxB
 }
 
 async function dialOwnerAndBridgeForRetellHandoff({
+  businessNumber,
   inboundCallControlId,
   transferSessionNonce,
 }: {
+  businessNumber: string;
   inboundCallControlId: string;
   transferSessionNonce: string;
 }): Promise<TelnyxBridgeProofResult> {
@@ -268,7 +280,7 @@ async function dialOwnerAndBridgeForRetellHandoff({
     path: "",
     body: {
       connection_id: connectionId,
-      from: TEST_NUMBER,
+      from: businessNumber,
       to: ownerMobile,
       link_to: inboundCallControlId,
       bridge_intent: true,
@@ -287,9 +299,11 @@ async function dialOwnerAndBridgeForRetellHandoff({
 }
 
 async function dialRetellAiAndBridge({
+  businessNumber,
   from,
   inboundCallControlId,
 }: {
+  businessNumber: string;
   from: string | null;
   inboundCallControlId: string;
 }): Promise<TelnyxBridgeProofResult> {
@@ -303,9 +317,9 @@ async function dialRetellAiAndBridge({
   }
 
   const retellCall = await registerRetellBridgeProofPhoneCall({
+    businessNumber,
     fromNumber: from,
     inboundCallControlId,
-    toNumber: TEST_NUMBER,
   });
 
   if (!retellCall.ok) {
@@ -333,7 +347,7 @@ async function dialRetellAiAndBridge({
     path: "",
     body: {
       connection_id: connectionId,
-      from: TEST_NUMBER,
+      from: businessNumber,
       to: retellCall.sipUri,
       link_to: inboundCallControlId,
       bridge_intent: true,
@@ -371,11 +385,11 @@ export async function requestRetellHumanHandoff({
     };
   }
 
-  if (context.testNumber !== TEST_NUMBER) {
+  if (!isAllowedBusinessNumber(context.businessNumber)) {
     return {
       ok: false,
       status: 403,
-      message: "Human handoff is limited to the COMM-09C.4 test number.",
+      message: "Human handoff is limited to approved HomeFixOS business numbers.",
     };
   }
 
@@ -400,6 +414,7 @@ export async function requestRetellHumanHandoff({
   });
 
   const result = await dialOwnerAndBridgeForRetellHandoff({
+    businessNumber: context.businessNumber,
     inboundCallControlId: context.inboundCallControlId,
     transferSessionNonce: context.nonce,
   });
@@ -497,14 +512,14 @@ export async function handleTelnyxBridgeProofWebhook(
   }
 
   const isInboundDirection = direction === "incoming" || direction === "inbound";
-  const isTestInboundCall =
-    to === TEST_NUMBER ||
+  const isAllowedInboundCall =
+    isAllowedBusinessNumber(to) ||
     (clientState?.proof === "comm-09c3" && clientState?.leg === "inbound");
 
   if (eventType === "call.initiated" && isInboundDirection) {
-    if (to !== TEST_NUMBER) {
+    if (!isAllowedBusinessNumber(to)) {
       console.warn("[telnyx-bridge-proof-unexpected-number]", { to, from });
-      return { ok: true, status: 200, message: "Ignored non-test-number call." };
+      return { ok: true, status: 200, message: "Ignored unsupported business number call." };
     }
 
     console.info("[telnyx-bridge-proof-inbound]", {
@@ -515,7 +530,20 @@ export async function handleTelnyxBridgeProofWebhook(
     return answerInboundCall(callControlId);
   }
 
-  if (eventType === "call.answered" && isTestInboundCall && (isInboundDirection || to === TEST_NUMBER)) {
+  if (
+    eventType === "call.answered" &&
+    isAllowedInboundCall &&
+    (isInboundDirection || isAllowedBusinessNumber(to))
+  ) {
+    if (!isAllowedBusinessNumber(to)) {
+      console.warn("[telnyx-bridge-proof-answered-missing-business-number]", {
+        eventType,
+        to,
+        from,
+      });
+      return { ok: true, status: 200, message: "Ignored answered call without business number." };
+    }
+
     const target = getBridgeProofTarget();
 
     if (target === "retell_ai") {
@@ -535,7 +563,11 @@ export async function handleTelnyxBridgeProofWebhook(
         inboundCallControlIdPresent: true,
         dialRetellAttempted: true,
       });
-      const result = await dialRetellAiAndBridge({ from, inboundCallControlId: callControlId });
+      const result = await dialRetellAiAndBridge({
+        businessNumber: to,
+        from,
+        inboundCallControlId: callControlId,
+      });
       const responseData =
         result.telnyx && typeof result.telnyx.data === "object" && result.telnyx.data !== null
           ? (result.telnyx.data as Record<string, unknown>)
@@ -565,7 +597,10 @@ export async function handleTelnyxBridgeProofWebhook(
       inboundCallControlIdPresent: true,
       dialOwnerAttempted: true,
     });
-    const result = await dialOwnerAndBridge(callControlId);
+    const result = await dialOwnerAndBridge({
+      businessNumber: to,
+      inboundCallControlId: callControlId,
+    });
     const responseData =
       result.telnyx && typeof result.telnyx.data === "object" && result.telnyx.data !== null
         ? (result.telnyx.data as Record<string, unknown>)
