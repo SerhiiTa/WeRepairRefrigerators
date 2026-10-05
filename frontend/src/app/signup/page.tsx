@@ -4,9 +4,8 @@ import { PublicSiteHeader } from "@/components/public/PublicSiteHeader";
 import { RefrigerationBackground } from "@/components/public/visuals/RefrigerationBackground";
 
 export const metadata: Metadata = {
-  title: "Private Access | HomeFixOS",
-  description:
-    "HomeFixOS account creation is closed during the private Workiz Exit phase.",
+  title: "Account Registration Unavailable",
+  description: "Account registration is currently unavailable.",
 };
 
 export default function SignupPage() {
@@ -18,15 +17,13 @@ export default function SignupPage() {
         <div className="relative z-10 mx-auto max-w-4xl">
           <div className="max-w-2xl">
             <p className="text-sm font-black uppercase tracking-[0.2em] text-blue-600">
-              Private access
+              Account access
             </p>
             <h2 className="mt-4 text-4xl font-black tracking-tight text-slate-950 sm:text-5xl">
-              HomeFixOS account creation is closed.
+              Account registration is currently unavailable.
             </h2>
             <p className="mt-5 text-lg leading-8 text-slate-600">
-              WRA is currently a private internal HomeFix system for the Workiz
-              Exit phase. Sign in with an already-authorized HomeFix account, or
-              contact the platform admin if access is required.
+              Already have an account? Sign in to continue.
             </p>
             <a
               href="/login"
