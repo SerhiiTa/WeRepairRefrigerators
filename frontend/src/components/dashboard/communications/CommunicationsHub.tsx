@@ -3361,7 +3361,7 @@ function RecordingPlayer({ recordingState }: { recordingState: RecordingState })
 }
 
 type TranscriptDialogueSegment = {
-  speaker: "agent" | "customer";
+  speaker: "agent" | "customer" | "human_transfer";
   text: string;
 };
 
@@ -3377,9 +3377,14 @@ function getTranscriptDialogueSegments(value: Json): TranscriptDialogueSegment[]
       }
 
       const record = item as Record<string, unknown>;
-      const speaker = record.speaker === "agent" || record.speaker === "customer"
-        ? record.speaker
-        : null;
+      const speaker =
+        record.speaker === "agent" || record.speaker === "ai"
+          ? "agent"
+          : record.speaker === "customer"
+            ? "customer"
+            : record.speaker === "human_transfer"
+              ? "human_transfer"
+              : null;
       const text = typeof record.text === "string" && record.text.trim()
         ? record.text.trim()
         : null;
@@ -3434,7 +3439,11 @@ function TranscriptPanel({
               key={`${segment.speaker}-${index}`}
             >
               <span className="font-black uppercase text-[#475569]">
-                {segment.speaker === "agent" ? "Agent" : "Customer"}:
+                {segment.speaker === "agent"
+                  ? "Sarah"
+                  : segment.speaker === "human_transfer"
+                    ? "Human"
+                    : "Customer"}:
               </span>{" "}
               {segment.text}
             </p>

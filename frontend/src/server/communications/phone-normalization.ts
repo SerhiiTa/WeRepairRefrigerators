@@ -501,8 +501,19 @@ function pickIso(payload: unknown, paths: string[]): string | null {
 
 function normalizeSpeaker(value: unknown): PhoneTranscriptSpeaker {
   const text = cleanText(value, 80)?.toLowerCase() ?? "";
-  if (text.includes("agent") || text.includes("ai") || text.includes("assistant")) {
+  if (
+    text === "agent" ||
+    text === "assistant" ||
+    text === "ai" ||
+    text === "bot" ||
+    text === "sarah" ||
+    text.includes("agent") ||
+    text.includes("assistant")
+  ) {
     return "ai";
+  }
+  if (text === "user" || text === "customer" || text === "caller") {
+    return "customer";
   }
   if (text.includes("human") || text.includes("dispatcher")) {
     return "human_transfer";
@@ -602,17 +613,26 @@ export function normalizePhoneWorkflowPayload(
 
   const transcriptSegments = normalizeTranscriptSegments(payload);
   const transcriptFromSegments = transcriptSegments
-    .map((segment) => `${segment.speaker}: ${segment.text}`)
+    .map((segment) => {
+      const speakerLabel =
+        segment.speaker === "ai"
+          ? "SARAH"
+          : segment.speaker === "human_transfer"
+            ? "HUMAN"
+            : "CUSTOMER";
+      return `${speakerLabel}: ${segment.text}`;
+    })
     .join("\n");
-  const transcriptText =
-    pickText(payload, [
+  const flatTranscriptText = pickText(payload, [
       "transcript",
       "transcript_text",
       "call.transcript",
       "call.transcript_text",
       "data.transcript",
       "data.payload.transcript",
-    ], 8000) ?? (transcriptFromSegments.length > 0 ? transcriptFromSegments : null);
+    ], 8000);
+  const transcriptText =
+    transcriptFromSegments.length > 0 ? transcriptFromSegments : flatTranscriptText;
 
   const issueDescription = pickText(payload, [
     "problem_description",
