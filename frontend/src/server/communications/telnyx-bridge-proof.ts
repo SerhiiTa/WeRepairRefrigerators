@@ -295,6 +295,30 @@ async function findOrCreateTransferConversation({
     }
   }
 
+  const { data: transferConversation, error: transferConversationError } = await supabase
+    .from("communication_conversations")
+    .select("id")
+    .eq("company_id", sourceAccount.company_id)
+    .filter(
+      "provider_metadata->phone_capture->>transfer_session_nonce",
+      "eq",
+      transferSessionNonce,
+    )
+    .limit(1)
+    .maybeSingle();
+
+  if (transferConversationError) {
+    console.error("[telnyx-bridge-proof-conversation-transfer-lookup-error]", {
+      message: transferConversationError.message,
+      code: transferConversationError.code,
+    });
+    return null;
+  }
+
+  if (typeof transferConversation?.id === "string") {
+    return transferConversation.id;
+  }
+
   if (!retellCallId && callerNumber) {
     const { data, error } = await supabase
       .from("communication_conversations")
@@ -360,6 +384,34 @@ async function findOrCreateTransferConversation({
   }
 
   return typeof data?.id === "string" ? data.id : null;
+}
+
+async function ensureRetellTransferConversation({
+  businessNumber,
+  callerNumber,
+  inboundCallControlId,
+  retellCallId,
+  transferSessionNonce,
+}: {
+  businessNumber: string;
+  callerNumber: string | null;
+  inboundCallControlId: string;
+  retellCallId: string;
+  transferSessionNonce: string;
+}): Promise<string | null> {
+  const sourceAccount = await findPhoneSourceAccount(businessNumber);
+  if (!sourceAccount) {
+    return null;
+  }
+
+  return findOrCreateTransferConversation({
+    businessNumber,
+    callerNumber,
+    inboundCallControlId,
+    retellCallId,
+    sourceAccount,
+    transferSessionNonce,
+  });
 }
 
 async function reserveHumanTransferCall({
@@ -757,6 +809,19 @@ async function dialRetellAiAndBridge({
   });
 
   retellCallByInboundCallControlId.set(inboundCallControlId, retellCall.callId);
+  const conversationId = await ensureRetellTransferConversation({
+    businessNumber,
+    callerNumber: from,
+    inboundCallControlId,
+    retellCallId: retellCall.callId,
+    transferSessionNonce: retellCall.transferSessionNonce,
+  });
+  console.info("[telnyx-bridge-proof-retell-conversation-prepared]", {
+    inboundCallControlIdPresent: true,
+    retellCallIdPresent: true,
+    transferSessionNonce: retellCall.transferSessionNonce,
+    conversationIdPresent: Boolean(conversationId),
+  });
 
   return sendTelnyxCommand({
     path: "",
