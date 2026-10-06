@@ -1,5 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 
+import { getSupabaseServiceRoleClient } from "@/lib/supabase/service-role";
+import type { Json, PublicSchema } from "@/lib/supabase/types";
+
 import {
   registerRetellBridgeProofPhoneCall,
   resolveRetellBridgeProofTransferContext,
@@ -42,6 +45,21 @@ type TelnyxWebhookPayload = {
     payload?: TelnyxCallControlPayload & Record<string, unknown>;
   };
 };
+
+type SourceAccountRow = {
+  id: string;
+  company_id: string;
+  source_identifier: string;
+};
+
+type ReservedHumanTransferCall = {
+  callId: string;
+  conversationId: string;
+  sourceAccountId: string;
+};
+
+type CommunicationCallUpdate =
+  PublicSchema["Tables"]["communication_calls"]["Update"];
 
 const dialedInboundCalls = new Set<string>();
 const retellDialedInboundCalls = new Set<string>();
@@ -87,6 +105,33 @@ function normalizePhone(value: unknown): string | null {
     return `+${digits}`;
   }
   return raw.startsWith("+") && digits.length >= 8 ? `+${digits}` : null;
+}
+
+function phoneVariants(phone: string | null): string[] {
+  if (!phone) {
+    return [];
+  }
+
+  const digits = phone.replace(/\D/g, "");
+  return Array.from(
+    new Set([
+      phone,
+      digits,
+      digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits,
+      digits.length === 10 ? `1${digits}` : digits,
+      digits.length === 10 ? `+1${digits}` : phone,
+      digits.length === 10
+        ? `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`
+        : phone,
+      digits.length === 10
+        ? `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`
+        : phone,
+    ]),
+  ).filter((value) => value.length > 0);
+}
+
+function safeJsonObject(value: Record<string, unknown>): Record<string, Json> {
+  return JSON.parse(JSON.stringify(value)) as Record<string, Json>;
 }
 
 function decodeClientState(value: unknown): Record<string, unknown> | null {
@@ -146,6 +191,352 @@ function getEventType(payload: unknown): string | null {
 
   const record = payload as TelnyxWebhookPayload;
   return cleanString(record.data?.event_type, 120);
+}
+
+function getResponseData(result: TelnyxBridgeProofResult): Record<string, unknown> | null {
+  return result.telnyx && typeof result.telnyx.data === "object" && result.telnyx.data !== null
+    ? (result.telnyx.data as Record<string, unknown>)
+    : null;
+}
+
+async function findPhoneSourceAccount(
+  businessNumber: string,
+): Promise<SourceAccountRow | null> {
+  const supabase = getSupabaseServiceRoleClient();
+  if (!supabase) {
+    return null;
+  }
+
+  const identifiers = phoneVariants(businessNumber);
+  if (identifiers.length === 0) {
+    return null;
+  }
+
+  const { data, error } = await supabase
+    .from("communication_source_accounts")
+    .select("id,company_id,source_identifier")
+    .eq("source_type", "phone")
+    .eq("is_active", true)
+    .in("source_identifier", identifiers)
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error("[telnyx-bridge-proof-source-account-error]", {
+      message: error.message,
+      code: error.code,
+    });
+    return null;
+  }
+
+  return (data ?? null) as SourceAccountRow | null;
+}
+
+async function findOrCreateTransferConversation({
+  businessNumber,
+  callerNumber,
+  inboundCallControlId,
+  retellCallId,
+  sourceAccount,
+  transferSessionNonce,
+}: {
+  businessNumber: string;
+  callerNumber: string | null;
+  inboundCallControlId: string;
+  retellCallId: string | null;
+  sourceAccount: SourceAccountRow;
+  transferSessionNonce: string;
+}): Promise<string | null> {
+  const supabase = getSupabaseServiceRoleClient();
+  if (!supabase) {
+    return null;
+  }
+
+  if (retellCallId) {
+    const { data, error } = await supabase
+      .from("communication_conversations")
+      .select("id")
+      .eq("provider_name", "retell")
+      .eq("external_conversation_id", retellCallId)
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.error("[telnyx-bridge-proof-conversation-lookup-error]", {
+        message: error.message,
+        code: error.code,
+      });
+      return null;
+    }
+
+    if (typeof data?.id === "string") {
+      return data.id;
+    }
+  }
+
+  if (callerNumber) {
+    const { data, error } = await supabase
+      .from("communication_conversations")
+      .select("id")
+      .eq("company_id", sourceAccount.company_id)
+      .eq("customer_phone", callerNumber)
+      .neq("status", "archived")
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.error("[telnyx-bridge-proof-conversation-phone-lookup-error]", {
+        message: error.message,
+        code: error.code,
+      });
+      return null;
+    }
+
+    if (typeof data?.id === "string") {
+      return data.id;
+    }
+  }
+
+  const providerMetadata = safeJsonObject({
+    phone_capture: {
+      phase: "retell_ai_with_human_transfer",
+      transfer_session_nonce: transferSessionNonce,
+      inbound_call_control_id: inboundCallControlId,
+      retell_call_id: retellCallId,
+      business_number: businessNumber,
+    },
+  });
+
+  const { data, error } = await supabase
+    .from("communication_conversations")
+    .insert({
+      company_id: sourceAccount.company_id,
+      source_account_id: sourceAccount.id,
+      provider_name: "retell",
+      external_conversation_id: retellCallId,
+      primary_source_type: "phone",
+      status: "needs_action",
+      customer_phone: callerNumber,
+      customer_display_name: callerNumber ?? "Phone customer",
+      summary: "Inbound phone call with human transfer",
+      next_action: "Review phone call",
+      last_event_at: new Date().toISOString(),
+      call_status: "in_progress",
+      provider_metadata: providerMetadata,
+      created_by: null,
+      updated_by: null,
+    })
+    .select("id")
+    .single();
+
+  if (error) {
+    console.error("[telnyx-bridge-proof-conversation-create-error]", {
+      message: error.message,
+      code: error.code,
+    });
+    return null;
+  }
+
+  return typeof data?.id === "string" ? data.id : null;
+}
+
+async function reserveHumanTransferCall({
+  businessNumber,
+  callerNumber,
+  inboundCallControlId,
+  retellCallId,
+  transferSessionNonce,
+}: {
+  businessNumber: string;
+  callerNumber: string | null;
+  inboundCallControlId: string;
+  retellCallId: string | null;
+  transferSessionNonce: string;
+}): Promise<ReservedHumanTransferCall | null> {
+  const supabase = getSupabaseServiceRoleClient();
+  const sourceAccount = await findPhoneSourceAccount(businessNumber);
+  if (!supabase || !sourceAccount) {
+    return null;
+  }
+
+  const conversationId = await findOrCreateTransferConversation({
+    businessNumber,
+    callerNumber,
+    inboundCallControlId,
+    retellCallId,
+    sourceAccount,
+    transferSessionNonce,
+  });
+  if (!conversationId) {
+    return null;
+  }
+
+  const providerCallId = `human-transfer:${transferSessionNonce}`;
+  const { data: existingCall, error: existingCallError } = await supabase
+    .from("communication_calls")
+    .select("id")
+    .eq("company_id", sourceAccount.company_id)
+    .eq("provider_name", "telnyx")
+    .eq("provider_call_id", providerCallId)
+    .limit(1)
+    .maybeSingle();
+
+  if (existingCallError) {
+    console.error("[telnyx-bridge-proof-human-call-lookup-error]", {
+      message: existingCallError.message,
+      code: existingCallError.code,
+    });
+    return null;
+  }
+
+  if (typeof existingCall?.id === "string") {
+    return {
+      callId: existingCall.id,
+      conversationId,
+      sourceAccountId: sourceAccount.id,
+    };
+  }
+
+  const now = new Date().toISOString();
+  const { data, error } = await supabase
+    .from("communication_calls")
+    .insert({
+      company_id: sourceAccount.company_id,
+      conversation_id: conversationId,
+      source_account_id: sourceAccount.id,
+      provider_name: "telnyx",
+      provider_call_id: providerCallId,
+      direction: "outbound",
+      from_phone: businessNumber,
+      to_phone: getOwnerMobileNumber(),
+      status: "in_progress",
+      started_at: now,
+      summary: "Human Transfer",
+      provider_metadata: safeJsonObject({
+        call_phase: "human_transfer",
+        display_label: "Human Transfer",
+        participants: {
+          customer_phone: callerNumber,
+          owner_name: "Serhii",
+          owner_phone_present: Boolean(getOwnerMobileNumber()),
+        },
+        transfer: {
+          transfer_session_nonce: transferSessionNonce,
+          inbound_call_control_id: inboundCallControlId,
+          retell_call_id: retellCallId,
+          business_number: businessNumber,
+        },
+        recording: {
+          provider: "telnyx",
+          status: "pending",
+        },
+      }),
+    })
+    .select("id")
+    .single();
+
+  if (error) {
+    console.error("[telnyx-bridge-proof-human-call-create-error]", {
+      message: error.message,
+      code: error.code,
+    });
+    return null;
+  }
+
+  return typeof data?.id === "string"
+    ? { callId: data.id, conversationId, sourceAccountId: sourceAccount.id }
+    : null;
+}
+
+async function updateHumanTransferCallFromEvent({
+  callControlId,
+  clientState,
+  eventPayload,
+  eventType,
+}: {
+  callControlId: string;
+  clientState: Record<string, unknown>;
+  eventPayload: TelnyxCallControlPayload;
+  eventType: string;
+}) {
+  const communicationCallId = cleanString(clientState.communication_call_id, 120);
+  if (!communicationCallId) {
+    return;
+  }
+
+  const supabase = getSupabaseServiceRoleClient();
+  if (!supabase) {
+    return;
+  }
+
+  const { data: call, error: callError } = await supabase
+    .from("communication_calls")
+    .select("provider_metadata")
+    .eq("id", communicationCallId)
+    .maybeSingle();
+
+  if (callError || !call) {
+    if (callError) {
+      console.error("[telnyx-bridge-proof-human-call-event-lookup-error]", {
+        message: callError.message,
+        code: callError.code,
+      });
+    }
+    return;
+  }
+
+  const metadata =
+    call.provider_metadata && typeof call.provider_metadata === "object" && !Array.isArray(call.provider_metadata)
+      ? (call.provider_metadata as Record<string, unknown>)
+      : {};
+  const existingTelnyx =
+    metadata.telnyx && typeof metadata.telnyx === "object" && !Array.isArray(metadata.telnyx)
+      ? (metadata.telnyx as Record<string, unknown>)
+      : {};
+  const now = new Date().toISOString();
+  const status =
+    eventType === "call.hangup" || eventType === "call.ended"
+      ? "completed"
+      : eventType === "call.answered" || eventType === "call.bridged"
+        ? "in_progress"
+        : undefined;
+
+  const updatePayload: CommunicationCallUpdate = {
+    provider_metadata: safeJsonObject({
+      ...metadata,
+      telnyx: {
+        ...existingTelnyx,
+        owner_call_control_id: callControlId,
+        owner_call_leg_id: cleanString(eventPayload.call_leg_id, 300),
+        owner_call_session_id: cleanString(eventPayload.call_session_id, 300),
+        last_event_type: eventType,
+        last_event_at: now,
+      },
+    }),
+  };
+
+  if (status) {
+    updatePayload.status = status;
+  }
+  if (eventType === "call.answered") {
+    updatePayload.answered_at = now;
+  }
+  if (eventType === "call.hangup" || eventType === "call.ended") {
+    updatePayload.ended_at = now;
+  }
+
+  const { error } = await supabase
+    .from("communication_calls")
+    .update(updatePayload)
+    .eq("id", communicationCallId);
+
+  if (error) {
+    console.error("[telnyx-bridge-proof-human-call-event-update-error]", {
+      message: error.message,
+      code: error.code,
+    });
+  }
 }
 
 async function sendTelnyxCommand({
@@ -258,10 +649,12 @@ async function dialOwnerAndBridge({
 
 async function dialOwnerAndBridgeForRetellHandoff({
   businessNumber,
+  communicationCallId,
   inboundCallControlId,
   transferSessionNonce,
 }: {
   businessNumber: string;
+  communicationCallId: string | null;
   inboundCallControlId: string;
   transferSessionNonce: string;
 }): Promise<TelnyxBridgeProofResult> {
@@ -292,6 +685,7 @@ async function dialOwnerAndBridgeForRetellHandoff({
           proof: "comm-09c4",
           leg: "owner-mobile",
           transfer_session_nonce: transferSessionNonce,
+          communication_call_id: communicationCallId,
         }),
       ).toString("base64"),
     },
@@ -413,18 +807,46 @@ export async function requestRetellHumanHandoff({
     ownerDialAttempted: true,
   });
 
+  const reservedCall = await reserveHumanTransferCall({
+    businessNumber: context.businessNumber,
+    callerNumber: context.callerNumber,
+    inboundCallControlId: context.inboundCallControlId,
+    retellCallId: retellCallByInboundCallControlId.get(context.inboundCallControlId) ?? null,
+    transferSessionNonce: context.nonce,
+  });
+  console.info("[telnyx-bridge-proof-human-call-reserved]", {
+    ok: Boolean(reservedCall),
+    transferSessionNonce: context.nonce,
+    communicationCallIdPresent: Boolean(reservedCall?.callId),
+    conversationIdPresent: Boolean(reservedCall?.conversationId),
+    sourceAccountIdPresent: Boolean(reservedCall?.sourceAccountId),
+  });
+
   const result = await dialOwnerAndBridgeForRetellHandoff({
     businessNumber: context.businessNumber,
+    communicationCallId: reservedCall?.callId ?? null,
     inboundCallControlId: context.inboundCallControlId,
     transferSessionNonce: context.nonce,
   });
-  const responseData =
-    result.telnyx && typeof result.telnyx.data === "object" && result.telnyx.data !== null
-      ? (result.telnyx.data as Record<string, unknown>)
-      : null;
+  const responseData = getResponseData(result);
   const ownerCallControlId = cleanString(responseData?.call_control_id, 300);
   if (ownerCallControlId) {
     retellCallByOwnerCallControlId.set(ownerCallControlId, context.nonce);
+  }
+
+  if (reservedCall?.callId && responseData) {
+    await updateHumanTransferCallFromEvent({
+      callControlId: ownerCallControlId ?? `human-transfer:${context.nonce}`,
+      clientState: {
+        communication_call_id: reservedCall.callId,
+      },
+      eventPayload: {
+        call_control_id: responseData.call_control_id,
+        call_leg_id: responseData.call_leg_id,
+        call_session_id: responseData.call_session_id,
+      },
+      eventType: "call.initiated",
+    });
   }
 
   console.info("[telnyx-bridge-proof-handoff-result]", {
@@ -489,6 +911,12 @@ export async function handleTelnyxBridgeProofWebhook(
     if (transferSessionNonce) {
       retellCallByOwnerCallControlId.set(callControlId, transferSessionNonce);
     }
+    await updateHumanTransferCallFromEvent({
+      callControlId,
+      clientState,
+      eventPayload,
+      eventType,
+    });
 
     if (eventType === "call.answered" && transferSessionNonce) {
       const retellLegCallControlId = retellLegByTransferSessionNonce.get(

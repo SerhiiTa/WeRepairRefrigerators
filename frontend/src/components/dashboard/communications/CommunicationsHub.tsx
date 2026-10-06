@@ -668,6 +668,43 @@ function getEffectiveCallStatus(call: CommunicationCallRow): string | null {
   return call.status;
 }
 
+function getCallProviderMetadata(call: CommunicationCallRow): Record<string, unknown> {
+  return call.provider_metadata &&
+    typeof call.provider_metadata === "object" &&
+    !Array.isArray(call.provider_metadata)
+    ? (call.provider_metadata as Record<string, unknown>)
+    : {};
+}
+
+function getCallDisplayTitle(call: CommunicationCallRow): string {
+  const metadata = getCallProviderMetadata(call);
+  if (metadata.call_phase === "human_transfer") {
+    return "Human Transfer";
+  }
+  return call.direction === "outbound" ? "Outgoing Call" : "Incoming Call";
+}
+
+function getCallParticipantLabel(
+  call: CommunicationCallRow,
+  fallbackCustomerPhone: string | null,
+): string {
+  const metadata = getCallProviderMetadata(call);
+  if (metadata.call_phase === "human_transfer") {
+    const participants =
+      metadata.participants &&
+      typeof metadata.participants === "object" &&
+      !Array.isArray(metadata.participants)
+        ? (metadata.participants as Record<string, unknown>)
+        : {};
+    const ownerName =
+      typeof participants.owner_name === "string" && participants.owner_name.trim()
+        ? participants.owner_name.trim()
+        : "Owner";
+    return `Customer ↔ ${ownerName}`;
+  }
+  return fallbackCustomerPhone ?? "No phone captured";
+}
+
 function formatServiceAddress(detail: ConversationDetailData, conversation: CommunicationConversation) {
   const job = detail.job;
   const intake = detail.intake;
@@ -3215,14 +3252,14 @@ function CallHistoryList({
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-sm font-black text-[#0F172A]">
-                    {call.direction === "outbound" ? "Outgoing Call" : "Incoming Call"}
+                    {getCallDisplayTitle(call)}
                   </p>
                   <p className="mt-1 text-xs font-semibold text-[#64748B]">
                     {getCallTimeLabel(call)}
                     {duration ? ` · ${duration}` : ""}
                   </p>
                   <p className="mt-1 text-xs font-semibold text-[#64748B]">
-                    {customerPhone ?? "No phone captured"}
+                    {getCallParticipantLabel(call, customerPhone)}
                   </p>
                 </div>
                 <Badge tone={effectiveStatus === "missed" ? "amber" : "blue"}>

@@ -579,6 +579,11 @@ function metadataRecord(value: Json | null | undefined): Record<string, unknown>
     : {};
 }
 
+function isHumanTransferCall(call: CommunicationCallRow): boolean {
+  const metadata = metadataRecord(call.provider_metadata);
+  return metadata.call_phase === "human_transfer";
+}
+
 function sanitizeProviderMetadata(value: Record<string, unknown>): Record<string, Json> {
   return JSON.parse(JSON.stringify(value)) as Record<string, Json>;
 }
@@ -1665,7 +1670,7 @@ async function handleTelnyxCallRecordingWebhook(
       return { ok: false, status: 503, message: "Unable to persist Telnyx recording metadata." };
     }
 
-    if (effectiveRecordingReference) {
+    if (effectiveRecordingReference && !isHumanTransferCall(call)) {
       const transcriptionResult = await finalizeTelnyxCallTranscript({
         callId: call.id,
         lastTriggerEvent: eventType,
@@ -1687,6 +1692,14 @@ async function handleTelnyxCallRecordingWebhook(
   }
 
   if (eventType === "call.recording.transcription.saved") {
+    if (isHumanTransferCall(call)) {
+      return {
+        ok: true,
+        status: 200,
+        message: "Human transfer recording transcription is not processed in PHONE-CAPTURE-01B.",
+      };
+    }
+
     const transcriptText =
       cleanText(payload.data?.payload?.transcription_text, 100_000) ??
       cleanText(payload.data?.payload?.transcript, 100_000);
