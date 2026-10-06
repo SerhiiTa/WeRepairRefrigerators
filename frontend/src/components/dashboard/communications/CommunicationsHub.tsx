@@ -3479,7 +3479,7 @@ function TranscriptPanel({
                 {segment.speaker === "agent"
                   ? "Sarah"
                   : segment.speaker === "human_transfer"
-                    ? "Human"
+                    ? "Serhii"
                     : "Customer"}:
               </span>{" "}
               {segment.text}
