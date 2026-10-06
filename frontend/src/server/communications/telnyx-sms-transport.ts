@@ -1,9 +1,4 @@
-import { execFile } from "node:child_process";
 import { createPublicKey, randomUUID, verify } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { promisify } from "node:util";
 
 import { getSupabaseServiceRoleClient } from "@/lib/supabase/service-role";
 import type {
@@ -23,7 +18,6 @@ const TELNYX_MESSAGES_URL = "https://api.telnyx.com/v2/messages";
 const TELNYX_RECORDINGS_URL = "https://api.telnyx.com/v2/recordings";
 const TELNYX_TRANSCRIPTIONS_URL = "https://api.telnyx.com/v2/ai/audio/transcriptions";
 const TELNYX_RECORDED_AUDIO_TRANSCRIPTION_MODEL = "openai/whisper-large-v3-turbo";
-const TELNYX_TIMESTAMPED_TRANSCRIPTION_MODEL = "deepgram/nova-3";
 const TELNYX_RECORDED_AUDIO_TRANSCRIPTION_ATTEMPTS = 3;
 const SIGNATURE_MAX_AGE_SECONDS = 5 * 60;
 const COMMUNICATIONS_MEDIA_BUCKET = "communications-media";
@@ -33,7 +27,6 @@ const SUPPORTED_MMS_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/web
 const TELNYX_MEDIA_HOSTS = new Set([
   "tlnx-mms-media.s3.us-east-1.amazonaws.com",
 ]);
-const execFileAsync = promisify(execFile);
 
 type TelnyxMessagePayload = {
   id?: unknown;
@@ -93,28 +86,6 @@ type TelnyxTranscriptSegment = {
   end_ms?: number;
   start_ms?: number;
 };
-
-type HumanTransferChannel = "A" | "B";
-
-const HUMAN_TRANSFER_CHANNEL_ROLES: Record<
-  HumanTransferChannel,
-  { displaySpeaker: "Customer" | "Serhii"; speaker: Extract<TelnyxTranscriptSpeaker, "customer" | "human_transfer"> }
-> = {
-  // V1 production-test mapping. Reverse only this constant if the first live test proves A/B are swapped.
-  A: { displaySpeaker: "Customer", speaker: "customer" },
-  B: { displaySpeaker: "Serhii", speaker: "human_transfer" },
-};
-
-function getFfmpegExecutablePath(): string | null {
-  const binaryName = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
-  return join(
-    process.cwd(),
-    "node_modules",
-    "@ffmpeg-installer",
-    `${process.platform}-${process.arch}`,
-    binaryName,
-  );
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -776,131 +747,6 @@ function readTranscriptionText(value: unknown): string | null {
   return cleanText(value.text, 100_000) ?? cleanText(value.transcript, 100_000);
 }
 
-function readTimestampedSegments(value: unknown): Array<{
-  end: number;
-  start: number;
-  text: string;
-}> {
-  if (!isRecord(value)) {
-    return [];
-  }
-
-  const segments = Array.isArray(value.segments)
-    ? value.segments
-    : isRecord(value.results) && Array.isArray(value.results.segments)
-      ? value.results.segments
-      : [];
-
-  return segments
-    .map((segment): { end: number; start: number; text: string } | null => {
-      if (!isRecord(segment)) {
-        return null;
-      }
-
-      const text = cleanText(segment.text ?? segment.transcript, 5_000);
-      const start =
-        typeof segment.start === "number"
-          ? segment.start
-          : typeof segment.start_time === "number"
-            ? segment.start_time
-            : null;
-      const end =
-        typeof segment.end === "number"
-          ? segment.end
-          : typeof segment.end_time === "number"
-            ? segment.end_time
-            : null;
-
-      return text && start !== null && end !== null ? { end, start, text } : null;
-    })
-    .filter((segment): segment is { end: number; start: number; text: string } =>
-      Boolean(segment),
-    );
-}
-
-function formatSpeakerTranscriptText(segments: TelnyxTranscriptSegment[]): string {
-  return segments
-    .map((segment) => {
-      const label =
-        segment.speaker === "human_transfer"
-          ? "SERHII"
-          : segment.speaker === "agent"
-            ? "SARAH"
-            : "CUSTOMER";
-      return `${label}: ${segment.text}`;
-    })
-    .join("\n");
-}
-
-async function splitStereoAudioToMonoWav({
-  audio,
-  recordingReference,
-}: {
-  audio: { bytes: ArrayBuffer; contentType: string; filename: string };
-  recordingReference: string;
-}): Promise<
-  | {
-      ok: true;
-      channels: Record<HumanTransferChannel, { bytes: Buffer; filename: string }>;
-    }
-  | { ok: false; reason: string }
-> {
-  const ffmpegPath = getFfmpegExecutablePath();
-  if (!ffmpegPath) {
-    return { ok: false, reason: "FFmpeg binary is not available." };
-  }
-
-  const workDir = await mkdtemp(join(tmpdir(), "wra-human-transfer-"));
-  const inputPath = join(workDir, audio.filename || `${recordingReference}.mp3`);
-  const channelAPath = join(workDir, `${recordingReference}-channel-a.wav`);
-  const channelBPath = join(workDir, `${recordingReference}-channel-b.wav`);
-
-  try {
-    await writeFile(inputPath, Buffer.from(audio.bytes));
-    await execFileAsync(ffmpegPath, [
-      "-hide_banner",
-      "-loglevel",
-      "error",
-      "-y",
-      "-i",
-      inputPath,
-      "-filter_complex",
-      "[0:a]channelsplit=channel_layout=stereo[channelA][channelB]",
-      "-map",
-      "[channelA]",
-      "-ac",
-      "1",
-      "-ar",
-      "8000",
-      channelAPath,
-      "-map",
-      "[channelB]",
-      "-ac",
-      "1",
-      "-ar",
-      "8000",
-      channelBPath,
-    ]);
-
-    return {
-      ok: true,
-      channels: {
-        A: { bytes: await readFile(channelAPath), filename: `${recordingReference}-A.wav` },
-        B: { bytes: await readFile(channelBPath), filename: `${recordingReference}-B.wav` },
-      },
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      reason: cleanDiagnosticMessage(
-        error instanceof Error ? error.message : "Unable to split dual-channel recording.",
-      ) ?? "Unable to split dual-channel recording.",
-    };
-  } finally {
-    await rm(workDir, { force: true, recursive: true }).catch(() => {});
-  }
-}
-
 async function transcribeTelnyxAudioBytes({
   bytes,
   contentType,
@@ -991,102 +837,6 @@ async function transcribeTelnyxAudioBytes({
     reason: lastFailure?.message ?? "Telnyx recorded-audio transcription failed.",
     status: lastFailure?.status ?? 502,
   };
-}
-
-async function transcribeTelnyxTimestampedSegments({
-  bytes,
-  channel,
-  filename,
-}: {
-  bytes: ArrayBuffer | Buffer;
-  channel: HumanTransferChannel;
-  filename: string;
-}): Promise<
-  | { ok: true; raw: Record<string, Json>; segments: TelnyxTranscriptSegment[]; text: string }
-  | { ok: false; reason: string; status: number }
-> {
-  const apiKey = getTelnyxApiKey();
-  if (!apiKey) {
-    return { ok: false, reason: "Telnyx API key is not configured.", status: 503 };
-  }
-
-  const role = HUMAN_TRANSFER_CHANNEL_ROLES[channel];
-  try {
-    const form = new FormData();
-    form.set("model", TELNYX_TIMESTAMPED_TRANSCRIPTION_MODEL);
-    form.set("response_format", "verbose_json");
-    form.append("timestamp_granularities[]", "segment");
-    form.set("file", new Blob([new Uint8Array(bytes)], { type: "audio/wav" }), filename);
-
-    const response = await fetch(TELNYX_TRANSCRIPTIONS_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: form,
-      cache: "no-store",
-    });
-    const payload = (await response.json().catch(() => null)) as unknown;
-    const timestampedSegments = readTimestampedSegments(payload);
-    const transcriptText = readTranscriptionText(payload);
-
-    if (!response.ok) {
-      const errors = isRecord(payload) && Array.isArray(payload.errors) ? payload.errors : null;
-      console.error("[telnyx-human-speaker-channel-transcription-error]", {
-        channel,
-        errors,
-        status: response.status,
-      });
-      return {
-        ok: false,
-        reason: "Telnyx channel transcription failed.",
-        status: response.status || 502,
-      };
-    }
-
-    if (timestampedSegments.length === 0) {
-      return {
-        ok: false,
-        reason: "Telnyx channel transcription returned no timestamped segments.",
-        status: 502,
-      };
-    }
-
-    return {
-      ok: true,
-      raw: sanitizeProviderMetadata({
-        channel,
-        model: TELNYX_TIMESTAMPED_TRANSCRIPTION_MODEL,
-        provider_response: isRecord(payload)
-          ? payload
-          : { text: transcriptText, segments: timestampedSegments },
-        response_format: "verbose_json",
-        timestamp_granularity: "segment",
-      }),
-      segments: timestampedSegments.map((segment) => ({
-        channel,
-        displaySpeaker: role.displaySpeaker,
-        end: segment.end,
-        end_ms: Math.round(segment.end * 1000),
-        speaker: role.speaker,
-        start: segment.start,
-        start_ms: Math.round(segment.start * 1000),
-        text: segment.text,
-      })),
-      text:
-        transcriptText ??
-        timestampedSegments.map((segment) => segment.text).join(" ").trim(),
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      reason:
-        cleanDiagnosticMessage(
-          error instanceof Error ? error.message : "Telnyx channel transcription failed.",
-        ) ?? "Telnyx channel transcription failed.",
-      status: 502,
-    };
-  }
 }
 
 async function getExistingTranscriptForRecording({
@@ -1218,82 +968,6 @@ async function transcribeTelnyxRecordingAudio({
   const audio = await fetchRecordingAudio(audioUrl);
   if (!audio) {
     return { ok: false, reason: "Unable to fetch Telnyx recording audio.", status: 502 };
-  }
-
-  if (isHumanTransferCall(call)) {
-    console.info("[telnyx-human-speaker-processing-started]", {
-      callId: call.id,
-      recordingReference,
-    });
-
-    const split = await splitStereoAudioToMonoWav({ audio, recordingReference });
-    if (split.ok) {
-      console.info("[telnyx-human-speaker-channel-split-succeeded]", {
-        channelABytes: split.channels.A.bytes.length,
-        channelBBytes: split.channels.B.bytes.length,
-        recordingReference,
-      });
-
-      const channelA = await transcribeTelnyxTimestampedSegments({
-        bytes: split.channels.A.bytes,
-        channel: "A",
-        filename: split.channels.A.filename,
-      });
-      console.info("[telnyx-human-speaker-channel-a-transcribed]", {
-        ok: channelA.ok,
-        recordingReference,
-        segmentCount: channelA.ok ? channelA.segments.length : 0,
-      });
-
-      const channelB = channelA.ok
-        ? await transcribeTelnyxTimestampedSegments({
-            bytes: split.channels.B.bytes,
-            channel: "B",
-            filename: split.channels.B.filename,
-          })
-        : null;
-      console.info("[telnyx-human-speaker-channel-b-transcribed]", {
-        ok: Boolean(channelB?.ok),
-        recordingReference,
-        segmentCount: channelB?.ok ? channelB.segments.length : 0,
-      });
-
-      if (channelA.ok && channelB?.ok) {
-        const segments = [...channelA.segments, ...channelB.segments].sort((left, right) => {
-          const leftStart = left.start_ms ?? Math.round(left.start * 1000);
-          const rightStart = right.start_ms ?? Math.round(right.start * 1000);
-          return leftStart - rightStart;
-        });
-
-        console.info("[telnyx-human-speaker-segments-created]", {
-          recordingReference,
-          segmentCount: segments.length,
-        });
-
-        return {
-          ok: true,
-          raw: sanitizeProviderMetadata({
-            channel_mapping: HUMAN_TRANSFER_CHANNEL_ROLES,
-            channel_strategy: "human_transfer_dual_channel_v1",
-            full_transcript_source: "telnyx_dual_channel_timestamped_stt",
-            input_channels: 2,
-            model: TELNYX_TIMESTAMPED_TRANSCRIPTION_MODEL,
-            provider_response: {
-              A: channelA.raw,
-              B: channelB.raw,
-            },
-            timestamp_metadata_available: true,
-          }),
-          segments,
-          text: formatSpeakerTranscriptText(segments),
-        };
-      }
-    }
-
-    console.warn("[telnyx-human-speaker-flat-fallback-used]", {
-      reason: split.ok ? "channel_transcription_failed" : split.reason,
-      recordingReference,
-    });
   }
 
   if (shouldUseStableFlatTranscription()) {
