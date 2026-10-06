@@ -7,6 +7,7 @@ import {
   registerRetellBridgeProofPhoneCall,
   resolveRetellBridgeProofTransferContext,
 } from "./retell-phone-call";
+import { handleTelnyxMessagingWebhook } from "./telnyx-sms-transport";
 
 const TELNYX_CALLS_URL = "https://api.telnyx.com/v2/calls";
 const ALLOWED_BUSINESS_NUMBERS = new Set(["+13464138813", "+13466461949"]);
@@ -253,6 +254,26 @@ async function findOrCreateTransferConversation({
   }
 
   if (retellCallId) {
+    const { data: retellCall, error: retellCallError } = await supabase
+      .from("communication_calls")
+      .select("conversation_id")
+      .eq("provider_name", "retell")
+      .eq("provider_call_id", retellCallId)
+      .limit(1)
+      .maybeSingle();
+
+    if (retellCallError) {
+      console.error("[telnyx-bridge-proof-retell-call-conversation-lookup-error]", {
+        message: retellCallError.message,
+        code: retellCallError.code,
+      });
+      return null;
+    }
+
+    if (typeof retellCall?.conversation_id === "string") {
+      return retellCall.conversation_id;
+    }
+
     const { data, error } = await supabase
       .from("communication_conversations")
       .select("id")
@@ -274,7 +295,7 @@ async function findOrCreateTransferConversation({
     }
   }
 
-  if (callerNumber) {
+  if (!retellCallId && callerNumber) {
     const { data, error } = await supabase
       .from("communication_conversations")
       .select("id")
@@ -817,6 +838,8 @@ export async function requestRetellHumanHandoff({
   console.info("[telnyx-bridge-proof-human-call-reserved]", {
     ok: Boolean(reservedCall),
     transferSessionNonce: context.nonce,
+    humanCallReserved: Boolean(reservedCall?.callId),
+    correctConversationResolved: Boolean(reservedCall?.conversationId),
     communicationCallIdPresent: Boolean(reservedCall?.callId),
     conversationIdPresent: Boolean(reservedCall?.conversationId),
     sourceAccountIdPresent: Boolean(reservedCall?.sourceAccountId),
@@ -911,6 +934,22 @@ export async function handleTelnyxBridgeProofWebhook(
     if (transferSessionNonce) {
       retellCallByOwnerCallControlId.set(callControlId, transferSessionNonce);
     }
+
+    if (eventType.startsWith("call.recording.")) {
+      const recordingResult = await handleTelnyxMessagingWebhook(payload);
+      console.info("[telnyx-bridge-proof-owner-recording-result]", {
+        eventType,
+        ok: recordingResult.ok,
+        status: recordingResult.status,
+        communicationCallIdPresent: Boolean(
+          cleanString(clientState.communication_call_id, 120),
+        ),
+        recordingEventMatched: recordingResult.status !== 202,
+        recordingPersisted: recordingResult.ok && recordingResult.status === 200,
+      });
+      return recordingResult;
+    }
+
     await updateHumanTransferCallFromEvent({
       callControlId,
       clientState,
