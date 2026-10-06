@@ -135,6 +135,9 @@ type HubConversation = CommunicationConversation & {
   inboundSourceId: string | null;
   attribution: Json | null;
   authoritativeEventType: string | null;
+  threadConversationIds: string[];
+  threadKey: string;
+  threadSourceTypes: DatabaseCommunicationSourceType[];
   unreadCount: number;
   lastReadAt: string | null;
   lastInboundAt: string | null;
@@ -193,6 +196,9 @@ function mapConversation(row: ConversationRow): HubConversation {
     inboundSourceId: row.inbound_source_id ?? null,
     attribution: row.attribution ?? null,
     authoritativeEventType: getJsonString(row.provider_metadata, "authoritativeEventType"),
+    threadConversationIds: [row.id],
+    threadKey: "",
+    threadSourceTypes: [row.primary_source_type],
     unreadCount: row.unread_count ?? 0,
     lastReadAt: row.last_read_at ?? null,
     lastInboundAt: row.last_inbound_at ?? null,
@@ -234,21 +240,30 @@ function getSourceLabel(sourceType: DatabaseCommunicationSourceType): string {
   return labels[sourceType];
 }
 
-function getChannelFilter(conversation: HubConversation): ChannelFilter {
-  if (conversation.sourceType === "phone") {
-    return "calls";
-  }
-  if (conversation.sourceType === "sms") {
-    return "texts";
-  }
-  if (conversation.sourceType === "website_form") {
-    return "forms";
-  }
-  if (getAttributionValue(conversation.attribution, "channel") === "booking_widget") {
-    return "booking";
+function hasConversationChannel(conversation: HubConversation, channel: ChannelFilter): boolean {
+  if (channel === "all") {
+    return true;
   }
 
-  return "all";
+  return conversation.threadSourceTypes.some((sourceType) => {
+    if (channel === "calls") {
+      return sourceType === "phone";
+    }
+    if (channel === "texts") {
+      return sourceType === "sms";
+    }
+    if (channel === "forms") {
+      return sourceType === "website_form";
+    }
+    if (channel === "booking") {
+      return (
+        sourceType === "website_form" &&
+        getAttributionValue(conversation.attribution, "channel") === "booking_widget"
+      );
+    }
+
+    return false;
+  });
 }
 
 function getConversationTitle(conversation: HubConversation): string {
@@ -285,6 +300,136 @@ function sortConversationsByActivity(conversations: HubConversation[]) {
     (left, right) =>
       getConversationActivityTimestamp(right) - getConversationActivityTimestamp(left),
   );
+}
+
+function normalizeThreadPhone(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const digits = value.replace(/\D/g, "");
+  if (digits.length === 11 && digits.startsWith("1")) {
+    return `+${digits}`;
+  }
+  if (digits.length === 10) {
+    return `+1${digits}`;
+  }
+  if (value.trim().startsWith("+") && digits.length >= 8) {
+    return `+${digits}`;
+  }
+
+  return null;
+}
+
+function getCustomerThreadKey(conversation: HubConversation): string {
+  if (conversation.customerId) {
+    return `customer:${conversation.customerId}`;
+  }
+
+  const phone = normalizeThreadPhone(conversation.customerPhone);
+  if (phone) {
+    return `phone:${phone}`;
+  }
+
+  const email = conversation.customerEmail?.trim().toLowerCase();
+  if (email) {
+    return `email:${email}`;
+  }
+
+  return `conversation:${conversation.id}`;
+}
+
+function getConversationStatusRank(status: HubConversation["status"]): number {
+  if (status === "needs_action") {
+    return 4;
+  }
+  if (status === "open") {
+    return 3;
+  }
+  if (status === "linked") {
+    return 2;
+  }
+  if (status === "resolved") {
+    return 1;
+  }
+  return 0;
+}
+
+function getLatestString(values: Array<string | null>): string | null {
+  const sorted = values.filter((value): value is string => Boolean(value)).sort();
+  return sorted.length > 0 ? sorted[sorted.length - 1] : null;
+}
+
+function mergeCustomerThread(conversations: HubConversation[]): HubConversation {
+  const sorted = sortConversationsByActivity(conversations);
+  const latest = sorted[0];
+  const customerCarrier =
+    sorted.find((conversation) => conversation.customerId) ?? latest;
+  const phoneCarrier =
+    sorted.find((conversation) => normalizeThreadPhone(conversation.customerPhone)) ?? latest;
+  const statusCarrier = [...sorted].sort(
+    (left, right) =>
+      getConversationStatusRank(right.status) - getConversationStatusRank(left.status),
+  )[0];
+  const latestPreviewCarrier =
+    sorted.find((conversation) => getConversationPreview(conversation) !== "No message preview yet.") ??
+    latest;
+  const threadSourceTypes = Array.from(
+    new Set(sorted.map((conversation) => conversation.sourceType)),
+  );
+
+  return {
+    ...latest,
+    id: latest.id,
+    sourceType: latest.sourceType,
+    status: statusCarrier.status,
+    providerName: latest.providerName,
+    customerDisplayName:
+      customerCarrier.customerDisplayName ??
+      latest.customerDisplayName ??
+      phoneCarrier.customerDisplayName,
+    customerId: customerCarrier.customerId ?? null,
+    customerPhone:
+      normalizeThreadPhone(phoneCarrier.customerPhone) ??
+      phoneCarrier.customerPhone ??
+      latest.customerPhone,
+    customerEmail: customerCarrier.customerEmail ?? latest.customerEmail,
+    serviceAddress: customerCarrier.serviceAddress ?? latest.serviceAddress,
+    summary: latestPreviewCarrier.summary ?? latest.summary,
+    nextAction: latestPreviewCarrier.nextAction ?? latest.nextAction,
+    linkedIntakeRequestId:
+      customerCarrier.linkedIntakeRequestId ?? latest.linkedIntakeRequestId,
+    linkedServiceRequestId:
+      customerCarrier.linkedServiceRequestId ?? latest.linkedServiceRequestId,
+    sourceAccountId: latest.sourceAccountId,
+    inboundSourceId: latest.inboundSourceId,
+    attribution: latest.attribution,
+    authoritativeEventType: latest.authoritativeEventType,
+    threadConversationIds: sorted.map((conversation) => conversation.id),
+    threadKey: getCustomerThreadKey(latest),
+    threadSourceTypes,
+    unreadCount: sorted.reduce((total, conversation) => total + conversation.unreadCount, 0),
+    lastReadAt: getLatestString(sorted.map((conversation) => conversation.lastReadAt)),
+    lastInboundAt: getLatestString(sorted.map((conversation) => conversation.lastInboundAt)),
+    lastOutboundAt: getLatestString(sorted.map((conversation) => conversation.lastOutboundAt)),
+    latestMessagePreview: latestPreviewCarrier.latestMessagePreview,
+  };
+}
+
+function aggregateCustomerThreads(conversations: HubConversation[]): HubConversation[] {
+  const groups = new Map<string, HubConversation[]>();
+
+  for (const conversation of conversations) {
+    const key = getCustomerThreadKey(conversation);
+    const existing = groups.get(key) ?? [];
+    groups.set(key, [...existing, { ...conversation, threadKey: key }]);
+  }
+
+  return sortConversationsByActivity(
+    Array.from(groups.values()).map((threadConversations) =>
+      mergeCustomerThread(threadConversations),
+    ),
+  ).slice(0, 50);
 }
 
 function sortMessagesByNewest(messages: MessageRow[]) {
@@ -705,6 +850,119 @@ function getCallParticipantLabel(
   return fallbackCustomerPhone ?? "No phone captured";
 }
 
+type CallSession = {
+  id: string;
+  calls: CommunicationCallRow[];
+};
+
+type ThreadEvent =
+  | { id: string; occurredAt: string; session: CallSession; type: "call_session" }
+  | { id: string; message: MessageRow; occurredAt: string; type: "message" }
+  | { event: CommunicationTimelineEvent; id: string; occurredAt: string; type: "timeline" };
+
+function getNestedMetadata(
+  metadata: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> {
+  const value = metadata[key];
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function getCallSessionKey(call: CommunicationCallRow): string {
+  const metadata = getCallProviderMetadata(call);
+  const transfer = getNestedMetadata(metadata, "transfer");
+  const retellCallId = typeof transfer.retell_call_id === "string" ? transfer.retell_call_id : null;
+  if (retellCallId) {
+    return `retell:${retellCallId}`;
+  }
+
+  if (call.provider_name === "retell" && call.provider_call_id) {
+    return `retell:${call.provider_call_id}`;
+  }
+
+  const transferSessionNonce =
+    typeof transfer.transfer_session_nonce === "string"
+      ? transfer.transfer_session_nonce
+      : null;
+  if (transferSessionNonce) {
+    return `transfer:${transferSessionNonce}`;
+  }
+
+  return `call:${call.id}`;
+}
+
+function groupCallSessions(calls: CommunicationCallRow[]): CallSession[] {
+  const groups = new Map<string, CommunicationCallRow[]>();
+
+  for (const call of calls) {
+    const key = getCallSessionKey(call);
+    const existing = groups.get(key) ?? [];
+    groups.set(key, [...existing, call]);
+  }
+
+  return Array.from(groups.entries())
+    .map(([id, sessionCalls]) => ({
+      id,
+      calls: [...sessionCalls].sort(
+        (left, right) =>
+          (Date.parse(left.started_at ?? left.created_at) || 0) -
+          (Date.parse(right.started_at ?? right.created_at) || 0),
+      ),
+    }))
+    .sort((left, right) => {
+      const leftLatest = left.calls
+        .map((call) => Date.parse(call.started_at ?? call.created_at) || 0)
+        .reduce((latest, value) => Math.max(latest, value), 0);
+      const rightLatest = right.calls
+        .map((call) => Date.parse(call.started_at ?? call.created_at) || 0)
+        .reduce((latest, value) => Math.max(latest, value), 0);
+      return rightLatest - leftLatest;
+    });
+}
+
+function getCallSessionOccurredAt(session: CallSession): string {
+  return session.calls[0]?.started_at ?? session.calls[0]?.created_at ?? new Date(0).toISOString();
+}
+
+function buildThreadEvents({
+  calls,
+  messages,
+  timelineEvents,
+}: {
+  calls: CommunicationCallRow[];
+  messages: MessageRow[];
+  timelineEvents: CommunicationTimelineEvent[];
+}): ThreadEvent[] {
+  const hasCalls = calls.length > 0;
+  const callEvents: ThreadEvent[] = groupCallSessions(calls).map((session) => ({
+    id: session.id,
+    occurredAt: getCallSessionOccurredAt(session),
+    session,
+    type: "call_session",
+  }));
+  const messageEvents: ThreadEvent[] = messages.map((message) => ({
+    id: `message:${message.id}`,
+    message,
+    occurredAt: message.occurred_at,
+    type: "message",
+  }));
+  const timelineOnlyEvents: ThreadEvent[] = timelineEvents
+    .filter((event) => !(hasCalls && event.type === "incoming_call"))
+    .map((event) => ({
+      event,
+      id: `timeline:${event.id}`,
+      occurredAt: event.eventTime,
+      type: "timeline",
+    }));
+
+  return [...callEvents, ...messageEvents, ...timelineOnlyEvents].sort(
+    (left, right) =>
+      (Date.parse(left.occurredAt) || 0) - (Date.parse(right.occurredAt) || 0),
+  );
+}
+
 function formatServiceAddress(detail: ConversationDetailData, conversation: CommunicationConversation) {
   const job = detail.job;
   const intake = detail.intake;
@@ -813,6 +1071,7 @@ export function CommunicationsHub() {
     conversations: [],
     error: null,
   });
+  const [, setRawConversations] = useState<HubConversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(() =>
     getInitialQueryParam("conversation"),
   );
@@ -899,9 +1158,19 @@ export function CommunicationsHub() {
       const conversations = await hydrateLatestMessagePreviews(
         sortConversationsByActivity(((data ?? []) as ConversationRow[]).map(mapConversation)),
       );
+      const threads = aggregateCustomerThreads(conversations);
 
-      setHubState({ status: "ready", conversations, error: null });
-      setSelectedConversationId((current) => current ?? conversations[0]?.id ?? null);
+      setRawConversations(conversations);
+      setHubState({ status: "ready", conversations: threads, error: null });
+      setSelectedConversationId((current) => {
+        if (!current) {
+          return threads[0]?.id ?? null;
+        }
+        return (
+          threads.find((thread) => thread.threadConversationIds.includes(current))?.id ??
+          current
+        );
+      });
     }
 
     void loadConversations();
@@ -929,22 +1198,34 @@ export function CommunicationsHub() {
         },
         (payload) => {
           if (payload.eventType === "DELETE") {
-            setHubState((current) => ({
-              ...current,
-              conversations: current.conversations.filter(
-                (conversation) => conversation.id !== payload.old.id,
-              ),
-            }));
+            setRawConversations((current) => {
+              const nextRaw = current.filter((conversation) => conversation.id !== payload.old.id);
+              setHubState((hub) => ({
+                ...hub,
+                conversations: aggregateCustomerThreads(nextRaw),
+              }));
+              return nextRaw;
+            });
             return;
           }
 
           const row = payload.new as ConversationRow;
-          setHubState((current) => ({
-            ...current,
-            conversations: applyConversationUpdate(current.conversations, row),
-          }));
+          setRawConversations((current) => {
+            const nextRaw = applyConversationUpdate(current, row);
+            setHubState((hub) => ({
+              ...hub,
+              conversations: aggregateCustomerThreads(nextRaw),
+            }));
+            return nextRaw;
+          });
 
-          if (row.id === selectedConversationId) {
+          const selectedConversation = hubState.conversations.find(
+            (conversation) => conversation.id === selectedConversationId,
+          );
+          if (
+            selectedConversation?.threadConversationIds.includes(row.id) ||
+            row.id === selectedConversationId
+          ) {
             setDetailReloadToken((value) => value + 1);
           }
         },
@@ -975,7 +1256,14 @@ export function CommunicationsHub() {
                 : current,
             );
 
-            if (conversationId === selectedConversationId) {
+            const selectedConversation = hubState.conversations.find(
+              (conversation) => conversation.id === selectedConversationId,
+            );
+            if (
+              conversationId &&
+              (selectedConversation?.threadConversationIds.includes(conversationId) ||
+                conversationId === selectedConversationId)
+            ) {
               setDetailReloadToken((value) => value + 1);
             }
             return;
@@ -983,12 +1271,22 @@ export function CommunicationsHub() {
 
           const message = payload.new as MessageRow;
 
-          setHubState((current) => ({
-            ...current,
-            conversations: applyMessageUpdate(current.conversations, message),
-          }));
+          setRawConversations((current) => {
+            const nextRaw = applyMessageUpdate(current, message);
+            setHubState((hub) => ({
+              ...hub,
+              conversations: aggregateCustomerThreads(nextRaw),
+            }));
+            return nextRaw;
+          });
 
-          if (message.conversation_id !== selectedConversationId) {
+          const selectedConversation = hubState.conversations.find(
+            (conversation) => conversation.id === selectedConversationId,
+          );
+          if (
+            !selectedConversation?.threadConversationIds.includes(message.conversation_id) &&
+            message.conversation_id !== selectedConversationId
+          ) {
             return;
           }
 
@@ -1017,7 +1315,14 @@ export function CommunicationsHub() {
               ? (payload.old as Partial<CommunicationCallRow>)
               : (payload.new as Partial<CommunicationCallRow>);
 
-          if (row.conversation_id === selectedConversationId) {
+          const selectedConversation = hubState.conversations.find(
+            (conversation) => conversation.id === selectedConversationId,
+          );
+          if (
+            row.conversation_id &&
+            (selectedConversation?.threadConversationIds.includes(row.conversation_id) ||
+              row.conversation_id === selectedConversationId)
+          ) {
             setDetailReloadToken((value) => value + 1);
           }
         },
@@ -1035,7 +1340,14 @@ export function CommunicationsHub() {
               ? (payload.old as Partial<TranscriptRow>)
               : (payload.new as Partial<TranscriptRow>);
 
-          if (row.conversation_id === selectedConversationId) {
+          const selectedConversation = hubState.conversations.find(
+            (conversation) => conversation.id === selectedConversationId,
+          );
+          if (
+            row.conversation_id &&
+            (selectedConversation?.threadConversationIds.includes(row.conversation_id) ||
+              row.conversation_id === selectedConversationId)
+          ) {
             setDetailReloadToken((value) => value + 1);
           }
         },
@@ -1045,7 +1357,7 @@ export function CommunicationsHub() {
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [selectedConversationId]);
+  }, [hubState.conversations, selectedConversationId]);
 
   useEffect(() => {
     let isMounted = true;
@@ -1076,6 +1388,9 @@ export function CommunicationsHub() {
       }
 
       setDetailState({ status: "loading", data: emptyDetailData, error: null });
+      const conversationIds = conversation.threadConversationIds.length > 0
+        ? conversation.threadConversationIds
+        : [conversation.id];
 
       const [
         messagesResult,
@@ -1089,22 +1404,22 @@ export function CommunicationsHub() {
           supabase
             .from("communication_messages")
             .select("*")
-            .eq("conversation_id", selectedConversationId)
+            .in("conversation_id", conversationIds)
             .order("occurred_at", { ascending: false })
-            .limit(5),
+            .limit(25),
           supabase
             .from("communication_calls")
             .select("*")
-            .eq("conversation_id", selectedConversationId)
+            .in("conversation_id", conversationIds)
             .order("started_at", { ascending: false, nullsFirst: false })
             .order("created_at", { ascending: false })
-            .limit(5),
+            .limit(25),
           supabase
             .from("communication_timeline_events")
             .select(
               "id,event_type,title,body,event_time,service_request_id,appointment_id,estimate_id,invoice_id",
             )
-            .eq("conversation_id", selectedConversationId)
+            .in("conversation_id", conversationIds)
             .order("event_time", { ascending: false })
             .limit(30),
           conversation.linkedIntakeRequestId
@@ -1117,16 +1432,7 @@ export function CommunicationsHub() {
           supabase
             .from("communication_leads")
             .select("*")
-            .or(
-              [
-                `conversation_id.eq.${selectedConversationId}`,
-                conversation.linkedIntakeRequestId
-                  ? `intake_request_id.eq.${conversation.linkedIntakeRequestId}`
-                  : null,
-              ]
-                .filter(Boolean)
-                .join(","),
-            )
+            .in("conversation_id", conversationIds)
             .order("created_at", { ascending: true })
             .limit(1)
             .maybeSingle(),
@@ -1395,7 +1701,11 @@ export function CommunicationsHub() {
   const selectedConversation = useMemo(
     () =>
       hubState.conversations.find(
-        (conversation) => conversation.id === selectedConversationId,
+        (conversation) =>
+          conversation.id === selectedConversationId ||
+          (selectedConversationId
+            ? conversation.threadConversationIds.includes(selectedConversationId)
+            : false),
       ) ?? null,
     [hubState.conversations, selectedConversationId],
   );
@@ -1417,16 +1727,30 @@ export function CommunicationsHub() {
 
     let canceled = false;
     const timer = window.setTimeout(() => {
-      void supabase
-        .rpc("mark_communication_conversation_read_rpc", {
-          p_conversation_id: selectedConversationId,
-        })
-        .then(({ error }) => {
-          if (error || canceled) {
+      const conversationIds =
+        selectedConversation.threadConversationIds.length > 0
+          ? selectedConversation.threadConversationIds
+          : [selectedConversation.id];
+
+      void Promise.all(
+        conversationIds.map((conversationId) =>
+          supabase.rpc("mark_communication_conversation_read_rpc", {
+            p_conversation_id: conversationId,
+          }),
+        ),
+      ).then((results) => {
+          if (results.some(({ error }) => error) || canceled) {
             return;
           }
 
           const readAt = new Date().toISOString();
+          setRawConversations((current) =>
+            current.map((conversation) =>
+              conversationIds.includes(conversation.id)
+                ? { ...conversation, unreadCount: 0, lastReadAt: readAt }
+                : conversation,
+            ),
+          );
           setHubState((current) => ({
             ...current,
             conversations: current.conversations.map((conversation) =>
@@ -1454,7 +1778,7 @@ export function CommunicationsHub() {
 
     return hubState.conversations.filter((conversation) => {
       const matchesFilter =
-        activeFilter === "all" || getChannelFilter(conversation) === activeFilter;
+        activeFilter === "all" || hasConversationChannel(conversation, activeFilter);
       const matchesInbox =
         inboxTab === "archived"
           ? conversation.status === "resolved"
@@ -1481,10 +1805,10 @@ export function CommunicationsHub() {
   const channelCounts = useMemo(
     () => ({
       all: hubState.conversations.length,
-      calls: hubState.conversations.filter((item) => getChannelFilter(item) === "calls").length,
-      texts: hubState.conversations.filter((item) => getChannelFilter(item) === "texts").length,
-      forms: hubState.conversations.filter((item) => getChannelFilter(item) === "forms").length,
-      booking: hubState.conversations.filter((item) => getChannelFilter(item) === "booking").length,
+      calls: hubState.conversations.filter((item) => hasConversationChannel(item, "calls")).length,
+      texts: hubState.conversations.filter((item) => hasConversationChannel(item, "texts")).length,
+      forms: hubState.conversations.filter((item) => hasConversationChannel(item, "forms")).length,
+      booking: hubState.conversations.filter((item) => hasConversationChannel(item, "booking")).length,
     }),
     [hubState.conversations],
   );
@@ -1507,6 +1831,15 @@ export function CommunicationsHub() {
       eventBody === summary
     );
   });
+  const threadEvents = useMemo(
+    () =>
+      buildThreadEvents({
+        calls: detail.calls,
+        messages: chronologicalMessages,
+        timelineEvents: visibleTimeline,
+      }),
+    [chronologicalMessages, detail.calls, visibleTimeline],
+  );
   const buildCommunicationsReturnTo = (conversationId = selectedConversationId) => {
     const params = new URLSearchParams();
     if (conversationId) {
@@ -2179,24 +2512,6 @@ export function CommunicationsHub() {
                 </p>
               ) : mobileDetailTab === "conversation" ? (
                 <>
-                  {selectedConversation.sourceType === "phone" ? (
-                    <CallHistoryList
-                      calls={detail.calls}
-                      customerPhone={selectedConversation.customerPhone}
-                      expandedTranscriptByCallId={expandedTranscriptByCallId}
-                      onRetryTranscript={(callId) => void handleRetryTranscript(callId)}
-                      onToggleTranscript={(callId) =>
-                        setExpandedTranscriptByCallId((current) => ({
-                          ...current,
-                          [callId]: !current[callId],
-                        }))
-                      }
-                      recordingStatesByCallId={recordingStatesByCallId}
-                      retryingTranscriptCallId={retryingTranscriptCallId}
-                      transcriptsById={transcriptsById}
-                    />
-                  ) : null}
-
                   {requestDetailRows.length > 0 ? (
                     <RequestDetailsCard
                       rows={requestDetailRows}
@@ -2204,54 +2519,23 @@ export function CommunicationsHub() {
                     />
                   ) : null}
 
-                  {chronologicalMessages.map((message) => {
-                    const outbound = message.direction === "outbound";
-                    const attachments = detail.attachmentsByMessageId[message.id] ?? [];
-                    return (
-                      <div
-                        className={`flex ${outbound ? "justify-end" : "justify-start"}`}
-                        key={message.id}
-                      >
-                        <div
-                          className={`max-w-[88%] rounded-2xl px-4 py-3 ${
-                            outbound
-                              ? "bg-[#0F6BFF] text-white"
-                              : "bg-white text-[#0F172A]"
-                          }`}
-                        >
-                          {message.body ? (
-                            <p className="text-sm font-medium leading-6">
-                              {message.body}
-                            </p>
-                          ) : attachments.length === 0 ? (
-                            <p className="text-sm font-medium leading-6">
-                              Message body unavailable.
-                            </p>
-                          ) : null}
-                          <MessageAttachments
-                            attachments={attachments}
-                            onPreview={setPreviewAttachment}
-                          />
-                          <p
-                            className={`mt-1 text-xs font-medium ${
-                              outbound ? "text-blue-100" : "text-[#64748B]"
-                            }`}
-                          >
-                            {formatServiceRequestDate(message.occurred_at)}
-                          </p>
-                        </div>
-                      </div>
-                    );
-                  })}
-
-                  {visibleTimeline.slice(-6).map((event) => (
-                    <PreviewBlock
-                      key={event.id}
-                      label={event.title || getTimelineEventLabel(event.type)}
-                      timestamp={event.eventTime}
-                      value={event.body ?? "No details captured."}
-                    />
-                  ))}
+                  <ThreadEventTimeline
+                    attachmentsByMessageId={detail.attachmentsByMessageId}
+                    customerPhone={selectedConversation.customerPhone}
+                    events={threadEvents}
+                    expandedTranscriptByCallId={expandedTranscriptByCallId}
+                    onPreviewAttachment={setPreviewAttachment}
+                    onRetryTranscript={(callId) => void handleRetryTranscript(callId)}
+                    onToggleTranscript={(callId) =>
+                      setExpandedTranscriptByCallId((current) => ({
+                        ...current,
+                        [callId]: !current[callId],
+                      }))
+                    }
+                    recordingStatesByCallId={recordingStatesByCallId}
+                    retryingTranscriptCallId={retryingTranscriptCallId}
+                    transcriptsById={transcriptsById}
+                  />
 
                   <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
                     <div className="mb-3 flex gap-4 text-sm font-semibold">
@@ -2546,24 +2830,6 @@ export function CommunicationsHub() {
               ) : (
                 <>
                   <div className="flex-1 space-y-4 overflow-y-auto bg-[#F8FAFC] p-5">
-                    {selectedConversation.sourceType === "phone" ? (
-                      <CallHistoryList
-                        calls={detail.calls}
-                        customerPhone={selectedConversation.customerPhone}
-                        expandedTranscriptByCallId={expandedTranscriptByCallId}
-                        onRetryTranscript={(callId) => void handleRetryTranscript(callId)}
-                        onToggleTranscript={(callId) =>
-                          setExpandedTranscriptByCallId((current) => ({
-                            ...current,
-                            [callId]: !current[callId],
-                          }))
-                        }
-                        recordingStatesByCallId={recordingStatesByCallId}
-                        retryingTranscriptCallId={retryingTranscriptCallId}
-                        transcriptsById={transcriptsById}
-                      />
-                    ) : null}
-
                     {requestDetailRows.length > 0 ? (
                       <RequestDetailsCard
                         rows={requestDetailRows}
@@ -2571,74 +2837,30 @@ export function CommunicationsHub() {
                       />
                     ) : null}
 
-                    {chronologicalMessages.length === 0 &&
-                    visibleTimeline.length === 0 &&
-                    detail.calls.length === 0 &&
-                    detail.transcripts.length === 0 ? (
+                    {threadEvents.length === 0 && detail.transcripts.length === 0 ? (
                       <EmptyState
                         title="No conversation events yet"
                         body="Messages, call events and internal timeline entries will appear here."
                       />
                     ) : null}
 
-                    {chronologicalMessages.map((message) => {
-                      const outbound = message.direction === "outbound";
-                      const attachments = detail.attachmentsByMessageId[message.id] ?? [];
-                      return (
-                        <div
-                          className={`flex ${outbound ? "justify-end" : "justify-start"}`}
-                          key={message.id}
-                        >
-                          <div
-                            className={`max-w-[78%] rounded-2xl px-4 py-3 ${
-                              outbound
-                                ? "bg-[#0F6BFF] text-white"
-                                : "bg-white text-[#0F172A]"
-                            }`}
-                          >
-                            {message.body ? (
-                              <p className="text-sm font-medium leading-6">
-                                {message.body}
-                              </p>
-                            ) : attachments.length === 0 ? (
-                              <p className="text-sm font-medium leading-6">
-                                Message body unavailable.
-                              </p>
-                            ) : null}
-                            <MessageAttachments
-                              attachments={attachments}
-                              onPreview={setPreviewAttachment}
-                            />
-                            <p
-                              className={`mt-1 text-xs font-medium ${
-                                outbound ? "text-blue-100" : "text-[#64748B]"
-                              }`}
-                            >
-                              {formatServiceRequestDate(message.occurred_at)}
-                            </p>
-                          </div>
-                        </div>
-                      );
-                    })}
-
-                    {visibleTimeline.slice(-6).map((event) => (
-                      <div
-                        className="rounded-xl border border-[#E5E7EB] bg-white p-3"
-                        key={event.id}
-                      >
-                        <p className="text-sm font-semibold text-[#0F172A]">
-                          {event.title || getTimelineEventLabel(event.type)}
-                        </p>
-                        {event.body ? (
-                          <p className="mt-1 text-sm font-medium leading-6 text-[#64748B]">
-                            {event.body}
-                          </p>
-                        ) : null}
-                        <p className="mt-2 text-xs font-medium text-[#64748B]">
-                          {formatServiceRequestDate(event.eventTime)}
-                        </p>
-                      </div>
-                    ))}
+                    <ThreadEventTimeline
+                      attachmentsByMessageId={detail.attachmentsByMessageId}
+                      customerPhone={selectedConversation.customerPhone}
+                      events={threadEvents}
+                      expandedTranscriptByCallId={expandedTranscriptByCallId}
+                      onPreviewAttachment={setPreviewAttachment}
+                      onRetryTranscript={(callId) => void handleRetryTranscript(callId)}
+                      onToggleTranscript={(callId) =>
+                        setExpandedTranscriptByCallId((current) => ({
+                          ...current,
+                          [callId]: !current[callId],
+                        }))
+                      }
+                      recordingStatesByCallId={recordingStatesByCallId}
+                      retryingTranscriptCallId={retryingTranscriptCallId}
+                      transcriptsById={transcriptsById}
+                    />
                   </div>
 
                   <div className="border-t border-[#E5E7EB] p-4">
@@ -3191,37 +3413,135 @@ function Panel({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-function CallHistoryList({
-  calls,
+function ThreadEventTimeline({
+  attachmentsByMessageId,
+  customerPhone,
+  events,
   expandedTranscriptByCallId,
+  onPreviewAttachment,
   onRetryTranscript,
   onToggleTranscript,
   recordingStatesByCallId,
   retryingTranscriptCallId,
   transcriptsById,
-  customerPhone,
 }: {
-  calls: CommunicationCallRow[];
+  attachmentsByMessageId: Record<string, SignedMessageAttachment[]>;
+  customerPhone: string | null;
+  events: ThreadEvent[];
   expandedTranscriptByCallId: ExpandedTranscriptByCallId;
+  onPreviewAttachment: (attachment: SignedMessageAttachment) => void;
   onRetryTranscript: (callId: string) => void;
   onToggleTranscript: (callId: string) => void;
   recordingStatesByCallId: RecordingStateByCallId;
   retryingTranscriptCallId: string | null;
   transcriptsById: Map<string, TranscriptRow>;
-  customerPhone: string | null;
 }) {
-  if (calls.length === 0) {
+  if (events.length === 0) {
     return null;
   }
 
   return (
-    <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm font-semibold text-[#0F172A]">Call history</p>
-        <Badge tone="slate">{calls.length}</Badge>
-      </div>
-      <div className="mt-4 space-y-3">
-        {calls.map((call) => {
+    <div className="space-y-4">
+      {events.map((event) => {
+        if (event.type === "call_session") {
+          return (
+            <CallSessionCard
+              customerPhone={customerPhone}
+              expandedTranscriptByCallId={expandedTranscriptByCallId}
+              key={event.id}
+              onRetryTranscript={onRetryTranscript}
+              onToggleTranscript={onToggleTranscript}
+              recordingStatesByCallId={recordingStatesByCallId}
+              retryingTranscriptCallId={retryingTranscriptCallId}
+              session={event.session}
+              transcriptsById={transcriptsById}
+            />
+          );
+        }
+
+        if (event.type === "message") {
+          const message = event.message;
+          const outbound = message.direction === "outbound";
+          const attachments = attachmentsByMessageId[message.id] ?? [];
+          return (
+            <div
+              className={`flex ${outbound ? "justify-end" : "justify-start"}`}
+              key={event.id}
+            >
+              <div
+                className={`max-w-[88%] rounded-2xl px-4 py-3 lg:max-w-[78%] ${
+                  outbound ? "bg-[#0F6BFF] text-white" : "bg-white text-[#0F172A]"
+                }`}
+              >
+                {message.body ? (
+                  <p className="text-sm font-medium leading-6">{message.body}</p>
+                ) : attachments.length === 0 ? (
+                  <p className="text-sm font-medium leading-6">Message body unavailable.</p>
+                ) : null}
+                <MessageAttachments attachments={attachments} onPreview={onPreviewAttachment} />
+                <p
+                  className={`mt-1 text-xs font-medium ${
+                    outbound ? "text-blue-100" : "text-[#64748B]"
+                  }`}
+                >
+                  {formatServiceRequestDate(message.occurred_at)}
+                </p>
+              </div>
+            </div>
+          );
+        }
+
+        return (
+          <PreviewBlock
+            key={event.id}
+            label={event.event.title || getTimelineEventLabel(event.event.type)}
+            timestamp={event.event.eventTime}
+            value={event.event.body ?? "No details captured."}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function CallSessionCard({
+  customerPhone,
+  expandedTranscriptByCallId,
+  onRetryTranscript,
+  onToggleTranscript,
+  recordingStatesByCallId,
+  retryingTranscriptCallId,
+  session,
+  transcriptsById,
+}: {
+  customerPhone: string | null;
+  expandedTranscriptByCallId: ExpandedTranscriptByCallId;
+  onRetryTranscript: (callId: string) => void;
+  onToggleTranscript: (callId: string) => void;
+  recordingStatesByCallId: RecordingStateByCallId;
+  retryingTranscriptCallId: string | null;
+  session: CallSession;
+  transcriptsById: Map<string, TranscriptRow>;
+}) {
+  const primaryCall = session.calls[0];
+  const isMultiPhase = session.calls.length > 1;
+
+  return (
+    <div className="rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3">
+      {isMultiPhase ? (
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-black text-[#0F172A]">Call Session</p>
+            <p className="mt-1 text-xs font-semibold text-[#64748B]">
+              {getCallTimeLabel(primaryCall)} · {session.calls.length} phases
+            </p>
+          </div>
+          <Badge tone="purple">Transferred</Badge>
+        </div>
+      ) : null}
+
+      <div className={isMultiPhase ? "space-y-3" : ""}>
+        {session.calls.map((call, index) => {
           const effectiveStatus = getEffectiveCallStatus(call);
           const duration = getCallDurationText(call);
           const hasTranscript = Boolean(call.transcript_id);
@@ -3246,12 +3566,13 @@ function CallHistoryList({
 
           return (
             <div
-              className="rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3"
+              className={isMultiPhase ? "rounded-lg border border-[#E5E7EB] bg-white p-3" : ""}
               key={call.id}
             >
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-sm font-black text-[#0F172A]">
+                    {isMultiPhase ? `Phase ${index + 1}: ` : ""}
                     {getCallDisplayTitle(call)}
                   </p>
                   <p className="mt-1 text-xs font-semibold text-[#64748B]">
