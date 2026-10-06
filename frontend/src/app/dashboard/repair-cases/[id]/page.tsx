@@ -22,7 +22,7 @@ export default async function RepairCaseDetailPage({ params }: RepairCaseDetailP
 
   if (!repairCase) {
     return (
-      <div className="mx-auto max-w-7xl space-y-6">
+      <div className="w-full space-y-6">
         <ErrorState
           title="Repair case not found"
           description="The requested mock repair case is missing or has not been created yet. Use the repair cases list to open an available preview."
@@ -38,7 +38,7 @@ export default async function RepairCaseDetailPage({ params }: RepairCaseDetailP
   }
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6">
+    <div className="w-full space-y-6">
       <section className="rounded-lg border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.14),transparent_34%),#0f172a] p-6">
         <p className="text-sm font-bold uppercase tracking-[0.22em] text-cyan-200">
           {repairCase.caseNumber}

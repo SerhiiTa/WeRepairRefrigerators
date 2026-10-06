@@ -2,7 +2,7 @@ import { ServiceRequestsInbox } from "@/components/dashboard/ServiceRequestsInbo
 
 export default function DashboardLeadsPage() {
   return (
-    <div className="mx-auto max-w-7xl space-y-3">
+    <div className="w-full space-y-3">
       <header className="px-1">
         <h1 className="text-2xl font-black tracking-tight text-[#0F172A]">
           Jobs

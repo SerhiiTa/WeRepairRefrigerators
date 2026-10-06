@@ -464,7 +464,7 @@ export function DashboardJobsOverview() {
   }
 
   return (
-    <section className="mx-auto max-w-6xl space-y-5">
+    <section className="w-full space-y-5">
       <header className="rounded-[28px] border border-[#E5E7EB] bg-white p-4 shadow-[0_12px_34px_rgba(15,23,42,0.07)] sm:p-5">
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px] xl:items-start">
           <div className="min-w-0 xl:pr-6">

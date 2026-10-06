@@ -2,7 +2,7 @@ import { TechnicianSchedule } from "@/components/dashboard/TechnicianSchedule";
 
 export default function TechnicianSchedulePage() {
   return (
-    <div className="mx-auto max-w-7xl space-y-6">
+    <div className="w-full space-y-6">
       <section className="rounded-lg border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.16),transparent_34%),#0f172a] p-6">
         <p className="text-sm font-bold uppercase tracking-[0.22em] text-cyan-200">
           Calendar / Dispatch

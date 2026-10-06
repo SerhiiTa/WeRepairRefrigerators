@@ -2,7 +2,7 @@ import { LoadingState } from "@/components/ui/LoadingState";
 
 export default function RepairCasesLoading() {
   return (
-    <div className="mx-auto max-w-7xl">
+    <div className="w-full">
       <LoadingState
         title="Loading repair cases"
         description="Preparing repair case data for the dashboard."

@@ -3,7 +3,7 @@ import { PriceBookSettings } from "@/components/dashboard/PriceBookSettings";
 
 export default function SettingsPage() {
   return (
-    <div className="mx-auto max-w-7xl space-y-6">
+    <div className="w-full space-y-6">
       <section className="rounded-2xl border border-[#E5E7EB] bg-white p-6 shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
         <p className="text-sm font-bold uppercase tracking-[0.22em] text-[#2563EB]">
           Settings

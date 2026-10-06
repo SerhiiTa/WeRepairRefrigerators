@@ -2,7 +2,7 @@ import { DashboardJobsOverview } from "@/components/dashboard/DashboardJobsOverv
 
 export default function DashboardPage() {
   return (
-    <div className="mx-auto max-w-[1440px]">
+    <div className="w-full">
       <DashboardJobsOverview />
     </div>
   );

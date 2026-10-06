@@ -4009,7 +4009,7 @@ export function DashboardCustomersIndex() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-[540px] bg-[#F8FAFC] px-0 pb-8 pt-3 lg:max-w-7xl lg:px-6 lg:pt-4">
+    <div className="mx-auto w-full max-w-[540px] bg-[#F8FAFC] px-0 pb-8 pt-3 lg:max-w-none lg:px-0 lg:pt-4">
       <header className="grid gap-3 px-3 lg:px-0">
         <label className="relative block">
           <span className="sr-only">Search customers</span>

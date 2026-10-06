@@ -440,7 +440,7 @@ export function TechnicianProfileEditor() {
   const profile = editorState.profile;
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    <div className="w-full space-y-6">
       <section className="rounded-2xl border border-[#E5E7EB] bg-white p-6 shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
         <p className="text-sm font-bold uppercase tracking-[0.22em] text-[#0F6BFF]">
           Marketplace settings
