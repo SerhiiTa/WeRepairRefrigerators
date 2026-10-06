@@ -1,0 +1,1039 @@
+{
+  "generatedAt": "2026-10-05T23:59:20.673Z",
+  "mode": "DRY_RUN",
+  "homefixCompanyId": "f0639d2c-6fcf-4ab5-93a2-cde8f3ba9633",
+  "sourceFiles": {
+    "customers": [
+      "export_export-8.csv"
+    ],
+    "jobs": [
+      "export_export-9.csv",
+      "export_export-10.csv",
+      "export_export-11.csv",
+      "export_export.csv"
+    ],
+    "estimates": [
+      "export_export-12.csv"
+    ],
+    "invoices": [
+      "export_export-5.csv",
+      "export_export-22.csv"
+    ],
+    "payments": [
+      "Payment report - 09-29-2026.csv",
+      "Payment report - 09-29-2026-2.csv",
+      "Payment report - 09-29-2026-3.csv"
+    ],
+    "financialSnapshots": [
+      "export_export-16.csv",
+      "export_export-17.csv",
+      "export_export-18.csv"
+    ]
+  },
+  "zeroWrites": true,
+  "sourceCounts": {
+    "customers": 835,
+    "jobs": 864,
+    "estimates": 962,
+    "invoices": 509,
+    "payments": 908,
+    "financialSnapshots": 712
+  },
+  "existingCounts": {
+    "customers": 1,
+    "addresses": 1,
+    "jobs": 9,
+    "appointments": 0,
+    "estimates": 10,
+    "invoices": 8,
+    "payments": 9,
+    "financialSnapshots": 9
+  },
+  "createCounts": {
+    "customers": 834,
+    "addresses": 1510,
+    "jobs": 811,
+    "appointments": 809,
+    "estimates": 898,
+    "invoices": 474,
+    "payments": 855,
+    "financialSnapshots": 667
+  },
+  "skippedCounts": {
+    "appointments": 11
+  },
+  "unresolvedCounts": {
+    "jobs": 44,
+    "estimates": 54,
+    "invoices": 27,
+    "payments": 44,
+    "financialSnapshots": 36,
+    "technicians": 8,
+    "technicianAmbiguities": 0
+  },
+  "customerMatching": {
+    "matchedByWorkizProvenance": 1,
+    "create": 834,
+    "unresolved": 0
+  },
+  "jobMatching": {
+    "highConfidence": 803,
+    "mediumConfidence": 17,
+    "lowOrUnresolved": 44
+  },
+  "technicianResolution": {
+    "matched": [],
+    "unresolved": [
+      "Ai Disp",
+      "Alex Chibisov",
+      "Alex Chibisov, Serhii Tatarenko",
+      "Nick",
+      "Oleksandr Zhembrovskyi",
+      "Serhii Tatarenko",
+      "Serhii Tatarenko, Yan",
+      "Yan"
+    ],
+    "ambiguous": []
+  },
+  "statusMappings": [
+    {
+      "mapping": "Canceled -> canceled",
+      "count": 91
+    },
+    {
+      "mapping": "Done -> completed",
+      "count": 428
+    },
+    {
+      "mapping": "done pending approval -> completed",
+      "count": 218
+    },
+    {
+      "mapping": "In progress -> new",
+      "count": 9
+    },
+    {
+      "mapping": "Pending -> new",
+      "count": 4
+    },
+    {
+      "mapping": "Submitted -> completed",
+      "count": 114
+    }
+  ],
+  "financialSummary": {
+    "invoiced": 196792.02999999994,
+    "paid": 275140.47000000003,
+    "due": 13801.779999999997,
+    "tips": 2139.9500000000003,
+    "methods": [
+      "Bank transfer (ACH)",
+      "Cash",
+      "Check",
+      "Credit charge",
+      "Refund",
+      "Zelle"
+    ]
+  },
+  "stevenWolfIdempotency": {
+    "clientId": "1361",
+    "customerExisting": true,
+    "jobsExisting": 9
+  },
+  "unresolved": {
+    "jobs": [
+      {
+        "jobId": "29",
+        "client": "Adrian Acosta",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "31",
+        "client": "William May",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "41",
+        "client": "Earl Durham",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "50",
+        "client": "Maria K",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "72",
+        "client": "Adrian Acosta",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "80",
+        "client": "Cheryl Butler",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "138",
+        "client": "BRUCE APPELBAUM",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "178",
+        "client": "Leticia Galera",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "209",
+        "client": "Michael Morreale",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "213",
+        "client": "Michael Morreale",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "244",
+        "client": "Grand Star Texas LLC",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "245",
+        "client": "Grand Star Texas LLC",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "248",
+        "client": "Elaine Helfman",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "251",
+        "client": "John McCray",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "309",
+        "client": "Ram Shenoy",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "339",
+        "client": "Hong Fan",
+        "reason": "name",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "344",
+        "client": "BRUCE APPELBAUM",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "346",
+        "client": "Roma Pancreas",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "349",
+        "client": "Amy Poe",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "414",
+        "client": "Grand Star Texas LLC",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "440",
+        "client": "Elaine Helfman",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "448",
+        "client": "Thomas Uhn",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "449",
+        "client": "Thomas Uhn",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "464",
+        "client": "Luis San Miguel",
+        "reason": "no customer match",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "498",
+        "client": "Eleonora Gendler",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "502",
+        "client": "Eleonora Gendler",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "542",
+        "client": "Leticia Galera",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "555",
+        "client": "Leticia Galera",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "565",
+        "client": "Wei Guo",
+        "reason": "no customer match",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "567",
+        "client": "Earl Durham",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "572",
+        "client": "Laura Love",
+        "reason": "name",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "590",
+        "client": "Vin Nguyen",
+        "reason": "name",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "629",
+        "client": "Elaine Hoffman Helfman",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "658",
+        "client": "Lydia Krawtzowa",
+        "reason": "name",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "687",
+        "client": "Cheryl Butler",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "690",
+        "client": "Elaine Helfman",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "692",
+        "client": "Shannon Robbins",
+        "reason": "name",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "696",
+        "client": "Patty Westbrook",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "703",
+        "client": "Patty  Westbrook",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "782",
+        "client": "Maria Serpas",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "784",
+        "client": "Saeed",
+        "reason": "name",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "810",
+        "client": "Kera Carter",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "818",
+        "client": "Elaine Helfman",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      },
+      {
+        "jobId": "863",
+        "client": "William May",
+        "reason": "ambiguous equal-score customer matches",
+        "confidence": "LOW"
+      }
+    ],
+    "estimates": [
+      {
+        "key": "workiz:estimate:863-3",
+        "jobId": "863"
+      },
+      {
+        "key": "workiz:estimate:863-2",
+        "jobId": "863"
+      },
+      {
+        "key": "workiz:estimate:863-1",
+        "jobId": "863"
+      },
+      {
+        "key": "workiz:estimate:818-2",
+        "jobId": "818"
+      },
+      {
+        "key": "workiz:estimate:818-1",
+        "jobId": "818"
+      },
+      {
+        "key": "workiz:estimate:810-1",
+        "jobId": "810"
+      },
+      {
+        "key": "workiz:estimate:784-2",
+        "jobId": "784"
+      },
+      {
+        "key": "workiz:estimate:784-1",
+        "jobId": "784"
+      },
+      {
+        "key": "workiz:estimate:782-1",
+        "jobId": "782"
+      },
+      {
+        "key": "workiz:estimate:703-1",
+        "jobId": "703"
+      },
+      {
+        "key": "workiz:estimate:696-3",
+        "jobId": "696"
+      },
+      {
+        "key": "workiz:estimate:696-2",
+        "jobId": "696"
+      },
+      {
+        "key": "workiz:estimate:696-1",
+        "jobId": "696"
+      },
+      {
+        "key": "workiz:estimate:692-1",
+        "jobId": "692"
+      },
+      {
+        "key": "workiz:estimate:690-1",
+        "jobId": "690"
+      },
+      {
+        "key": "workiz:estimate:687-1",
+        "jobId": "687"
+      },
+      {
+        "key": "workiz:estimate:658-1",
+        "jobId": "658"
+      },
+      {
+        "key": "workiz:estimate:629-1",
+        "jobId": "629"
+      },
+      {
+        "key": "workiz:estimate:590-2",
+        "jobId": "590"
+      },
+      {
+        "key": "workiz:estimate:590-1",
+        "jobId": "590"
+      },
+      {
+        "key": "workiz:estimate:567-1",
+        "jobId": "567"
+      },
+      {
+        "key": "workiz:estimate:565-2",
+        "jobId": "565"
+      },
+      {
+        "key": "workiz:estimate:565-1",
+        "jobId": "565"
+      },
+      {
+        "key": "workiz:estimate:555-1",
+        "jobId": "555"
+      },
+      {
+        "key": "workiz:estimate:542-1",
+        "jobId": "542"
+      },
+      {
+        "key": "workiz:estimate:498-1",
+        "jobId": "498"
+      },
+      {
+        "key": "workiz:estimate:464-2",
+        "jobId": "464"
+      },
+      {
+        "key": "workiz:estimate:464-1",
+        "jobId": "464"
+      },
+      {
+        "key": "workiz:estimate:440-1",
+        "jobId": "440"
+      },
+      {
+        "key": "workiz:estimate:414-1",
+        "jobId": "414"
+      },
+      {
+        "key": "workiz:estimate:349-2",
+        "jobId": "349"
+      },
+      {
+        "key": "workiz:estimate:349-1",
+        "jobId": "349"
+      },
+      {
+        "key": "workiz:estimate:346-1",
+        "jobId": "346"
+      },
+      {
+        "key": "workiz:estimate:344-1",
+        "jobId": "344"
+      },
+      {
+        "key": "workiz:estimate:339-1",
+        "jobId": "339"
+      },
+      {
+        "key": "workiz:estimate:309-1",
+        "jobId": "309"
+      },
+      {
+        "key": "workiz:estimate:248-3",
+        "jobId": "248"
+      },
+      {
+        "key": "workiz:estimate:251-1",
+        "jobId": "251"
+      },
+      {
+        "key": "workiz:estimate:248-2",
+        "jobId": "248"
+      },
+      {
+        "key": "workiz:estimate:248-1",
+        "jobId": "248"
+      },
+      {
+        "key": "workiz:estimate:245-1",
+        "jobId": "245"
+      },
+      {
+        "key": "workiz:estimate:244-1",
+        "jobId": "244"
+      },
+      {
+        "key": "workiz:estimate:209-1",
+        "jobId": "209"
+      },
+      {
+        "key": "workiz:estimate:213-1",
+        "jobId": "213"
+      },
+      {
+        "key": "workiz:estimate:178-2",
+        "jobId": "178"
+      },
+      {
+        "key": "workiz:estimate:178-1",
+        "jobId": "178"
+      },
+      {
+        "key": "workiz:estimate:138-3",
+        "jobId": "138"
+      },
+      {
+        "key": "workiz:estimate:138-2",
+        "jobId": "138"
+      },
+      {
+        "key": "workiz:estimate:138-1",
+        "jobId": "138"
+      },
+      {
+        "key": "workiz:estimate:80-1",
+        "jobId": "80"
+      },
+      {
+        "key": "workiz:estimate:50-1",
+        "jobId": "50"
+      },
+      {
+        "key": "workiz:estimate:41-1",
+        "jobId": "41"
+      },
+      {
+        "key": "workiz:estimate:31-1",
+        "jobId": "31"
+      },
+      {
+        "key": "workiz:estimate:29-1",
+        "jobId": "29"
+      }
+    ],
+    "invoices": [
+      {
+        "key": "workiz:invoice:428",
+        "jobId": "703"
+      },
+      {
+        "key": "workiz:invoice:422",
+        "jobId": "692"
+      },
+      {
+        "key": "workiz:invoice:419",
+        "jobId": "687"
+      },
+      {
+        "key": "workiz:invoice:399",
+        "jobId": "658"
+      },
+      {
+        "key": "workiz:invoice:374",
+        "jobId": "629"
+      },
+      {
+        "key": "workiz:invoice:345",
+        "jobId": "590"
+      },
+      {
+        "key": "workiz:invoice:328",
+        "jobId": "565"
+      },
+      {
+        "key": "workiz:invoice:317",
+        "jobId": "542"
+      },
+      {
+        "key": "workiz:invoice:272",
+        "jobId": "464"
+      },
+      {
+        "key": "workiz:invoice:271",
+        "jobId": "440"
+      },
+      {
+        "key": "workiz:invoice:219",
+        "jobId": "349"
+      },
+      {
+        "key": "workiz:invoice:217",
+        "jobId": "346"
+      },
+      {
+        "key": "workiz:invoice:170",
+        "jobId": "251"
+      },
+      {
+        "key": "workiz:invoice:167",
+        "jobId": "248"
+      },
+      {
+        "key": "workiz:invoice:165",
+        "jobId": "245"
+      },
+      {
+        "key": "workiz:invoice:164",
+        "jobId": "244"
+      },
+      {
+        "key": "workiz:invoice:156",
+        "jobId": "209"
+      },
+      {
+        "key": "workiz:invoice:153",
+        "jobId": "213"
+      },
+      {
+        "key": "workiz:invoice:135",
+        "jobId": "178"
+      },
+      {
+        "key": "workiz:invoice:110",
+        "jobId": "138"
+      },
+      {
+        "key": "workiz:invoice:72",
+        "jobId": "80"
+      },
+      {
+        "key": "workiz:invoice:38",
+        "jobId": "50"
+      },
+      {
+        "key": "workiz:invoice:31",
+        "jobId": "41"
+      },
+      {
+        "key": "workiz:invoice:24",
+        "jobId": "29"
+      },
+      {
+        "key": "workiz:invoice:22",
+        "jobId": "31"
+      },
+      {
+        "key": "workiz:invoice:521",
+        "jobId": "863"
+      },
+      {
+        "key": "workiz:invoice:495",
+        "jobId": "810"
+      }
+    ],
+    "payments": [
+      {
+        "key": "workiz:payment:863|Job Invoice 521|09/24/2026|10:47 AM|203.62||1",
+        "jobId": "863"
+      },
+      {
+        "key": "workiz:payment:863|Job Estimate 1|09/22/2026|12:39 PM|103.00||2",
+        "jobId": "863"
+      },
+      {
+        "key": "workiz:payment:810|Job Invoice 495|07/02/2026|06:32 PM|438.47||48",
+        "jobId": "810"
+      },
+      {
+        "key": "workiz:payment:784|Job 784|06/04/2026|03:04 PM|582.57||75",
+        "jobId": "784"
+      },
+      {
+        "key": "workiz:payment:784|Job Estimate 1|06/02/2026|02:23 PM|89.00||80",
+        "jobId": "784"
+      },
+      {
+        "key": "workiz:payment:782|Job 782|06/02/2026|12:37 PM|287.00||81",
+        "jobId": "782"
+      },
+      {
+        "key": "workiz:payment:703|Job Invoice 428|02/03/2026|02:35 PM|595.64|2105|150",
+        "jobId": "703"
+      },
+      {
+        "key": "workiz:payment:696|Job 696|01/29/2026|10:13 AM|200.00|2103|157",
+        "jobId": "696"
+      },
+      {
+        "key": "workiz:payment:690|Job 690|01/20/2026|10:55 AM|831.27||160",
+        "jobId": "690"
+      },
+      {
+        "key": "workiz:payment:692|Job Invoice 422|01/16/2026|04:14 PM|310.60||162",
+        "jobId": "692"
+      },
+      {
+        "key": "workiz:payment:690|Job Estimate 1|01/15/2026|10:57 AM|257.50||163",
+        "jobId": "690"
+      },
+      {
+        "key": "workiz:payment:687|Job Invoice 419|01/12/2026|09:12 AM|65.00||167",
+        "jobId": "687"
+      },
+      {
+        "key": "workiz:payment:658|Job Invoice 399|11/28/2025|01:59 PM|313.84||198",
+        "jobId": "658"
+      },
+      {
+        "key": "workiz:payment:629|Job Invoice 374|10/17/2025|12:51 PM|360.04||233",
+        "jobId": "629"
+      },
+      {
+        "key": "workiz:payment:590|Job Invoice 345|08/30/2025|09:45 AM|65.00|111|283",
+        "jobId": "590"
+      },
+      {
+        "key": "workiz:payment:567|Job Estimate 1|08/08/2025|02:55 PM|400.00|8854|308",
+        "jobId": "567"
+      },
+      {
+        "key": "workiz:payment:542|Job Invoice 317|07/26/2025|02:24 PM|154.50||329",
+        "jobId": "542"
+      },
+      {
+        "key": "workiz:payment:498|Job 498|07/07/2025|09:34 AM|333.86|1021|375",
+        "jobId": "498"
+      },
+      {
+        "key": "workiz:payment:464|Job Invoice 272|06/17/2025|02:34 PM|65.00||413",
+        "jobId": "464"
+      },
+      {
+        "key": "workiz:payment:440|Job Invoice 271|06/16/2025|12:59 PM|400.60||418",
+        "jobId": "440"
+      },
+      {
+        "key": "workiz:payment:448|Job 448|06/11/2025|01:00 PM|66.95||433",
+        "jobId": "448"
+      },
+      {
+        "key": "workiz:payment:346|Job Invoice 217|05/07/2025|10:14 AM|397.24||539",
+        "jobId": "346"
+      },
+      {
+        "key": "workiz:payment:344|Job 344|05/01/2025|01:30 PM|85.00||542",
+        "jobId": "344"
+      },
+      {
+        "key": "workiz:payment:339|Job 339|04/29/2025|09:25 AM|120.10||547",
+        "jobId": "339"
+      },
+      {
+        "key": "workiz:payment:309|Job 309|04/18/2025|03:07 PM|1301.18||577",
+        "jobId": "309"
+      },
+      {
+        "key": "workiz:payment:248|Job Invoice 167|03/26/2025|02:01 PM|65.00||630",
+        "jobId": "248"
+      },
+      {
+        "key": "workiz:payment:251|Job Invoice 170|03/24/2025|02:10 PM|582.98||638",
+        "jobId": "251"
+      },
+      {
+        "key": "workiz:payment:248|Job Invoice 167|03/21/2025|03:23 PM|66.95||644",
+        "jobId": "248"
+      },
+      {
+        "key": "workiz:payment:244|Job Invoice 164|03/20/2025|06:23 PM|750.00||647",
+        "jobId": "244"
+      },
+      {
+        "key": "workiz:payment:245|Job Invoice 165|03/17/2025|06:42 PM|750.00||653",
+        "jobId": "245"
+      },
+      {
+        "key": "workiz:payment:209|Job Invoice 156|03/07/2025|02:52 PM|374.63||673",
+        "jobId": "209"
+      },
+      {
+        "key": "workiz:payment:213|Job Invoice 153|03/06/2025|12:49 PM|559.40||677",
+        "jobId": "213"
+      },
+      {
+        "key": "workiz:payment:178|Job Invoice 135|02/22/2025|05:06 PM|565.00|288|713",
+        "jobId": "178"
+      },
+      {
+        "key": "workiz:payment:138|Job Estimate 3|02/20/2025|10:42 AM|513.66||722",
+        "jobId": "138"
+      },
+      {
+        "key": "workiz:payment:138|Job Invoice 110|02/12/2025|02:51 PM|2043.99||744",
+        "jobId": "138"
+      },
+      {
+        "key": "workiz:payment:138|Job Invoice 110|02/06/2025|01:28 PM|194.67||754",
+        "jobId": "138"
+      },
+      {
+        "key": "workiz:payment:80|Job Invoice 72|01/17/2025|02:08 PM|239.99||810",
+        "jobId": "80"
+      },
+      {
+        "key": "workiz:payment:80|Job Estimate 1|01/14/2025|02:07 PM|154.50||822",
+        "jobId": "80"
+      },
+      {
+        "key": "workiz:payment:50|Job Invoice 38|12/30/2024|12:39 PM|120.00||859",
+        "jobId": "50"
+      },
+      {
+        "key": "workiz:payment:41|Job Invoice 31|12/30/2024|09:06 AM|267.00|8752|861",
+        "jobId": "41"
+      },
+      {
+        "key": "workiz:payment:41|Job Estimate 1|12/26/2024|01:15 PM|200.00|8751|870",
+        "jobId": "41"
+      },
+      {
+        "key": "workiz:payment:29|Job Invoice 24|12/19/2024|05:13 PM|245.86||880",
+        "jobId": "29"
+      },
+      {
+        "key": "workiz:payment:31|Job Invoice 22|12/19/2024|01:24 PM|66.95||882",
+        "jobId": "31"
+      },
+      {
+        "key": "workiz:payment:29|Job Estimate 1|12/19/2024|10:36 AM|200.00||883",
+        "jobId": "29"
+      }
+    ],
+    "financialSnapshots": [
+      {
+        "jobId": "863"
+      },
+      {
+        "jobId": "810"
+      },
+      {
+        "jobId": "784"
+      },
+      {
+        "jobId": "782"
+      },
+      {
+        "jobId": "703"
+      },
+      {
+        "jobId": "696"
+      },
+      {
+        "jobId": "692"
+      },
+      {
+        "jobId": "690"
+      },
+      {
+        "jobId": "687"
+      },
+      {
+        "jobId": "658"
+      },
+      {
+        "jobId": "629"
+      },
+      {
+        "jobId": "590"
+      },
+      {
+        "jobId": "565"
+      },
+      {
+        "jobId": "542"
+      },
+      {
+        "jobId": "498"
+      },
+      {
+        "jobId": "464"
+      },
+      {
+        "jobId": "448"
+      },
+      {
+        "jobId": "440"
+      },
+      {
+        "jobId": "349"
+      },
+      {
+        "jobId": "346"
+      },
+      {
+        "jobId": "344"
+      },
+      {
+        "jobId": "339"
+      },
+      {
+        "jobId": "309"
+      },
+      {
+        "jobId": "251"
+      },
+      {
+        "jobId": "248"
+      },
+      {
+        "jobId": "245"
+      },
+      {
+        "jobId": "244"
+      },
+      {
+        "jobId": "213"
+      },
+      {
+        "jobId": "209"
+      },
+      {
+        "jobId": "178"
+      },
+      {
+        "jobId": "138"
+      },
+      {
+        "jobId": "80"
+      },
+      {
+        "jobId": "50"
+      },
+      {
+        "jobId": "41"
+      },
+      {
+        "jobId": "31"
+      },
+      {
+        "jobId": "29"
+      }
+    ],
+    "technicians": [
+      "Ai Disp",
+      "Alex Chibisov",
+      "Alex Chibisov, Serhii Tatarenko",
+      "Nick",
+      "Oleksandr Zhembrovskyi",
+      "Serhii Tatarenko",
+      "Serhii Tatarenko, Yan",
+      "Yan"
+    ],
+    "technicianAmbiguities": []
+  },
+  "cutoverReady": false
+}
