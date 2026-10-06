@@ -5,8 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-import ffmpegPath from "ffmpeg-static";
-
 import { getSupabaseServiceRoleClient } from "@/lib/supabase/service-role";
 import type {
   DatabaseCommunicationDeliveryStatus,
@@ -106,6 +104,17 @@ const HUMAN_TRANSFER_CHANNEL_ROLES: Record<
   A: { displaySpeaker: "Customer", speaker: "customer" },
   B: { displaySpeaker: "Serhii", speaker: "human_transfer" },
 };
+
+function getFfmpegExecutablePath(): string | null {
+  const binaryName = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
+  return join(
+    process.cwd(),
+    "node_modules",
+    "@ffmpeg-installer",
+    `${process.platform}-${process.arch}`,
+    binaryName,
+  );
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -836,6 +845,7 @@ async function splitStereoAudioToMonoWav({
     }
   | { ok: false; reason: string }
 > {
+  const ffmpegPath = getFfmpegExecutablePath();
   if (!ffmpegPath) {
     return { ok: false, reason: "FFmpeg binary is not available." };
   }
