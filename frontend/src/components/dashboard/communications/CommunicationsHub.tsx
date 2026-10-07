@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
 
 import { BrowserCallModal } from "@/components/dashboard/DashboardCustomers";
 import {
@@ -4335,6 +4335,13 @@ function SeekableRecordingPlayer({
     setCurrentTime(nextTime);
   }
 
+  function handleSeekPointerUp(event: PointerEvent<HTMLDivElement>) {
+    setIsSeeking(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
   function handleTogglePlay() {
     if (!canPlay) {
       return;
@@ -4349,6 +4356,11 @@ function SeekableRecordingPlayer({
     const audio = audioRef.current;
     if (!audio) {
       return;
+    }
+
+    if (audio.ended || (duration > 0 && audio.currentTime >= duration)) {
+      audio.currentTime = 0;
+      setCurrentTime(0);
     }
 
     if (audio.paused) {
@@ -4387,7 +4399,8 @@ function SeekableRecordingPlayer({
   return (
     <div className="bg-white px-3 py-3">
       <p className="mb-2 truncate text-xs font-black text-[#0F172A]">{activeLabel}</p>
-      <div className="flex h-14 items-center gap-3 rounded-xl bg-[#F8FAFC] px-3">
+      <div className="rounded-xl bg-[#F8FAFC] p-2 sm:flex sm:min-h-14 sm:items-center sm:gap-3 sm:px-3">
+        <div className="flex items-center gap-3">
         <button
           aria-label={isPlaying ? "Pause recording" : "Play recording"}
           className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-black text-white ${
@@ -4400,7 +4413,7 @@ function SeekableRecordingPlayer({
           {recordingState.status === "loading" ? "…" : isPlaying ? "Ⅱ" : "▶"}
         </button>
         <div
-          className={`relative h-9 min-w-0 flex-1 ${
+          className={`relative h-10 min-w-0 flex-1 touch-pan-y ${
             audioUrl ? "cursor-pointer" : "cursor-default"
           }`}
           onPointerDown={(event) => {
@@ -4416,10 +4429,8 @@ function SeekableRecordingPlayer({
               seekFromPointer(event.clientX);
             }
           }}
-          onPointerUp={(event) => {
-            setIsSeeking(false);
-            event.currentTarget.releasePointerCapture(event.pointerId);
-          }}
+          onPointerCancel={handleSeekPointerUp}
+          onPointerUp={handleSeekPointerUp}
           ref={trackRef}
           role="slider"
           aria-label="Recording position"
@@ -4442,25 +4453,30 @@ function SeekableRecordingPlayer({
             })}
           </div>
         </div>
-        <span className="w-[76px] shrink-0 text-right text-xs font-semibold text-[#64748B]">
-          {formatPlayerTime(currentTime)} / {formatPlayerTime(displayedDuration)}
-        </span>
-        <button
-          className="flex h-8 w-10 shrink-0 items-center justify-center rounded-lg bg-white text-xs font-black text-[#334155]"
-          onClick={handlePlaybackRateChange}
-          type="button"
-        >
-          {playbackRate}x
-        </button>
-        <button
-          aria-label="Download recording"
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-sm font-black text-[#334155] disabled:text-[#CBD5E1]"
-          disabled={!audioUrl}
-          onClick={handleDownload}
-          type="button"
-        >
-          ↓
-        </button>
+        </div>
+        <div className="mt-2 flex items-center justify-between gap-2 pl-[52px] sm:mt-0 sm:shrink-0 sm:pl-0">
+          <span className="min-w-[82px] shrink-0 text-xs font-semibold text-[#64748B] sm:text-right">
+            {formatPlayerTime(currentTime)} / {formatPlayerTime(displayedDuration)}
+          </span>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              className="flex h-9 w-11 shrink-0 items-center justify-center rounded-lg bg-white text-xs font-black text-[#334155]"
+              onClick={handlePlaybackRateChange}
+              type="button"
+            >
+              {playbackRate}x
+            </button>
+            <button
+              aria-label="Download recording"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white text-sm font-black text-[#334155] disabled:text-[#CBD5E1]"
+              disabled={!audioUrl}
+              onClick={handleDownload}
+              type="button"
+            >
+              ↓
+            </button>
+          </div>
+        </div>
       </div>
       {recordingState.status === "error" ? (
         <p className="mt-2 text-xs font-semibold text-amber-700">
@@ -4473,7 +4489,10 @@ function SeekableRecordingPlayer({
         <audio
           className="sr-only"
           onDurationChange={(event) => setDuration(event.currentTarget.duration || 0)}
-          onEnded={() => setIsPlaying(false)}
+          onEnded={(event) => {
+            setIsPlaying(false);
+            setCurrentTime(event.currentTarget.duration || currentTime);
+          }}
           onPause={() => setIsPlaying(false)}
           onPlay={() => setIsPlaying(true)}
           onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
