@@ -1369,6 +1369,7 @@ export function CommunicationsHub() {
     message: null,
   });
   const [smsDraft, setSmsDraft] = useState("");
+  const [composeMode, setComposeMode] = useState<"message" | "note">("message");
   const [pendingAttachments, setPendingAttachments] = useState<PendingMmsAttachment[]>([]);
   const [previewAttachment, setPreviewAttachment] =
     useState<SignedMessageAttachment | null>(null);
@@ -1988,6 +1989,7 @@ export function CommunicationsHub() {
     setCreateJobState({ status: "idle", message: null });
     setCreateLeadState({ status: "idle", message: null });
     setSmsDraft("");
+    setComposeMode("message");
     setSendMessageState({ status: "idle", message: null });
     for (const audioUrl of recordingAudioUrlsRef.current) {
       URL.revokeObjectURL(audioUrl);
@@ -2281,6 +2283,7 @@ export function CommunicationsHub() {
   async function handleSendMessage() {
     if (
       !selectedConversation ||
+      composeMode !== "message" ||
       (!smsDraft.trim() && pendingAttachments.length === 0) ||
       !canSendSmsFromConversation
     ) {
@@ -2353,6 +2356,61 @@ export function CommunicationsHub() {
     }
   }
 
+  async function handleSaveInternalNote() {
+    if (!linkedJobId || !smsDraft.trim()) {
+      return;
+    }
+
+    setSendMessageState({ status: "saving", message: "Saving internal note..." });
+
+    try {
+      const supabase = getSupabaseBrowserClient();
+      if (!supabase) {
+        throw new Error("Communications is not configured for internal notes.");
+      }
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        throw new Error("Log in again to save this note.");
+      }
+
+      const response = await fetch(`/api/service-requests/${linkedJobId}/notes`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          noteType: "internal_note",
+          body: smsDraft.trim(),
+        }),
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        message?: string;
+        ok?: boolean;
+      } | null;
+
+      if (!response.ok || payload?.ok !== true) {
+        throw new Error(payload?.message ?? "Could not save this internal note.");
+      }
+
+      setSmsDraft("");
+      setDetailReloadToken((value) => value + 1);
+      setSendMessageState({
+        status: "success",
+        message: "Internal note saved.",
+      });
+    } catch (error) {
+      setSendMessageState({
+        status: "error",
+        message: error instanceof Error ? error.message : "Could not save this internal note.",
+      });
+    }
+  }
+
   async function handleCreateJobFromConversation() {
     if (!selectedConversation) {
       return;
@@ -2360,6 +2418,11 @@ export function CommunicationsHub() {
 
     if (linkedJobId) {
       window.location.assign(withReturnTo(`/dashboard/leads/${linkedJobId}`));
+      return;
+    }
+
+    if (createJobBlockedReason) {
+      setCreateJobState({ status: "error", message: createJobBlockedReason });
       return;
     }
 
@@ -2449,7 +2512,7 @@ export function CommunicationsHub() {
   return (
     <>
     <main className="space-y-4">
-      <section className="flex flex-col gap-4 rounded-2xl border border-[#E5E7EB] bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.06)] lg:flex-row lg:items-center lg:justify-between">
+      <section className="hidden flex-col gap-4 rounded-2xl border border-[#E5E7EB] bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.06)] xl:flex xl:flex-row xl:items-center xl:justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-[#0F172A]">Communications</h1>
           <p className="mt-1 text-sm font-medium leading-6 text-[#475569]">
@@ -2484,8 +2547,31 @@ export function CommunicationsHub() {
       <section className="xl:hidden">
         {!mobileDetailOpen ? (
           <aside className="overflow-hidden rounded-2xl border border-[#E5E7EB] bg-white shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
-            <div className="border-b border-[#E5E7EB] p-4">
-              <div className="flex gap-2 overflow-x-auto pb-1">
+            <div className="border-b border-[#E5E7EB] p-3">
+              <div className="flex min-w-0 items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="truncate text-base font-black text-[#0F172A]">Customer Threads</p>
+                  <p className="truncate text-xs font-semibold text-[#64748B]">
+                    Calls, texts, and AI in one timeline
+                  </p>
+                </div>
+                <button
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#0F6BFF] text-lg font-black text-white shadow-[0_8px_18px_rgba(15,107,255,0.2)] disabled:cursor-not-allowed disabled:opacity-70"
+                  disabled
+                  title="New communication actions are not available yet."
+                  type="button"
+                >
+                  +
+                </button>
+              </div>
+              <input
+                className="mt-3 h-10 w-full rounded-lg border border-[#E5E7EB] px-3 text-sm font-medium text-[#0F172A] outline-none placeholder:text-[#94A3B8] focus:border-[#0F6BFF]"
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search conversations..."
+                type="search"
+                value={searchQuery}
+              />
+              <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
                 {([
                   ["inbox", "Inbox"],
                   ["assigned", "Assigned"],
@@ -2505,16 +2591,9 @@ export function CommunicationsHub() {
                   </button>
                 ))}
               </div>
-              <input
-                className="mt-3 w-full rounded-lg border border-[#E5E7EB] px-3 py-2 text-sm font-medium text-[#0F172A] outline-none placeholder:text-[#94A3B8] focus:border-[#0F6BFF]"
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search conversations..."
-                type="search"
-                value={searchQuery}
-              />
             </div>
 
-            <div className="max-h-[calc(100vh-280px)] overflow-y-auto">
+            <div className="max-h-[calc(100dvh-220px)] overflow-y-auto">
               {hubState.status === "loading" ? (
                 <p className="m-4 rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-4 text-sm font-semibold text-[#64748B]">
                   Loading conversations...
@@ -2536,9 +2615,14 @@ export function CommunicationsHub() {
                       type="button"
                     >
                       <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-black text-[#0F172A]">
                             {getConversationTitle(conversation)}
+                          </p>
+                          <p className="mt-0.5 truncate text-xs font-semibold text-[#64748B]">
+                            {conversation.customerPhone ??
+                              conversation.customerEmail ??
+                              formatProviderName(conversation.providerName)}
                           </p>
                           {conversation.unreadCount > 0 ? (
                             <span className="mt-1 inline-flex rounded-full bg-red-500 px-2 py-0.5 text-[11px] font-black text-white">
@@ -2555,7 +2639,6 @@ export function CommunicationsHub() {
                       </p>
                       <div className="mt-2 flex flex-wrap gap-2">
                         <Badge tone="blue">{getSourceLabel(conversation.sourceType)}</Badge>
-                        <Badge tone="purple">{formatProviderName(conversation.providerName)}</Badge>
                         <Badge tone="amber">{getStatusLabel(conversation.status)}</Badge>
                         {flags.slice(0, 1).map((flag) => (
                           <Badge key={flag.label} tone={flag.tone}>
@@ -2570,89 +2653,74 @@ export function CommunicationsHub() {
             </div>
           </aside>
         ) : selectedConversation ? (
-          <section className="overflow-hidden rounded-2xl border border-[#E5E7EB] bg-white shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
-            <div className="border-b border-[#E5E7EB] p-4">
-              <button
-                className="mb-3 text-sm font-semibold text-[#0F6BFF]"
-                onClick={() => setMobileDetailOpen(false)}
-                type="button"
-              >
-                ‹ Communications
-              </button>
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-xl font-semibold text-[#0F172A]">
-                  {getConversationTitle(selectedConversation)}
-                </h2>
-                <Badge tone="blue">{getSourceLabel(selectedConversation.sourceType)}</Badge>
-                <Badge>{getStatusLabel(selectedConversation.status)}</Badge>
-              </div>
-              <p className="mt-2 text-sm font-medium text-[#64748B]">
-                {formatProviderName(selectedConversation.providerName)} ·{" "}
-                {formatActivity(selectedConversation)}
-              </p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <button
-                  className="rounded-lg border border-[#E5E7EB] px-3 py-2 text-sm font-semibold text-[#64748B]"
-                  disabled
-                  type="button"
-                >
-                  Assign
-                </button>
-                <button
-                  className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                    communicationCallTarget?.phone
-                      ? "border-[#0F6BFF] bg-white text-[#0F6BFF]"
-                      : "border-[#E5E7EB] text-[#64748B]"
-                  }`}
-                  disabled={!communicationCallTarget?.phone}
-                  onClick={() => setIsBrowserCallOpen(true)}
-                  title={
-                    communicationCallTarget?.phone
-                      ? "Call this conversation"
-                      : "No callable phone number is available."
-                  }
-                  type="button"
-                >
-                  Call
-                </button>
-                <button
-                  className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                    canCreateLeadFromConversation || linkedLeadId
-                      ? "border-[#0F6BFF] bg-white text-[#0F6BFF]"
-                      : "border-[#E5E7EB] text-[#64748B]"
-                  }`}
-                  disabled={
-                    createLeadState.status === "saving" ||
-                    (!canCreateLeadFromConversation && !linkedLeadId)
-                  }
-                  onClick={() => void handleCreateLeadFromConversation()}
-                  type="button"
-                >
-                  {createLeadState.status === "saving"
-                    ? "Creating..."
-                    : linkedLeadId
-                      ? "Open Lead"
-                      : "Create Lead"}
-                </button>
-                <button
-                  className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                    canCreateJobFromConversation || linkedJobId
-                      ? "border-[#0F6BFF] bg-[#0F6BFF] text-white"
-                      : "border-[#E5E7EB] text-[#64748B]"
-                  }`}
-                  disabled={
-                    createJobState.status === "saving" ||
-                    (!canCreateJobFromConversation && !linkedJobId)
-                  }
-                  onClick={() => void handleCreateJobFromConversation()}
-                  type="button"
-                >
-                  {createJobState.status === "saving"
-                    ? "Creating..."
-                    : linkedJobId
-                      ? "Open Job"
-                      : "Create Job"}
-                </button>
+          <section className="flex h-[calc(100dvh-88px)] min-h-0 flex-col overflow-hidden rounded-2xl border border-[#E5E7EB] bg-white shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
+            <div className="shrink-0 border-b border-[#E5E7EB] p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex min-w-0 flex-1 items-center gap-2">
+                  <button
+                    className="flex h-10 w-8 shrink-0 items-center justify-start text-2xl font-black text-[#0F6BFF]"
+                    onClick={() => setMobileDetailOpen(false)}
+                    title="Back to customer threads"
+                    type="button"
+                  >
+                    ‹
+                  </button>
+                  <div className="min-w-0">
+                    <h2 className="truncate text-lg font-black text-[#0F172A]">
+                      {getConversationTitle(selectedConversation)}
+                    </h2>
+                    <p className="mt-0.5 truncate text-xs font-semibold text-[#64748B]">
+                      {selectedConversation.customerPhone ??
+                        selectedConversation.customerEmail ??
+                        formatProviderName(selectedConversation.providerName)}
+                      {" · "}
+                      {getStatusLabel(selectedConversation.status)}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <button
+                    className={`flex h-10 w-10 items-center justify-center rounded-full border ${
+                      communicationCallTarget?.phone
+                        ? "border-blue-100 bg-blue-50 text-[#0F6BFF]"
+                        : "border-[#E5E7EB] text-[#94A3B8]"
+                    }`}
+                    disabled={!communicationCallTarget?.phone}
+                    onClick={() => setIsBrowserCallOpen(true)}
+                    title={
+                      communicationCallTarget?.phone
+                        ? "Call this conversation"
+                        : "No callable phone number is available."
+                    }
+                    type="button"
+                  >
+                    <EventIcon name="phone" />
+                  </button>
+                  <button
+                    className={`flex h-10 w-10 items-center justify-center rounded-full border ${
+                      canSendSmsFromConversation
+                        ? "border-blue-100 bg-blue-50 text-[#0F6BFF]"
+                        : "border-[#E5E7EB] text-[#94A3B8]"
+                    }`}
+                    disabled={!canSendSmsFromConversation}
+                    onClick={() => {
+                      setMobileDetailTab("conversation");
+                      setComposeMode("message");
+                    }}
+                    title="Message"
+                    type="button"
+                  >
+                    <EventIcon name="sms" />
+                  </button>
+                  <button
+                    className="flex h-10 w-10 items-center justify-center rounded-full border border-[#E5E7EB] bg-[#F8FAFC] text-lg font-black text-[#64748B]"
+                    disabled
+                    title="More actions"
+                    type="button"
+                  >
+                    …
+                  </button>
+                </div>
               </div>
               {createLeadState.message ? (
                 <p
@@ -2674,14 +2742,10 @@ export function CommunicationsHub() {
                 >
                   {createJobState.message}
                 </p>
-              ) : createJobBlockedReason && !linkedJobId ? (
-                <p className="mt-3 text-sm font-semibold text-amber-700">
-                  {createJobBlockedReason}
-                </p>
               ) : null}
             </div>
 
-            <div className="flex overflow-x-auto border-b border-[#E5E7EB]">
+            <div className="flex shrink-0 overflow-x-auto border-b border-[#E5E7EB]">
               {([
                 ["conversation", "Conversation"],
                 ["customer", "Customer"],
@@ -2704,7 +2768,7 @@ export function CommunicationsHub() {
               ))}
             </div>
 
-            <div className="space-y-4 bg-[#F8FAFC] p-4">
+            <div className="min-h-0 flex-1 overflow-y-auto bg-[#F8FAFC] p-3">
               {detailState.status === "loading" ? (
                 <p className="rounded-xl border border-[#E5E7EB] bg-white p-4 text-sm font-semibold text-[#64748B]">
                   Loading conversation...
@@ -2715,13 +2779,6 @@ export function CommunicationsHub() {
                 </p>
               ) : mobileDetailTab === "conversation" ? (
                 <>
-                  {requestDetailRows.length > 0 ? (
-                    <RequestDetailsCard
-                      rows={requestDetailRows}
-                      sourceLabel={getSourceLabel(selectedConversation.sourceType)}
-                    />
-                  ) : null}
-
                   <ThreadEventTimeline
                     attachmentsByMessageId={detail.attachmentsByMessageId}
                     events={threadEvents}
@@ -2739,74 +2796,6 @@ export function CommunicationsHub() {
                     retryingTranscriptCallId={retryingTranscriptCallId}
                     transcriptsById={transcriptsById}
                   />
-
-                  <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
-                    <div className="mb-3 flex gap-4 text-sm font-semibold">
-                      <span className="text-[#0F6BFF]">Message</span>
-                      <span className="text-[#64748B]">Note</span>
-                      <span className="text-[#64748B]">Internal</span>
-                    </div>
-                    <textarea
-                      className="h-24 w-full resize-none rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3 text-sm font-medium text-[#0F172A] placeholder:text-[#94A3B8]"
-                      disabled={
-                        !canSendSmsFromConversation ||
-                        sendMessageState.status === "saving"
-                      }
-                      onChange={(event) => setSmsDraft(event.target.value)}
-                      placeholder={
-                        sendMessageBlockedReason ?? "Type a customer-facing SMS..."
-                      }
-                      value={smsDraft}
-                    />
-                    <PendingAttachmentsPreview
-                      attachments={pendingAttachments}
-                      onRemove={removePendingAttachment}
-                    />
-                    {sendMessageState.message ? (
-                      <p
-                        className={`mt-2 text-xs font-semibold ${
-                          sendMessageState.status === "error"
-                            ? "text-red-600"
-                            : "text-[#64748B]"
-                        }`}
-                      >
-                        {sendMessageState.message}
-                      </p>
-                    ) : null}
-                    <div className="mt-3 flex justify-end">
-                      <label className="mr-2 inline-flex cursor-pointer items-center justify-center rounded-lg border border-[#E5E7EB] bg-white px-3 py-2 text-sm font-semibold text-[#0F6BFF]">
-                        Photo
-                        <input
-                          accept="image/jpeg,image/png,image/webp"
-                          className="sr-only"
-                          multiple
-                          onChange={(event) => {
-                            handleSelectMessageAttachments(event.target.files);
-                            event.currentTarget.value = "";
-                          }}
-                          type="file"
-                        />
-                      </label>
-                      <button
-                        className={`rounded-lg px-5 py-2 text-sm font-semibold text-white ${
-                          canSendSmsFromConversation &&
-                          (smsDraft.trim() || pendingAttachments.length > 0) &&
-                          sendMessageState.status !== "saving"
-                            ? "bg-[#0F6BFF]"
-                            : "bg-blue-200"
-                        }`}
-                        disabled={
-                          !canSendSmsFromConversation ||
-                          (!smsDraft.trim() && pendingAttachments.length === 0) ||
-                          sendMessageState.status === "saving"
-                        }
-                        onClick={handleSendMessage}
-                        type="button"
-                      >
-                        {sendMessageState.status === "saving" ? "Sending..." : "Send"}
-                      </button>
-                    </div>
-                  </div>
                 </>
               ) : mobileDetailTab === "customer" ? (
                 <MobileCustomerPanel
@@ -2815,13 +2804,66 @@ export function CommunicationsHub() {
                   returnTo={destinationReturnTo}
                 />
               ) : mobileDetailTab === "lead" ? (
-                <MobileLeadPanel detail={detail} state={createLeadState} />
+                <MobileLeadPanel
+                  canCreateLead={canCreateLeadFromConversation}
+                  detail={detail}
+                  onCreateLead={() => void handleCreateLeadFromConversation()}
+                  state={createLeadState}
+                />
               ) : mobileDetailTab === "job" ? (
                 <MobileJobPanel detail={detail} returnTo={destinationReturnTo} />
               ) : (
                 <MobileActivityPanel events={detail.timelineEvents} />
               )}
             </div>
+            {mobileDetailTab === "conversation" && detailState.status === "ready" ? (
+              <div
+                className="shrink-0 border-t border-[#E5E7EB] bg-white p-3"
+                style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+              >
+                <CommunicationComposer
+                  blockedReason={
+                    composeMode === "message"
+                      ? sendMessageBlockedReason
+                      : linkedJobId
+                        ? null
+                        : "Create or link a job before saving an internal note."
+                  }
+                  canAttach={composeMode === "message"}
+                  canSubmit={
+                    composeMode === "message"
+                      ? canSendSmsFromConversation
+                      : Boolean(linkedJobId)
+                  }
+                  composeMode={composeMode}
+                  customerName={getConversationTitle(selectedConversation)}
+                  draft={smsDraft}
+                  isSaving={sendMessageState.status === "saving"}
+                  onAttach={handleSelectMessageAttachments}
+                  onCreateOrOpenJob={() => void handleCreateJobFromConversation()}
+                  onDraftChange={setSmsDraft}
+                  onModeChange={(mode) => {
+                    setComposeMode(mode);
+                    setSendMessageState({ status: "idle", message: null });
+                  }}
+                  onRemoveAttachment={removePendingAttachment}
+                  onSubmit={
+                    composeMode === "message"
+                      ? handleSendMessage
+                      : () => void handleSaveInternalNote()
+                  }
+                  pendingAttachments={pendingAttachments}
+                  sendMessageState={sendMessageState}
+                  showJobAction
+                  submitLabel={composeMode === "message" ? "Send" : "Save"}
+                  jobActionLabel={linkedJobId ? "Open Job" : "Create Job"}
+                  jobActionDisabled={
+                    createJobState.status === "saving" ||
+                    (!canCreateJobFromConversation && !linkedJobId)
+                  }
+                />
+              </div>
+            ) : null}
           </section>
         ) : null}
       </section>
@@ -3284,6 +3326,151 @@ export function CommunicationsHub() {
   );
 }
 
+function CommunicationComposer({
+  blockedReason,
+  canAttach,
+  canSubmit,
+  composeMode,
+  customerName,
+  draft,
+  isSaving,
+  jobActionDisabled,
+  jobActionLabel,
+  onAttach,
+  onCreateOrOpenJob,
+  onDraftChange,
+  onModeChange,
+  onRemoveAttachment,
+  onSubmit,
+  pendingAttachments,
+  sendMessageState,
+  showJobAction = false,
+  submitLabel,
+}: {
+  blockedReason: string | null;
+  canAttach: boolean;
+  canSubmit: boolean;
+  composeMode: "message" | "note";
+  customerName: string;
+  draft: string;
+  isSaving: boolean;
+  jobActionDisabled: boolean;
+  jobActionLabel: string;
+  onAttach: (files: FileList | null) => void;
+  onCreateOrOpenJob: () => void;
+  onDraftChange: (value: string) => void;
+  onModeChange: (mode: "message" | "note") => void;
+  onRemoveAttachment: (id: string) => void;
+  onSubmit: () => void;
+  pendingAttachments: PendingMmsAttachment[];
+  sendMessageState: ActionState;
+  showJobAction?: boolean;
+  submitLabel: string;
+}) {
+  const hasMessageContent =
+    composeMode === "message"
+      ? draft.trim().length > 0 || pendingAttachments.length > 0
+      : draft.trim().length > 0;
+  const submitDisabled = !canSubmit || !hasMessageContent || isSaving;
+  const placeholder =
+    composeMode === "message"
+      ? blockedReason ?? `Type a message to ${customerName}...`
+      : blockedReason ?? "Add an internal note...";
+
+  return (
+    <div>
+      <div className="mb-2 flex items-center gap-2 overflow-x-auto">
+        <button
+          className={`min-h-9 shrink-0 rounded-lg px-3 text-sm font-black ${
+            composeMode === "message"
+              ? "bg-blue-50 text-[#0F6BFF]"
+              : "text-[#64748B]"
+          }`}
+          onClick={() => onModeChange("message")}
+          type="button"
+        >
+          Message
+        </button>
+        <button
+          className={`min-h-9 shrink-0 rounded-lg px-3 text-sm font-black ${
+            composeMode === "note"
+              ? "bg-blue-50 text-[#0F6BFF]"
+              : "text-[#64748B]"
+          }`}
+          onClick={() => onModeChange("note")}
+          type="button"
+        >
+          Internal Note
+        </button>
+        {showJobAction ? (
+          <button
+            className="min-h-9 shrink-0 rounded-lg px-3 text-sm font-black text-[#64748B] disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={jobActionDisabled}
+            onClick={onCreateOrOpenJob}
+            type="button"
+          >
+            {jobActionLabel}
+          </button>
+        ) : null}
+      </div>
+      <div className="flex items-end gap-2 rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-2">
+        {canAttach ? (
+          <label className="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-[#E5E7EB] bg-white text-[#0F6BFF]">
+            <EventIcon name="attachment" />
+            <input
+              accept="image/jpeg,image/png,image/webp"
+              className="sr-only"
+              multiple
+              onChange={(event) => {
+                onAttach(event.target.files);
+                event.currentTarget.value = "";
+              }}
+              type="file"
+            />
+          </label>
+        ) : (
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-[#E5E7EB] bg-white text-[#CBD5E1]">
+            <EventIcon name="attachment" />
+          </span>
+        )}
+        <textarea
+          className="max-h-28 min-h-11 flex-1 resize-none bg-transparent px-1 py-3 text-base font-medium leading-5 text-[#0F172A] outline-none placeholder:text-[#94A3B8] sm:text-sm"
+          disabled={!canSubmit || isSaving}
+          onChange={(event) => onDraftChange(event.target.value)}
+          placeholder={placeholder}
+          rows={1}
+          value={draft}
+        />
+        <button
+          className={`flex h-11 min-w-14 shrink-0 items-center justify-center rounded-lg px-3 text-sm font-black text-white ${
+            submitDisabled ? "bg-blue-200" : "bg-[#0F6BFF]"
+          }`}
+          disabled={submitDisabled}
+          onClick={onSubmit}
+          type="button"
+        >
+          {isSaving ? "…" : submitLabel}
+        </button>
+      </div>
+      <PendingAttachmentsPreview
+        attachments={pendingAttachments}
+        onRemove={onRemoveAttachment}
+      />
+      {sendMessageState.message ? (
+        <p
+          className={`mt-2 text-xs font-semibold ${
+            sendMessageState.status === "error" ? "text-red-600" : "text-[#64748B]"
+          }`}
+        >
+          {sendMessageState.message}
+        </p>
+      ) : blockedReason ? (
+        <p className="mt-2 text-xs font-semibold text-[#64748B]">{blockedReason}</p>
+      ) : null}
+    </div>
+  );
+}
+
 function MessageAttachments({
   attachments,
   onPreview,
@@ -3413,10 +3600,14 @@ function MobileCustomerPanel({
 }
 
 function LeadPanel({
+  canCreateLead = false,
   detail,
+  onCreateLead,
   state,
 }: {
+  canCreateLead?: boolean;
   detail: ConversationDetailData;
+  onCreateLead?: () => void;
   state: ActionState;
 }) {
   if (!detail.lead) {
@@ -3425,8 +3616,20 @@ function LeadPanel({
         <div className="space-y-3">
           <EmptyState
             title="No lead created"
-            body="Use Create Lead in the conversation header to keep this opportunity open without creating a Customer or Job."
+            body="Create a Lead here to keep this opportunity open without creating a Customer or Job."
           />
+          {onCreateLead ? (
+            <button
+              className={`rounded-lg px-4 py-2 text-sm font-black text-white ${
+                canCreateLead && state.status !== "saving" ? "bg-[#0F6BFF]" : "bg-blue-200"
+              }`}
+              disabled={!canCreateLead || state.status === "saving"}
+              onClick={onCreateLead}
+              type="button"
+            >
+              {state.status === "saving" ? "Creating..." : "Create Lead"}
+            </button>
+          ) : null}
           {state.message ? (
             <p
               className={`text-sm font-semibold ${
@@ -3474,13 +3677,24 @@ function LeadPanel({
 }
 
 function MobileLeadPanel({
+  canCreateLead,
   detail,
+  onCreateLead,
   state,
 }: {
+  canCreateLead: boolean;
   detail: ConversationDetailData;
+  onCreateLead: () => void;
   state: ActionState;
 }) {
-  return <LeadPanel detail={detail} state={state} />;
+  return (
+    <LeadPanel
+      canCreateLead={canCreateLead}
+      detail={detail}
+      onCreateLead={onCreateLead}
+      state={state}
+    />
+  );
 }
 
 function MobileJobPanel({
