@@ -172,7 +172,7 @@ const emptyDetailData: ConversationDetailData = {
 };
 
 type ContextTab = "customer" | "lead" | "job" | "activity";
-type ChannelFilter = "all" | "calls" | "texts" | "forms" | "booking";
+type ChannelFilter = "all" | "calls" | "texts" | "unread";
 
 function mapConversation(row: ConversationRow): HubConversation {
   return {
@@ -244,6 +244,9 @@ function hasConversationChannel(conversation: HubConversation, channel: ChannelF
   if (channel === "all") {
     return true;
   }
+  if (channel === "unread") {
+    return conversation.unreadCount > 0;
+  }
 
   return conversation.threadSourceTypes.some((sourceType) => {
     if (channel === "calls") {
@@ -251,15 +254,6 @@ function hasConversationChannel(conversation: HubConversation, channel: ChannelF
     }
     if (channel === "texts") {
       return sourceType === "sms";
-    }
-    if (channel === "forms") {
-      return sourceType === "website_form";
-    }
-    if (channel === "booking") {
-      return (
-        sourceType === "website_form" &&
-        getAttributionValue(conversation.attribution, "channel") === "booking_widget"
-      );
     }
 
     return false;
@@ -273,6 +267,16 @@ function getConversationTitle(conversation: HubConversation): string {
     conversation.customerEmail ??
     "Unknown customer"
   );
+}
+
+function getInitials(value: string | null | undefined): string {
+  const source = value?.trim() || "Customer";
+  const parts = source.split(/\s+/).filter(Boolean);
+  const initials = parts
+    .slice(0, 2)
+    .map((part) => part.charAt(0).toUpperCase())
+    .join("");
+  return initials || "C";
 }
 
 function getConversationPreview(conversation: HubConversation): string {
@@ -732,8 +736,7 @@ function getInitialChannelFilter(): ChannelFilter {
   const value = getInitialQueryParam("channel");
   return value === "calls" ||
     value === "texts" ||
-    value === "forms" ||
-    value === "booking"
+    value === "unread"
     ? value
     : "all";
 }
@@ -773,6 +776,47 @@ function formatActivity(conversation: CommunicationConversation): string {
   return value ? formatServiceRequestDate(value) : "Activity pending";
 }
 
+function formatTimeOnly(value: string | null | undefined): string {
+  if (!value) {
+    return "Time pending";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return formatServiceRequestDate(value);
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function formatDateSeparator(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return formatServiceRequestDate(value);
+  }
+
+  const today = new Date();
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  const startOfValue = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const dayDelta = Math.round((startOfToday - startOfValue) / 86_400_000);
+
+  if (dayDelta === 0) {
+    return "Today";
+  }
+  if (dayDelta === 1) {
+    return "Yesterday";
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(date);
+}
+
 function formatDuration(durationMs: number | null): string | null {
   if (!durationMs || durationMs <= 0) {
     return null;
@@ -801,10 +845,6 @@ function getCallDurationText(call: CommunicationCallRow | null): string | null {
   return call?.duration_seconds ? formatDuration(call.duration_seconds * 1000) : null;
 }
 
-function getCallTimeLabel(call: CommunicationCallRow): string {
-  return formatServiceRequestDate(call.started_at ?? call.created_at);
-}
-
 function getEffectiveCallStatus(call: CommunicationCallRow): string | null {
   if (call.ended_at && (call.status === "calling" || call.status === "ringing")) {
     return "ended";
@@ -821,18 +861,10 @@ function getCallProviderMetadata(call: CommunicationCallRow): Record<string, unk
     : {};
 }
 
-function getCallDisplayTitle(call: CommunicationCallRow): string {
-  const metadata = getCallProviderMetadata(call);
-  if (metadata.call_phase === "human_transfer") {
-    return "Human Transfer";
-  }
-  return call.direction === "outbound" ? "Outgoing Call" : "Incoming Call";
-}
-
-function getCallParticipantLabel(
-  call: CommunicationCallRow,
-  fallbackCustomerPhone: string | null,
-): string {
+function getCallHandler(call: CommunicationCallRow): {
+  name: string;
+  role: "ai" | "human";
+} {
   const metadata = getCallProviderMetadata(call);
   if (metadata.call_phase === "human_transfer") {
     const participants =
@@ -844,21 +876,78 @@ function getCallParticipantLabel(
     const ownerName =
       typeof participants.owner_name === "string" && participants.owner_name.trim()
         ? participants.owner_name.trim()
-        : "Owner";
-    return `Customer ↔ ${ownerName}`;
+        : "Serhii";
+    return { name: ownerName, role: "human" };
   }
-  return fallbackCustomerPhone ?? "No phone captured";
+
+  if (call.provider_name === "retell") {
+    return { name: "Sarah", role: "ai" };
+  }
+
+  return { name: "Serhii", role: "human" };
+}
+
+function getCallParticipantLabel(call: CommunicationCallRow): string {
+  const handler = getCallHandler(call);
+  if (call.direction === "outbound") {
+    return handler.role === "ai" ? "Sarah (AI) → Customer" : `${handler.name} → Customer`;
+  }
+  return handler.role === "ai" ? "Customer ↔ Sarah (AI)" : `Customer ↔ ${handler.name}`;
+}
+
+function getCallSessionRouteLabel(session: CallSession): string {
+  const handlers = session.calls
+    .map((call) => getCallHandler(call))
+    .filter((handler, index, list) => list.findIndex((item) => item.name === handler.name) === index)
+    .map((handler) => (handler.role === "ai" ? `${handler.name} (AI)` : handler.name));
+
+  if (session.calls[0]?.direction === "outbound") {
+    return handlers.length > 0 ? `${handlers[0]} → Customer` : "HomeFix → Customer";
+  }
+
+  return ["Customer", ...handlers].join(" → ");
+}
+
+function getCallSessionTitle(session: CallSession): string {
+  const primaryCall = session.calls[0];
+  const hasAi = session.calls.some((call) => getCallHandler(call).role === "ai");
+  const hasHumanTransfer = session.calls.some(
+    (call) => getCallProviderMetadata(call).call_phase === "human_transfer",
+  );
+  const directionLabel = primaryCall?.direction === "outbound" ? "Outgoing Call" : "Incoming Call";
+
+  if (hasHumanTransfer) {
+    return directionLabel;
+  }
+  if (hasAi) {
+    return `${directionLabel} — AI (Sarah)`;
+  }
+  const handler = primaryCall ? getCallHandler(primaryCall) : null;
+  return handler ? `${directionLabel} — ${handler.name}` : directionLabel;
 }
 
 type CallSession = {
   id: string;
   calls: CommunicationCallRow[];
+  summaries: MessageRow[];
 };
 
 type ThreadEvent =
   | { id: string; occurredAt: string; session: CallSession; type: "call_session" }
   | { id: string; message: MessageRow; occurredAt: string; type: "message" }
+  | { id: string; messages: MessageRow[]; occurredAt: string; type: "sms_group" }
   | { event: CommunicationTimelineEvent; id: string; occurredAt: string; type: "timeline" };
+
+type IconName =
+  | "ai"
+  | "attachment"
+  | "human"
+  | "transfer"
+  | "sms"
+  | "note"
+  | "website"
+  | "voicemail"
+  | "phone";
 
 function getNestedMetadata(
   metadata: Record<string, unknown>,
@@ -910,6 +999,7 @@ function groupCallSessions(calls: CommunicationCallRow[]): CallSession[] {
           (Date.parse(left.started_at ?? left.created_at) || 0) -
           (Date.parse(right.started_at ?? right.created_at) || 0),
       ),
+      summaries: [],
     }))
     .sort((left, right) => {
       const leftLatest = left.calls
@@ -926,6 +1016,111 @@ function getCallSessionOccurredAt(session: CallSession): string {
   return session.calls[0]?.started_at ?? session.calls[0]?.created_at ?? new Date(0).toISOString();
 }
 
+function getCallSessionEndedAt(session: CallSession): string {
+  return (
+    session.calls
+      .map((call) => call.ended_at ?? call.started_at ?? call.created_at)
+      .filter((value): value is string => Boolean(value))
+      .sort()
+      .at(-1) ?? getCallSessionOccurredAt(session)
+  );
+}
+
+function getCallSessionDurationText(session: CallSession): string | null {
+  if (session.calls.every((call) => typeof call.duration_seconds === "number")) {
+    const totalSeconds = session.calls.reduce(
+      (total, call) => total + (call.duration_seconds ?? 0),
+      0,
+    );
+    return totalSeconds > 0 ? formatDuration(totalSeconds * 1000) : null;
+  }
+
+  const starts = session.calls
+    .map((call) => Date.parse(call.started_at ?? call.created_at) || 0)
+    .filter((value) => value > 0);
+  const ends = session.calls
+    .map((call) => Date.parse(call.ended_at ?? "") || 0)
+    .filter((value) => value > 0);
+  if (starts.length === session.calls.length && ends.length === session.calls.length) {
+    const durationMs = Math.max(...ends) - Math.min(...starts);
+    return durationMs > 0 ? formatDuration(durationMs) : null;
+  }
+
+  return null;
+}
+
+function getEventIdentity(event: CommunicationTimelineEvent): {
+  accent: string;
+  icon: IconName;
+  route: string;
+  title: string;
+} {
+  const title = event.title || getTimelineEventLabel(event.type);
+  const normalized = `${event.type} ${title}`.toLowerCase();
+
+  if (normalized.includes("voicemail")) {
+    return {
+      accent: "bg-blue-50 text-[#0F6BFF]",
+      icon: "voicemail",
+      route: "Customer → HomeFix",
+      title: "Voicemail",
+    };
+  }
+  if (normalized.includes("note")) {
+    return {
+      accent: "bg-amber-50 text-amber-700",
+      icon: "note",
+      route: "Internal",
+      title: "Note — Serhii",
+    };
+  }
+  if (normalized.includes("website") || normalized.includes("form")) {
+    return {
+      accent: "bg-purple-50 text-purple-700",
+      icon: "website",
+      route: "Customer → HomeFix",
+      title: "Website Request",
+    };
+  }
+
+  return {
+    accent: "bg-[#F8FAFC] text-[#64748B]",
+    icon: "note",
+    route: "Customer → HomeFix",
+    title,
+  };
+}
+
+function getMessageEventIdentity(message: MessageRow): {
+  accent: string;
+  icon: IconName;
+  route: string;
+  title: string;
+} {
+  if (message.source_type === "phone") {
+    return {
+      accent: "bg-blue-50 text-[#0F6BFF]",
+      icon: "phone",
+      route: "Customer → HomeFix",
+      title: "Call Summary",
+    };
+  }
+  if (message.source_type === "website_form") {
+    return {
+      accent: "bg-purple-50 text-purple-700",
+      icon: "website",
+      route: "Customer → HomeFix",
+      title: "Website Request",
+    };
+  }
+  return {
+    accent: "bg-[#F8FAFC] text-[#64748B]",
+    icon: "note",
+    route: message.direction === "outbound" ? "HomeFix → Customer" : "Customer → HomeFix",
+    title: getSourceLabel(message.source_type),
+  };
+}
+
 function buildThreadEvents({
   calls,
   messages,
@@ -935,14 +1130,42 @@ function buildThreadEvents({
   messages: MessageRow[];
   timelineEvents: CommunicationTimelineEvent[];
 }): ThreadEvent[] {
+  const sessions = groupCallSessions(calls);
+  const sessionById = new Map(sessions.map((session) => [session.id, { ...session }]));
   const hasCalls = calls.length > 0;
-  const callEvents: ThreadEvent[] = groupCallSessions(calls).map((session) => ({
+  const unattachedMessages: MessageRow[] = [];
+
+  for (const message of messages) {
+    if (message.source_type !== "phone") {
+      unattachedMessages.push(message);
+      continue;
+    }
+
+    const matchingSessions = sessions.filter((session) =>
+      session.calls.some((call) => call.conversation_id === message.conversation_id),
+    );
+
+    if (matchingSessions.length === 1) {
+      const session = sessionById.get(matchingSessions[0].id);
+      if (session) {
+        session.summaries = [...session.summaries, message].sort(
+          (left, right) =>
+            (Date.parse(right.occurred_at) || 0) - (Date.parse(left.occurred_at) || 0),
+        );
+      }
+      continue;
+    }
+
+    unattachedMessages.push(message);
+  }
+
+  const callEvents: ThreadEvent[] = Array.from(sessionById.values()).map((session) => ({
     id: session.id,
-    occurredAt: getCallSessionOccurredAt(session),
+    occurredAt: getCallSessionEndedAt(session),
     session,
     type: "call_session",
   }));
-  const messageEvents: ThreadEvent[] = messages.map((message) => ({
+  const messageEvents: ThreadEvent[] = unattachedMessages.map((message) => ({
     id: `message:${message.id}`,
     message,
     occurredAt: message.occurred_at,
@@ -957,10 +1180,49 @@ function buildThreadEvents({
       type: "timeline",
     }));
 
-  return [...callEvents, ...messageEvents, ...timelineOnlyEvents].sort(
+  const sortedEvents = [...callEvents, ...messageEvents, ...timelineOnlyEvents].sort(
     (left, right) =>
-      (Date.parse(left.occurredAt) || 0) - (Date.parse(right.occurredAt) || 0),
+      (Date.parse(right.occurredAt) || 0) - (Date.parse(left.occurredAt) || 0),
   );
+
+  return groupConsecutiveSmsEvents(sortedEvents);
+}
+
+function groupConsecutiveSmsEvents(events: ThreadEvent[]): ThreadEvent[] {
+  const grouped: ThreadEvent[] = [];
+  let pendingSms: MessageRow[] = [];
+
+  function flushSmsGroup() {
+    if (pendingSms.length === 0) {
+      return;
+    }
+
+    const orderedMessages = [...pendingSms].sort(
+      (left, right) =>
+        (Date.parse(left.occurred_at) || 0) - (Date.parse(right.occurred_at) || 0),
+    );
+    const newestMessage = orderedMessages[orderedMessages.length - 1];
+    grouped.push({
+      id: `sms-group:${orderedMessages.map((message) => message.id).join(":")}`,
+      messages: orderedMessages,
+      occurredAt: newestMessage.occurred_at,
+      type: "sms_group",
+    });
+    pendingSms = [];
+  }
+
+  for (const event of events) {
+    if (event.type === "message" && event.message.source_type === "sms") {
+      pendingSms.push(event.message);
+      continue;
+    }
+
+    flushSmsGroup();
+    grouped.push(event);
+  }
+
+  flushSmsGroup();
+  return grouped;
 }
 
 function formatServiceAddress(detail: ConversationDetailData, conversation: CommunicationConversation) {
@@ -1083,11 +1345,12 @@ export function CommunicationsHub() {
   const [recordingStatesByCallId, setRecordingStatesByCallId] =
     useState<RecordingStateByCallId>({});
   const recordingStatesRef = useRef<RecordingStateByCallId>({});
+  const recordingAudioUrlsRef = useRef<string[]>([]);
   const [activeFilter, setActiveFilter] = useState<ChannelFilter>(getInitialChannelFilter);
   const [inboxTab, setInboxTab] =
     useState<"inbox" | "assigned" | "archived">(getInitialInboxTab);
   const [searchQuery, setSearchQuery] = useState(() => getInitialQueryParam("q") ?? "");
-  const [contextTab, setContextTab] = useState<ContextTab>("customer");
+  const [, setContextTab] = useState<ContextTab>("customer");
   const [mobileDetailOpen, setMobileDetailOpen] = useState(
     () => getInitialQueryParam("view") === "detail" && Boolean(getInitialQueryParam("conversation")),
   );
@@ -1552,151 +1815,13 @@ export function CommunicationsHub() {
   }, [recordingStatesByCallId]);
 
   useEffect(() => {
-    let isMounted = true;
-    const createdAudioUrls: string[] = [];
-    const callsToLoad = detailState.data.calls.filter(
-      (call) =>
-        call.recording_reference &&
-        !recordingStatesRef.current[call.id] &&
-        detailState.status === "ready",
-    );
-
-    if (callsToLoad.length === 0) {
-      return;
-    }
-
-    const supabase = getSupabaseBrowserClient();
-    if (!supabase) {
-      setRecordingStatesByCallId((current) => {
-        const next = { ...current };
-        for (const call of callsToLoad) {
-          next[call.id] = {
-            status: "error",
-            recording: null,
-            audioUrl: null,
-            message: "Recording lookup is not configured for this workspace.",
-          };
-        }
-        return next;
-      });
-      return;
-    }
-
-    setRecordingStatesByCallId((current) => {
-      const next = { ...current };
-      for (const call of callsToLoad) {
-        next[call.id] = { status: "loading", recording: null, audioUrl: null, message: null };
-      }
-      return next;
-    });
-
-    const supabaseClient = supabase;
-
-    async function loadRecordings() {
-      const {
-        data: { session },
-      } = await supabaseClient.auth.getSession();
-
-      if (!session?.access_token) {
-        if (isMounted) {
-          setRecordingStatesByCallId((current) => {
-            const next = { ...current };
-            for (const call of callsToLoad) {
-              next[call.id] = {
-                status: "error",
-                recording: null,
-                audioUrl: null,
-                message: "Log in again to load call recordings.",
-              };
-            }
-            return next;
-          });
-        }
-        return;
-      }
-
-      for (const call of callsToLoad) {
-        const recordingQuery = `callId=${encodeURIComponent(call.id)}`;
-        const response = await fetch(`/api/communications/retell-recording?${recordingQuery}`, {
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-          },
-        });
-        const payload = (await response.json().catch(() => null)) as
-          | {
-              ok?: boolean;
-              recording?: RetellRecording | null;
-              message?: string | null;
-            }
-          | null;
-
-        if (!isMounted) {
-          return;
-        }
-
-        if (!response.ok || !payload?.ok) {
-          setRecordingStatesByCallId((current) => ({
-            ...current,
-            [call.id]: {
-              status: "error",
-              recording: null,
-              audioUrl: null,
-              message: payload?.message ?? "Could not load call recording.",
-            },
-          }));
-          continue;
-        }
-
-        let audioUrl: string | null = null;
-        let message = payload.message ?? null;
-
-        if (payload.recording && !message) {
-          const audioResponse = await fetch(
-            `/api/communications/retell-recording/audio?${recordingQuery}`,
-            {
-              headers: {
-                Authorization: `Bearer ${session.access_token}`,
-              },
-            },
-          );
-
-          if (!isMounted) {
-            return;
-          }
-
-          if (audioResponse.ok) {
-            const audioBlob = await audioResponse.blob();
-            if (!isMounted) {
-              return;
-            }
-            audioUrl = URL.createObjectURL(audioBlob);
-            createdAudioUrls.push(audioUrl);
-          } else {
-            message = "Recording metadata loaded, but audio playback is unavailable.";
-          }
-        }
-
-        setRecordingStatesByCallId((current) => ({
-          ...current,
-          [call.id]: {
-            status: "ready",
-            recording: payload.recording ?? null,
-            audioUrl,
-            message,
-          },
-        }));
-      }
-    }
-
-    void loadRecordings();
-
     return () => {
-      isMounted = false;
-      for (const audioUrl of createdAudioUrls) {
+      for (const audioUrl of recordingAudioUrlsRef.current) {
         URL.revokeObjectURL(audioUrl);
       }
+      recordingAudioUrlsRef.current = [];
     };
-  }, [detailState.data.calls, detailState.status]);
+  }, []);
 
   const selectedConversation = useMemo(
     () =>
@@ -1807,8 +1932,7 @@ export function CommunicationsHub() {
       all: hubState.conversations.length,
       calls: hubState.conversations.filter((item) => hasConversationChannel(item, "calls")).length,
       texts: hubState.conversations.filter((item) => hasConversationChannel(item, "texts")).length,
-      forms: hubState.conversations.filter((item) => hasConversationChannel(item, "forms")).length,
-      booking: hubState.conversations.filter((item) => hasConversationChannel(item, "booking")).length,
+      unread: hubState.conversations.filter((item) => hasConversationChannel(item, "unread")).length,
     }),
     [hubState.conversations],
   );
@@ -1817,9 +1941,7 @@ export function CommunicationsHub() {
     () => new Map(detail.transcripts.map((transcript) => [transcript.id, transcript])),
     [detail.transcripts],
   );
-  const chronologicalMessages = [...detail.messages].reverse();
-  const chronologicalTimeline = [...detail.timelineEvents].reverse();
-  const visibleTimeline = chronologicalTimeline.filter((event) => {
+  const visibleTimeline = useMemo(() => detail.timelineEvents.filter((event) => {
     const eventBody = event.body?.trim();
     const summary = selectedConversation?.summary?.trim();
 
@@ -1830,15 +1952,15 @@ export function CommunicationsHub() {
       summary &&
       eventBody === summary
     );
-  });
+  }), [detail.timelineEvents, selectedConversation?.sourceType, selectedConversation?.summary]);
   const threadEvents = useMemo(
     () =>
       buildThreadEvents({
         calls: detail.calls,
-        messages: chronologicalMessages,
+        messages: detail.messages,
         timelineEvents: visibleTimeline,
       }),
-    [chronologicalMessages, detail.calls, visibleTimeline],
+    [detail.calls, detail.messages, visibleTimeline],
   );
   const buildCommunicationsReturnTo = (conversationId = selectedConversationId) => {
     const params = new URLSearchParams();
@@ -1866,6 +1988,10 @@ export function CommunicationsHub() {
     setCreateLeadState({ status: "idle", message: null });
     setSmsDraft("");
     setSendMessageState({ status: "idle", message: null });
+    for (const audioUrl of recordingAudioUrlsRef.current) {
+      URL.revokeObjectURL(audioUrl);
+    }
+    recordingAudioUrlsRef.current = [];
     recordingStatesRef.current = {};
     setRecordingStatesByCallId({});
     setExpandedTranscriptByCallId({});
@@ -1936,6 +2062,92 @@ export function CommunicationsHub() {
       });
     } finally {
       setRetryingTranscriptCallId(null);
+    }
+  }
+
+  async function handleLoadRecording(callId: string) {
+    const currentState = recordingStatesRef.current[callId];
+    if (currentState?.status === "loading" || currentState?.status === "ready") {
+      return;
+    }
+
+    setRecordingStatesByCallId((current) => ({
+      ...current,
+      [callId]: { status: "loading", recording: null, audioUrl: null, message: null },
+    }));
+
+    try {
+      const supabase = getSupabaseBrowserClient();
+      if (!supabase) {
+        throw new Error("Recording lookup is not configured for this workspace.");
+      }
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        throw new Error("Log in again to load call recordings.");
+      }
+
+      const recordingQuery = `callId=${encodeURIComponent(callId)}`;
+      const response = await fetch(`/api/communications/retell-recording?${recordingQuery}`, {
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            ok?: boolean;
+            recording?: RetellRecording | null;
+            message?: string | null;
+          }
+        | null;
+
+      if (!response.ok || !payload?.ok) {
+        throw new Error(payload?.message ?? "Could not load call recording.");
+      }
+
+      let audioUrl: string | null = null;
+      let message = payload.message ?? null;
+
+      if (payload.recording && !message) {
+        const audioResponse = await fetch(
+          `/api/communications/retell-recording/audio?${recordingQuery}`,
+          {
+            headers: {
+              Authorization: `Bearer ${session.access_token}`,
+            },
+          },
+        );
+
+        if (audioResponse.ok) {
+          const audioBlob = await audioResponse.blob();
+          audioUrl = URL.createObjectURL(audioBlob);
+          recordingAudioUrlsRef.current.push(audioUrl);
+        } else {
+          message = "Recording metadata loaded, but audio playback is unavailable.";
+        }
+      }
+
+      setRecordingStatesByCallId((current) => ({
+        ...current,
+        [callId]: {
+          status: "ready",
+          recording: payload.recording ?? null,
+          audioUrl,
+          message,
+        },
+      }));
+    } catch (error) {
+      setRecordingStatesByCallId((current) => ({
+        ...current,
+        [callId]: {
+          status: "error",
+          recording: null,
+          audioUrl: null,
+          message: error instanceof Error ? error.message : "Could not load call recording.",
+        },
+      }));
     }
   }
 
@@ -2235,40 +2447,30 @@ export function CommunicationsHub() {
 
   return (
     <>
-    <main className="space-y-5">
-      <section className="flex flex-col gap-4 rounded-2xl border border-[#E5E7EB] bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.06)] lg:flex-row lg:items-end lg:justify-between">
+    <main className="space-y-4">
+      <section className="flex flex-col gap-4 rounded-2xl border border-[#E5E7EB] bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.06)] lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h1 className="text-3xl font-semibold text-[#0F172A]">Communications</h1>
-          <p className="mt-2 text-sm font-medium leading-6 text-[#475569]">
-            All incoming calls, texts, website forms and booking requests in one place.
+          <h1 className="text-2xl font-semibold text-[#0F172A]">Communications</h1>
+          <p className="mt-1 text-sm font-medium leading-6 text-[#475569]">
+            Calls, texts, and customer conversations — all in one place.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {([
-            ["all", "All"],
-            ["calls", "Calls"],
-            ["texts", "Texts"],
-            ["forms", "Forms"],
-            ["booking", "Booking"],
-          ] as Array<[ChannelFilter, string]>).map(([value, label]) => (
-            <button
-              className={`rounded-lg border px-3 py-2 text-sm font-semibold transition ${
-                activeFilter === value
-                  ? "border-[#0F6BFF] bg-blue-50 text-[#0F6BFF]"
-                  : "border-[#E5E7EB] bg-white text-[#475569] hover:border-blue-200"
-              }`}
-              key={value}
-              onClick={() => setActiveFilter(value)}
-              type="button"
-            >
-              {label}
-              {channelCounts[value] > 0 ? (
-                <span className="ml-2 rounded-md bg-[#E2E8F0] px-1.5 py-0.5 text-xs">
-                  {channelCounts[value]}
-                </span>
-              ) : null}
-            </button>
-          ))}
+        <div className="flex w-full flex-col gap-2 sm:flex-row lg:w-auto">
+          <input
+            className="h-10 w-full rounded-lg border border-[#E5E7EB] bg-[#F8FAFC] px-3 text-sm font-medium text-[#0F172A] outline-none placeholder:text-[#94A3B8] focus:border-[#0F6BFF] lg:w-[420px]"
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search conversations, customers, or phone numbers..."
+            type="search"
+            value={searchQuery}
+          />
+          <button
+            className="h-10 rounded-lg bg-[#0F6BFF] px-4 text-sm font-black text-white shadow-[0_8px_18px_rgba(15,107,255,0.2)] disabled:cursor-not-allowed disabled:opacity-70"
+            disabled
+            title="New communication actions are not available yet."
+            type="button"
+          >
+            + New
+          </button>
         </div>
       </section>
 
@@ -2521,9 +2723,9 @@ export function CommunicationsHub() {
 
                   <ThreadEventTimeline
                     attachmentsByMessageId={detail.attachmentsByMessageId}
-                    customerPhone={selectedConversation.customerPhone}
                     events={threadEvents}
                     expandedTranscriptByCallId={expandedTranscriptByCallId}
+                    onLoadRecording={(callId) => void handleLoadRecording(callId)}
                     onPreviewAttachment={setPreviewAttachment}
                     onRetryTranscript={(callId) => void handleRetryTranscript(callId)}
                     onToggleTranscript={(callId) =>
@@ -2623,39 +2825,46 @@ export function CommunicationsHub() {
         ) : null}
       </section>
 
-      <section className="hidden min-h-[720px] gap-4 xl:grid xl:grid-cols-[360px_minmax(0,1fr)_340px]">
+      <section className="hidden h-[calc(100vh-150px)] min-h-[680px] gap-4 xl:grid xl:grid-cols-[minmax(280px,27fr)_minmax(520px,50fr)_minmax(300px,23fr)]">
         <aside className="overflow-hidden rounded-2xl border border-[#E5E7EB] bg-white shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
-          <div className="border-b border-[#E5E7EB] p-4">
-            <div className="flex gap-2">
+          <div className="border-b border-[#E5E7EB] p-3">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <p className="text-sm font-black text-[#0F172A]">Customer Threads</p>
+                <p className="text-xs font-semibold text-[#64748B]">
+                  One timeline per customer/contact
+                </p>
+              </div>
+            </div>
+            <div className="mt-3 flex gap-1.5 overflow-x-auto pb-1">
               {([
-                ["inbox", "Inbox"],
-                ["assigned", "Assigned"],
-                ["archived", "Archived"],
-              ] as Array<[typeof inboxTab, string]>).map(([value, label]) => (
+                ["all", "All"],
+                ["calls", "Calls"],
+                ["texts", "Texts"],
+                ["unread", "Unread"],
+              ] as Array<[ChannelFilter, string]>).map(([value, label]) => (
                 <button
-                  className={`rounded-lg px-3 py-2 text-sm font-semibold ${
-                    inboxTab === value
+                  className={`shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-black ${
+                    activeFilter === value
                       ? "bg-blue-50 text-[#0F6BFF]"
                       : "text-[#64748B] hover:bg-[#F8FAFC]"
                   }`}
                   key={value}
-                  onClick={() => setInboxTab(value)}
+                  onClick={() => setActiveFilter(value)}
                   type="button"
                 >
                   {label}
+                  {channelCounts[value] > 0 ? (
+                    <span className="ml-1 rounded-md bg-white/70 px-1 text-[10px]">
+                      {channelCounts[value]}
+                    </span>
+                  ) : null}
                 </button>
               ))}
             </div>
-            <input
-              className="mt-3 w-full rounded-lg border border-[#E5E7EB] px-3 py-2 text-sm font-medium text-[#0F172A] outline-none placeholder:text-[#94A3B8] focus:border-[#0F6BFF]"
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search conversations..."
-              type="search"
-              value={searchQuery}
-            />
           </div>
 
-          <div className="max-h-[680px] overflow-y-auto">
+          <div className="h-[calc(100%-86px)] overflow-y-auto">
             {hubState.status === "loading" ? (
               <p className="m-4 rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-4 text-sm font-semibold text-[#64748B]">
                 Loading conversations...
@@ -2669,10 +2878,11 @@ export function CommunicationsHub() {
               filteredConversations.map((conversation) => {
                 const selected = conversation.id === selectedConversationId;
                 const flags = getConversationFlags(conversation);
+                const title = getConversationTitle(conversation);
 
                 return (
                   <button
-                    className={`w-full border-b border-[#E5E7EB] p-4 text-left transition ${
+                    className={`w-full border-b border-[#E5E7EB] p-3 text-left transition ${
                       selected
                         ? "bg-blue-50 shadow-[inset_3px_0_0_#0F6BFF]"
                         : "bg-white hover:bg-[#F8FAFC]"
@@ -2681,33 +2891,39 @@ export function CommunicationsHub() {
                     onClick={() => openConversation(conversation.id)}
                     type="button"
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-black text-[#0F172A]">
-                          {getConversationTitle(conversation)}
-                        </p>
-                        {conversation.unreadCount > 0 ? (
-                          <span className="mt-1 inline-flex rounded-full bg-red-500 px-2 py-0.5 text-[11px] font-black text-white">
-                            {conversation.unreadCount}
-                          </span>
-                        ) : null}
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#E8F1FF] text-sm font-black text-[#0F6BFF]">
+                        {getInitials(title)}
                       </div>
-                      <p className="shrink-0 text-xs font-bold text-[#0F6BFF]">
+                      <div className="min-w-0">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <p className="truncate text-sm font-black text-[#0F172A]">
+                            {title}
+                          </p>
+                          {conversation.unreadCount > 0 ? (
+                            <span className="inline-flex rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-black text-white">
+                              {conversation.unreadCount}
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="mt-0.5 truncate text-xs font-semibold text-[#64748B]">
+                          {conversation.customerPhone ?? conversation.customerEmail ?? "No contact"}
+                        </p>
+                        <p className="mt-1 line-clamp-1 text-xs font-medium leading-5 text-[#334155]">
+                          {getConversationPreview(conversation)}
+                        </p>
+                        <div className="mt-1.5 flex flex-wrap gap-1.5">
+                          <Badge tone="blue">{getSourceLabel(conversation.sourceType)}</Badge>
+                          {flags.slice(0, 1).map((flag) => (
+                            <Badge key={flag.label} tone={flag.tone}>
+                              {flag.label}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                      <p className="ml-auto shrink-0 text-xs font-bold text-[#0F6BFF]">
                         {formatActivity(conversation)}
                       </p>
-                    </div>
-                    <p className="mt-1 line-clamp-2 text-sm font-medium leading-5 text-[#334155]">
-                      {getConversationPreview(conversation)}
-                    </p>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <Badge tone="blue">{getSourceLabel(conversation.sourceType)}</Badge>
-                      <Badge tone="purple">{formatProviderName(conversation.providerName)}</Badge>
-                      <Badge tone="amber">{getStatusLabel(conversation.status)}</Badge>
-                      {flags.slice(0, 2).map((flag) => (
-                        <Badge key={flag.label} tone={flag.tone}>
-                          {flag.label}
-                        </Badge>
-                      ))}
                     </div>
                   </button>
                 );
@@ -2716,107 +2932,100 @@ export function CommunicationsHub() {
           </div>
         </aside>
 
-        <section className="flex min-h-[720px] flex-col overflow-hidden rounded-2xl border border-[#E5E7EB] bg-white shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
+        <section className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-[#E5E7EB] bg-white shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
           {selectedConversation ? (
             <>
-              <div className="flex flex-col gap-3 border-b border-[#E5E7EB] p-5 lg:flex-row lg:items-start lg:justify-between">
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="text-2xl font-semibold text-[#0F172A]">
-                      {getConversationTitle(selectedConversation)}
-                    </h2>
-                    <Badge tone="blue">{getSourceLabel(selectedConversation.sourceType)}</Badge>
-                    <Badge>{getStatusLabel(selectedConversation.status)}</Badge>
+              <div className="border-b border-[#E5E7EB] px-4 pt-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="flex min-w-0 items-start gap-3">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[#E8F1FF] text-lg font-black text-[#0F6BFF]">
+                      {getInitials(getConversationTitle(selectedConversation))}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="truncate text-xl font-semibold text-[#0F172A]">
+                          {getConversationTitle(selectedConversation)}
+                        </h2>
+                        {detail.customer ? <Badge tone="blue">Customer</Badge> : null}
+                        <Badge tone={selectedConversation.status === "resolved" ? "emerald" : "blue"}>
+                          {getStatusLabel(selectedConversation.status)}
+                        </Badge>
+                      </div>
+                      <p className="mt-1 text-sm font-semibold text-[#64748B]">
+                        {selectedConversation.customerPhone ?? "No phone captured"}
+                      </p>
+                    </div>
                   </div>
-                  <p className="mt-2 text-sm font-medium text-[#64748B]">
-                    Started {formatActivity(selectedConversation)}
-                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      className={`flex h-9 min-w-9 items-center justify-center rounded-full border px-3 text-sm font-black ${
+                        communicationCallTarget?.phone
+                          ? "border-blue-100 bg-blue-50 text-[#0F6BFF]"
+                          : "border-[#E5E7EB] text-[#64748B]"
+                      }`}
+                      disabled={!communicationCallTarget?.phone}
+                      onClick={() => setIsBrowserCallOpen(true)}
+                      title={
+                        communicationCallTarget?.phone
+                          ? "Call this customer"
+                          : "No callable phone number is available."
+                      }
+                      type="button"
+                    >
+                      Call
+                    </button>
+                    <button
+                      className="flex h-9 min-w-9 items-center justify-center rounded-full border border-blue-100 bg-blue-50 px-3 text-sm font-black text-[#0F6BFF]"
+                      disabled={!canSendSmsFromConversation}
+                      title="Message"
+                      type="button"
+                    >
+                      SMS
+                    </button>
+                    <button
+                      className={`flex h-9 min-w-9 items-center justify-center rounded-full border px-3 text-sm font-black ${
+                        canCreateJobFromConversation || linkedJobId
+                          ? "border-blue-100 bg-blue-50 text-[#0F6BFF]"
+                          : "border-[#E5E7EB] text-[#64748B]"
+                      }`}
+                      disabled={
+                        createJobState.status === "saving" ||
+                        (!canCreateJobFromConversation && !linkedJobId)
+                      }
+                      onClick={() => void handleCreateJobFromConversation()}
+                      title={linkedJobId ? "Open job" : "Create job"}
+                      type="button"
+                    >
+                      +
+                    </button>
+                    <button
+                      className="flex h-9 min-w-9 items-center justify-center rounded-full border border-[#E5E7EB] bg-[#F8FAFC] px-3 text-sm font-black text-[#64748B]"
+                      disabled
+                      title="More actions"
+                      type="button"
+                    >
+                      …
+                    </button>
+                  </div>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    className="rounded-lg border border-[#E5E7EB] px-3 py-2 text-sm font-semibold text-[#64748B]"
-                    disabled
-                    type="button"
-                  >
-                    Assign
-                  </button>
-                  <button
-                    className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                      communicationCallTarget?.phone
-                        ? "border-[#0F6BFF] bg-white text-[#0F6BFF]"
-                        : "border-[#E5E7EB] text-[#64748B]"
-                    }`}
-                    disabled={!communicationCallTarget?.phone}
-                    onClick={() => setIsBrowserCallOpen(true)}
-                    title={
-                      communicationCallTarget?.phone
-                        ? "Call this conversation"
-                        : "No callable phone number is available."
-                    }
-                    type="button"
-                  >
-                    Call
-                  </button>
-                  <button
-                    className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                      canCreateLeadFromConversation || linkedLeadId
-                        ? "border-[#0F6BFF] bg-white text-[#0F6BFF]"
-                        : "border-[#E5E7EB] text-[#64748B]"
-                    }`}
-                    disabled={
-                      createLeadState.status === "saving" ||
-                      (!canCreateLeadFromConversation && !linkedLeadId)
-                    }
-                    onClick={() => void handleCreateLeadFromConversation()}
-                    type="button"
-                  >
-                    {createLeadState.status === "saving"
-                      ? "Creating..."
-                      : linkedLeadId
-                        ? "Open Lead"
-                        : "Create Lead"}
-                  </button>
-                  <button
-                    className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                      canCreateJobFromConversation || linkedJobId
-                        ? "border-[#0F6BFF] bg-[#0F6BFF] text-white"
-                        : "border-[#E5E7EB] text-[#64748B]"
-                    }`}
-                    disabled={
-                      createJobState.status === "saving" ||
-                      (!canCreateJobFromConversation && !linkedJobId)
-                    }
-                    onClick={() => void handleCreateJobFromConversation()}
-                    type="button"
-                  >
-                    {createJobState.status === "saving"
-                      ? "Creating..."
-                      : linkedJobId
-                        ? "Open Job"
-                        : "Create Job"}
-                  </button>
+                <div className="mt-3 flex gap-5 overflow-x-auto">
+                  {["Conversation", "AI Summary", "Customer Details", "Jobs", "Estimates", "Invoices"].map(
+                    (label, index) => (
+                      <button
+                        className={`shrink-0 border-b-2 px-0 pb-3 text-sm font-black ${
+                          index === 0
+                            ? "border-[#0F6BFF] text-[#0F6BFF]"
+                            : "border-transparent text-[#64748B]"
+                        }`}
+                        disabled={index !== 0}
+                        key={label}
+                        type="button"
+                      >
+                        {label}
+                      </button>
+                    ),
+                  )}
                 </div>
-                {createLeadState.message ? (
-                  <p
-                    className={`text-sm font-semibold ${
-                      createLeadState.status === "error"
-                        ? "text-amber-700"
-                        : "text-emerald-700"
-                    }`}
-                  >
-                    {createLeadState.message}
-                  </p>
-                ) : createJobState.message ? (
-                  <p
-                    className={`text-sm font-semibold ${
-                      createJobState.status === "error"
-                        ? "text-amber-700"
-                        : "text-emerald-700"
-                    }`}
-                  >
-                    {createJobState.message}
-                  </p>
-                ) : null}
               </div>
 
               {detailState.status === "loading" ? (
@@ -2829,7 +3038,7 @@ export function CommunicationsHub() {
                 </p>
               ) : (
                 <>
-                  <div className="flex-1 space-y-4 overflow-y-auto bg-[#F8FAFC] p-5">
+                  <div className="flex-1 space-y-3 overflow-y-auto bg-[#F8FAFC] p-4">
                     {requestDetailRows.length > 0 ? (
                       <RequestDetailsCard
                         rows={requestDetailRows}
@@ -2846,9 +3055,9 @@ export function CommunicationsHub() {
 
                     <ThreadEventTimeline
                       attachmentsByMessageId={detail.attachmentsByMessageId}
-                      customerPhone={selectedConversation.customerPhone}
                       events={threadEvents}
                       expandedTranscriptByCallId={expandedTranscriptByCallId}
+                      onLoadRecording={(callId) => void handleLoadRecording(callId)}
                       onPreviewAttachment={setPreviewAttachment}
                       onRetryTranscript={(callId) => void handleRetryTranscript(callId)}
                       onToggleTranscript={(callId) =>
@@ -2863,24 +3072,69 @@ export function CommunicationsHub() {
                     />
                   </div>
 
-                  <div className="border-t border-[#E5E7EB] p-4">
-                    <div className="mb-3 flex gap-4 text-sm font-semibold">
+                  <div className="border-t border-[#E5E7EB] bg-white p-3">
+                    <div className="mb-2 flex gap-4 text-sm font-semibold">
                       <span className="text-[#0F6BFF]">Message</span>
-                      <span className="text-[#64748B]">Note</span>
-                      <span className="text-[#64748B]">Internal</span>
+                      <span className="text-[#64748B]">Internal Note</span>
+                      <button
+                        className="text-[#64748B] disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={
+                          createJobState.status === "saving" ||
+                          (!canCreateJobFromConversation && !linkedJobId)
+                        }
+                        onClick={() => void handleCreateJobFromConversation()}
+                        type="button"
+                      >
+                        {linkedJobId ? "Open Job" : "Create Job"}
+                      </button>
                     </div>
-                    <textarea
-                      className="h-24 w-full resize-none rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3 text-sm font-medium text-[#0F172A] placeholder:text-[#94A3B8]"
-                      disabled={
-                        !canSendSmsFromConversation ||
-                        sendMessageState.status === "saving"
-                      }
-                      onChange={(event) => setSmsDraft(event.target.value)}
-                      placeholder={
-                        sendMessageBlockedReason ?? "Type a customer-facing SMS..."
-                      }
-                      value={smsDraft}
-                    />
+                    <div className="flex items-end gap-2 rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-2">
+                      <textarea
+                        className="max-h-28 min-h-10 flex-1 resize-none bg-transparent px-1 py-2 text-sm font-medium text-[#0F172A] outline-none placeholder:text-[#94A3B8]"
+                        disabled={
+                          !canSendSmsFromConversation ||
+                          sendMessageState.status === "saving"
+                        }
+                        onChange={(event) => setSmsDraft(event.target.value)}
+                        placeholder={
+                          sendMessageBlockedReason ??
+                          `Type a message to ${getConversationTitle(selectedConversation)}...`
+                        }
+                        rows={1}
+                        value={smsDraft}
+                      />
+                      <label className="inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-[#E5E7EB] bg-white text-[#0F6BFF]">
+                        <EventIcon name="attachment" />
+                        <input
+                          accept="image/jpeg,image/png,image/webp"
+                          className="sr-only"
+                          multiple
+                          onChange={(event) => {
+                            handleSelectMessageAttachments(event.target.files);
+                            event.currentTarget.value = "";
+                          }}
+                          type="file"
+                        />
+                      </label>
+                      <button
+                        className={`inline-flex h-9 shrink-0 items-center justify-center rounded-lg px-3 text-sm font-black text-white ${
+                          canSendSmsFromConversation &&
+                          (smsDraft.trim() || pendingAttachments.length > 0) &&
+                          sendMessageState.status !== "saving"
+                            ? "bg-[#0F6BFF]"
+                            : "bg-blue-200"
+                        }`}
+                        disabled={
+                          !canSendSmsFromConversation ||
+                          (!smsDraft.trim() && pendingAttachments.length === 0) ||
+                          sendMessageState.status === "saving"
+                        }
+                        onClick={handleSendMessage}
+                        type="button"
+                      >
+                        Send
+                      </button>
+                    </div>
                     <PendingAttachmentsPreview
                       attachments={pendingAttachments}
                       onRemove={removePendingAttachment}
@@ -2896,39 +3150,6 @@ export function CommunicationsHub() {
                         {sendMessageState.message}
                       </p>
                     ) : null}
-                    <div className="mt-3 flex justify-end">
-                      <label className="mr-2 inline-flex cursor-pointer items-center justify-center rounded-lg border border-[#E5E7EB] bg-white px-3 py-2 text-sm font-semibold text-[#0F6BFF]">
-                        Photo
-                        <input
-                          accept="image/jpeg,image/png,image/webp"
-                          className="sr-only"
-                          multiple
-                          onChange={(event) => {
-                            handleSelectMessageAttachments(event.target.files);
-                            event.currentTarget.value = "";
-                          }}
-                          type="file"
-                        />
-                      </label>
-                      <button
-                        className={`rounded-lg px-5 py-2 text-sm font-semibold text-white ${
-                          canSendSmsFromConversation &&
-                          (smsDraft.trim() || pendingAttachments.length > 0) &&
-                          sendMessageState.status !== "saving"
-                            ? "bg-[#0F6BFF]"
-                            : "bg-blue-200"
-                        }`}
-                        disabled={
-                          !canSendSmsFromConversation ||
-                          (!smsDraft.trim() && pendingAttachments.length === 0) ||
-                          sendMessageState.status === "saving"
-                        }
-                        onClick={handleSendMessage}
-                        type="button"
-                      >
-                        {sendMessageState.status === "saving" ? "Sending..." : "Send"}
-                      </button>
-                    </div>
                   </div>
                 </>
               )}
@@ -2942,29 +3163,8 @@ export function CommunicationsHub() {
         </section>
 
         <aside className="overflow-hidden rounded-2xl border border-[#E5E7EB] bg-white shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
-          <div className="flex border-b border-[#E5E7EB]">
-            {([
-              ["customer", "Customer"],
-              ["lead", "Lead"],
-              ["job", "Job"],
-              ["activity", "Activity"],
-            ] as Array<[ContextTab, string]>).map(([value, label]) => (
-              <button
-                className={`flex-1 px-3 py-3 text-sm font-semibold ${
-                  contextTab === value
-                    ? "border-b-2 border-[#0F6BFF] text-[#0F6BFF]"
-                    : "text-[#64748B]"
-                }`}
-                key={value}
-                onClick={() => setContextTab(value)}
-                type="button"
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <div className="max-h-[680px] space-y-4 overflow-y-auto p-4">
-            {selectedConversation && contextTab === "customer" ? (
+          <div className="h-full space-y-3 overflow-y-auto p-3">
+            {selectedConversation ? (
               <>
                 <Panel title="Customer">
                   {detail.customer ? (
@@ -2989,84 +3189,54 @@ export function CommunicationsHub() {
                     </div>
                   )}
                 </Panel>
-                <Panel title="Source & Attribution">
+
+                <Panel title="Active Job">
+                  {detail.job ? (
+                    <div className="space-y-2">
+                      {getJobDetailRows(detail.job).slice(0, 6).map(([label, value]) => (
+                        <ContextRow key={label} label={label} value={value} />
+                      ))}
+                      <ActionLink href={withReturnTo(`/dashboard/leads/${detail.job.id}`)} label="View job" />
+                    </div>
+                  ) : (
+                    <EmptyState
+                      title="No active job linked"
+                      body="Create a Job from the thread when the customer is ready to schedule."
+                    />
+                  )}
+                </Panel>
+
+                <Panel title="AI Summary">
+                  {selectedConversation.summary || selectedConversation.nextAction ? (
+                    <div className="space-y-3 text-sm font-medium leading-6 text-[#334155]">
+                      {selectedConversation.summary ? <p>{selectedConversation.summary}</p> : null}
+                      {selectedConversation.nextAction ? (
+                        <ContextRow label="Next" value={selectedConversation.nextAction} />
+                      ) : null}
+                    </div>
+                  ) : (
+                    <EmptyState
+                      title="No summary yet"
+                      body="Summary context appears here after calls or messages produce it."
+                    />
+                  )}
+                </Panel>
+
+                <Panel title="Source">
                   {getAttributionRows(selectedConversation).length > 0 ? (
                     <div className="space-y-2">
-                      {getAttributionRows(selectedConversation).map(([label, value]) => (
+                      {getAttributionRows(selectedConversation).slice(0, 4).map(([label, value]) => (
                         <ContextRow key={label} label={label} value={value} />
                       ))}
                     </div>
                   ) : (
                     <EmptyState
                       title="No attribution captured"
-                      body="Source details will appear here when present on the conversation."
+                      body="Source details will appear here when present."
                     />
                   )}
                 </Panel>
               </>
-            ) : null}
-
-            {contextTab === "lead" ? (
-              <LeadPanel
-                detail={detail}
-                state={createLeadState}
-              />
-            ) : null}
-
-            {contextTab === "job" ? (
-              <Panel title="Job">
-                {detail.job ? (
-                  <div className="space-y-2">
-                    {getJobDetailRows(detail.job).map(([label, value]) => (
-                      <ContextRow key={label} label={label} value={value} />
-                    ))}
-                    <ActionLink href={withReturnTo(`/dashboard/leads/${detail.job.id}`)} label="Open Job" />
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <EmptyState
-                      title="No job linked"
-                      body={
-                        canCreateJobFromConversation
-                          ? "Create a Job from this conversation."
-                          : createJobBlockedReason ?? "Complete the missing request details before creating a Job."
-                      }
-                    />
-                    {canCreateJobFromConversation ? (
-                      <button
-                        className="rounded-lg bg-[#0F6BFF] px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={createJobState.status === "saving"}
-                        onClick={() => void handleCreateJobFromConversation()}
-                        type="button"
-                      >
-                        {createJobState.status === "saving" ? "Creating..." : "Create Job"}
-                      </button>
-                    ) : null}
-                  </div>
-                )}
-              </Panel>
-            ) : null}
-
-            {contextTab === "activity" ? (
-              <Panel title="Recent Activity">
-                <div className="space-y-3">
-                  {detail.timelineEvents.length === 0 ? (
-                    <EmptyState
-                      title="No activity yet"
-                      body="Communication activity appears here when available."
-                    />
-                  ) : (
-                    detail.timelineEvents.slice(0, 8).map((event) => (
-                      <PreviewBlock
-                        key={event.id}
-                        label={event.title || getTimelineEventLabel(event.type)}
-                        timestamp={event.eventTime}
-                        value={event.body ?? "No details captured."}
-                      />
-                    ))
-                  )}
-                </div>
-              </Panel>
             ) : null}
           </div>
         </aside>
@@ -3415,9 +3585,9 @@ function Panel({ title, children }: { title: string; children: ReactNode }) {
 
 function ThreadEventTimeline({
   attachmentsByMessageId,
-  customerPhone,
   events,
   expandedTranscriptByCallId,
+  onLoadRecording,
   onPreviewAttachment,
   onRetryTranscript,
   onToggleTranscript,
@@ -3426,9 +3596,9 @@ function ThreadEventTimeline({
   transcriptsById,
 }: {
   attachmentsByMessageId: Record<string, SignedMessageAttachment[]>;
-  customerPhone: string | null;
   events: ThreadEvent[];
   expandedTranscriptByCallId: ExpandedTranscriptByCallId;
+  onLoadRecording: (callId: string) => void;
   onPreviewAttachment: (attachment: SignedMessageAttachment) => void;
   onRetryTranscript: (callId: string) => void;
   onToggleTranscript: (callId: string) => void;
@@ -3441,72 +3611,276 @@ function ThreadEventTimeline({
   }
 
   return (
-    <div className="space-y-4">
-      {events.map((event) => {
+    <div className="space-y-3">
+      {events.map((event, index) => {
+        const currentDate = formatDateSeparator(event.occurredAt);
+        const previousDate =
+          index > 0 ? formatDateSeparator(events[index - 1].occurredAt) : null;
+        const showDateSeparator = index === 0 || currentDate !== previousDate;
+
         if (event.type === "call_session") {
           return (
-            <CallSessionCard
-              customerPhone={customerPhone}
-              expandedTranscriptByCallId={expandedTranscriptByCallId}
-              key={event.id}
-              onRetryTranscript={onRetryTranscript}
-              onToggleTranscript={onToggleTranscript}
-              recordingStatesByCallId={recordingStatesByCallId}
-              retryingTranscriptCallId={retryingTranscriptCallId}
-              session={event.session}
-              transcriptsById={transcriptsById}
-            />
+            <div key={event.id}>
+              {showDateSeparator ? <DateSeparator label={currentDate} /> : null}
+              <CallSessionCard
+                expandedTranscriptByCallId={expandedTranscriptByCallId}
+                onLoadRecording={onLoadRecording}
+                onRetryTranscript={onRetryTranscript}
+                onToggleTranscript={onToggleTranscript}
+                recordingStatesByCallId={recordingStatesByCallId}
+                retryingTranscriptCallId={retryingTranscriptCallId}
+                session={event.session}
+                transcriptsById={transcriptsById}
+              />
+            </div>
+          );
+        }
+
+        if (event.type === "sms_group") {
+          return (
+            <div key={event.id}>
+              {showDateSeparator ? <DateSeparator label={currentDate} /> : null}
+              <SmsMessageGroup
+                attachmentsByMessageId={attachmentsByMessageId}
+                messages={event.messages}
+                onPreviewAttachment={onPreviewAttachment}
+              />
+            </div>
           );
         }
 
         if (event.type === "message") {
           const message = event.message;
-          const outbound = message.direction === "outbound";
-          const attachments = attachmentsByMessageId[message.id] ?? [];
           return (
-            <div
-              className={`flex ${outbound ? "justify-end" : "justify-start"}`}
-              key={event.id}
-            >
-              <div
-                className={`max-w-[88%] rounded-2xl px-4 py-3 lg:max-w-[78%] ${
-                  outbound ? "bg-[#0F6BFF] text-white" : "bg-white text-[#0F172A]"
-                }`}
-              >
-                {message.body ? (
-                  <p className="text-sm font-medium leading-6">{message.body}</p>
-                ) : attachments.length === 0 ? (
-                  <p className="text-sm font-medium leading-6">Message body unavailable.</p>
-                ) : null}
-                <MessageAttachments attachments={attachments} onPreview={onPreviewAttachment} />
-                <p
-                  className={`mt-1 text-xs font-medium ${
-                    outbound ? "text-blue-100" : "text-[#64748B]"
-                  }`}
-                >
-                  {formatServiceRequestDate(message.occurred_at)}
-                </p>
-              </div>
+            <div key={event.id}>
+              {showDateSeparator ? <DateSeparator label={currentDate} /> : null}
+              <MessageEventCard
+                attachments={attachmentsByMessageId[message.id] ?? []}
+                message={message}
+                onPreviewAttachment={onPreviewAttachment}
+              />
             </div>
           );
         }
 
         return (
-          <PreviewBlock
-            key={event.id}
-            label={event.event.title || getTimelineEventLabel(event.event.type)}
-            timestamp={event.event.eventTime}
-            value={event.event.body ?? "No details captured."}
-          />
+          <div key={event.id}>
+            {showDateSeparator ? <DateSeparator label={currentDate} /> : null}
+            <TimelineEventCard event={event.event} />
+          </div>
         );
       })}
     </div>
   );
 }
 
+function DateSeparator({ label }: { label: string }) {
+  return (
+    <div className="mb-3 flex justify-center">
+      <span className="rounded-full border border-[#E5E7EB] bg-white px-3 py-1 text-xs font-black text-[#64748B]">
+        {label}
+      </span>
+    </div>
+  );
+}
+
+function SmsMessageGroup({
+  attachmentsByMessageId,
+  messages,
+  onPreviewAttachment,
+}: {
+  attachmentsByMessageId: Record<string, SignedMessageAttachment[]>;
+  messages: MessageRow[];
+  onPreviewAttachment: (attachment: SignedMessageAttachment) => void;
+}) {
+  const [showEarlier, setShowEarlier] = useState(false);
+  const visibleMessages = showEarlier ? messages : messages.slice(Math.max(messages.length - 4, 0));
+  const hiddenCount = messages.length - visibleMessages.length;
+
+  return (
+    <div className="rounded-xl border border-[#E5E7EB] bg-white p-3 shadow-[0_6px_18px_rgba(15,23,42,0.04)]">
+      <div className="mb-2 flex items-center gap-2 text-xs font-black text-[#64748B]">
+        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-50 text-[#0F6BFF]">
+          <EventIcon name="sms" />
+        </span>
+        <div>
+          <p className="text-sm text-[#0F172A]">SMS</p>
+          <p className="font-semibold normal-case tracking-normal text-[#64748B]">
+            Customer ↔ HomeFix
+          </p>
+        </div>
+      </div>
+      {hiddenCount > 0 ? (
+        <button
+          className="mb-2 text-xs font-black text-[#0F6BFF]"
+          onClick={() => setShowEarlier(true)}
+          type="button"
+        >
+          Show {hiddenCount} earlier message{hiddenCount === 1 ? "" : "s"}
+        </button>
+      ) : null}
+      <div className="space-y-2">
+        {visibleMessages.map((message) => {
+          const outbound = message.direction === "outbound";
+          const attachments = attachmentsByMessageId[message.id] ?? [];
+          return (
+            <div
+              className={`flex ${outbound ? "justify-end" : "justify-start"}`}
+              key={message.id}
+            >
+              <div
+                className={`max-w-[88%] rounded-2xl px-3 py-2 lg:max-w-[76%] ${
+                  outbound
+                    ? "bg-[#0F6BFF] text-white"
+                    : "border border-[#E5E7EB] bg-[#F8FAFC] text-[#0F172A]"
+                }`}
+              >
+                {message.body ? (
+                  <p className="text-sm font-medium leading-5">{message.body}</p>
+                ) : attachments.length === 0 ? (
+                  <p className="text-sm font-medium leading-5">Message body unavailable.</p>
+                ) : null}
+                <MessageAttachments attachments={attachments} onPreview={onPreviewAttachment} />
+                <p
+                  className={`mt-1 text-[11px] font-semibold ${
+                    outbound ? "text-blue-100" : "text-[#64748B]"
+                  }`}
+                >
+                  {outbound ? "HomeFix" : "Customer"} · {formatTimeOnly(message.occurred_at)}
+                </p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function MessageEventCard({
+  attachments,
+  message,
+  onPreviewAttachment,
+}: {
+  attachments: SignedMessageAttachment[];
+  message: MessageRow;
+  onPreviewAttachment: (attachment: SignedMessageAttachment) => void;
+}) {
+  const identity = getMessageEventIdentity(message);
+
+  return (
+    <div className="rounded-xl border border-[#E5E7EB] bg-white p-3 shadow-[0_6px_18px_rgba(15,23,42,0.04)]">
+      <div className="flex items-start gap-3">
+        <div
+          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${identity.accent}`}
+        >
+          <EventIcon name={identity.icon} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-black text-[#0F172A]">{identity.title}</p>
+          <p className="mt-0.5 text-xs font-semibold text-[#64748B]">
+            {formatTimeOnly(message.occurred_at)} · {identity.route}
+          </p>
+          {message.body ? (
+            <p className="mt-2 line-clamp-4 text-sm font-medium leading-5 text-[#334155]">
+              {message.body}
+            </p>
+          ) : attachments.length === 0 ? (
+            <p className="mt-2 text-sm font-medium leading-5 text-[#334155]">
+              Message body unavailable.
+            </p>
+          ) : null}
+          <MessageAttachments attachments={attachments} onPreview={onPreviewAttachment} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EventIcon({ name }: { name: IconName }) {
+  const common = {
+    className: "h-4 w-4",
+    fill: "none",
+    stroke: "currentColor",
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    strokeWidth: 2,
+    viewBox: "0 0 24 24",
+  };
+
+  if (name === "sms") {
+    return (
+      <svg {...common} aria-hidden="true">
+        <path d="M21 12a8 8 0 0 1-8 8H7l-4 3 1.5-5A8 8 0 1 1 21 12Z" />
+        <path d="M8 11h8" />
+        <path d="M8 15h5" />
+      </svg>
+    );
+  }
+  if (name === "attachment") {
+    return (
+      <svg {...common} aria-hidden="true">
+        <path d="m21.4 11.6-8.5 8.5a6 6 0 0 1-8.5-8.5l8.5-8.5a4 4 0 0 1 5.7 5.7l-8.6 8.5a2 2 0 0 1-2.8-2.8l7.9-7.9" />
+      </svg>
+    );
+  }
+  if (name === "ai") {
+    return (
+      <svg {...common} aria-hidden="true">
+        <path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3Z" />
+        <path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15Z" />
+      </svg>
+    );
+  }
+  if (name === "human") {
+    return (
+      <svg {...common} aria-hidden="true">
+        <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" />
+        <path d="M4 21a8 8 0 0 1 16 0" />
+      </svg>
+    );
+  }
+  if (name === "transfer") {
+    return (
+      <svg {...common} aria-hidden="true">
+        <path d="M7 7h10l-3-3" />
+        <path d="M17 17H7l3 3" />
+        <path d="M17 7l-4 4" />
+        <path d="M7 17l4-4" />
+      </svg>
+    );
+  }
+  if (name === "website") {
+    return (
+      <svg {...common} aria-hidden="true">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M3 12h18" />
+        <path d="M12 3a15 15 0 0 1 0 18" />
+        <path d="M12 3a15 15 0 0 0 0 18" />
+      </svg>
+    );
+  }
+  if (name === "voicemail" || name === "phone") {
+    return (
+      <svg {...common} aria-hidden="true">
+        <path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.4 2.1L8.1 10a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.6 1.9Z" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg {...common} aria-hidden="true">
+      <path d="M6 3h9l3 3v15H6V3Z" />
+      <path d="M14 3v4h4" />
+      <path d="M9 13h6" />
+      <path d="M9 17h4" />
+    </svg>
+  );
+}
+
 function CallSessionCard({
-  customerPhone,
   expandedTranscriptByCallId,
+  onLoadRecording,
   onRetryTranscript,
   onToggleTranscript,
   recordingStatesByCallId,
@@ -3514,8 +3888,8 @@ function CallSessionCard({
   session,
   transcriptsById,
 }: {
-  customerPhone: string | null;
   expandedTranscriptByCallId: ExpandedTranscriptByCallId;
+  onLoadRecording: (callId: string) => void;
   onRetryTranscript: (callId: string) => void;
   onToggleTranscript: (callId: string) => void;
   recordingStatesByCallId: RecordingStateByCallId;
@@ -3524,110 +3898,116 @@ function CallSessionCard({
   transcriptsById: Map<string, TranscriptRow>;
 }) {
   const primaryCall = session.calls[0];
-  const isMultiPhase = session.calls.length > 1;
+  const defaultSelectedCallId =
+    session.calls.find((call) => call.recording_reference)?.id ?? primaryCall?.id ?? "";
+  const [selectedRecordingCallId, setSelectedRecordingCallId] = useState(defaultSelectedCallId);
+  const selectedRecordingCall =
+    session.calls.find((call) => call.id === selectedRecordingCallId) ??
+    session.calls.find((call) => call.recording_reference) ??
+    primaryCall;
+  const sessionDuration = getCallSessionDurationText(session);
+  const sessionStatus = session.calls.at(-1)
+    ? getEffectiveCallStatus(session.calls.at(-1)!)
+    : getEffectiveCallStatus(primaryCall);
+  const hasTransfer = session.calls.some(
+    (call) => getCallProviderMetadata(call).call_phase === "human_transfer",
+  );
+  const isTranscriptExpanded = expandedTranscriptByCallId[session.id] === true;
+  const transcripts = session.calls
+    .map((call) => {
+      const transcript = call.transcript_id
+        ? transcriptsById.get(call.transcript_id) ?? null
+        : null;
+      return transcript ? { call, transcript } : null;
+    })
+    .filter((item): item is { call: CommunicationCallRow; transcript: TranscriptRow } =>
+      Boolean(item),
+    );
 
   return (
-    <div className="rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3">
-      {isMultiPhase ? (
-        <div className="mb-3 flex items-start justify-between gap-3">
-          <div>
-            <p className="text-sm font-black text-[#0F172A]">Call Session</p>
-            <p className="mt-1 text-xs font-semibold text-[#64748B]">
-              {getCallTimeLabel(primaryCall)} · {session.calls.length} phases
+    <div className="rounded-2xl border border-[#D8E6FF] bg-white shadow-[0_6px_18px_rgba(15,23,42,0.04)]">
+      <div className="p-3">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+            <EventIcon name="phone" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-black text-[#0F172A]">
+                  {getCallSessionTitle(session)}
+                </p>
+                <p className="mt-0.5 text-xs font-semibold text-[#64748B]">
+                  {formatTimeOnly(getCallSessionOccurredAt(session))}
+                  {sessionDuration ? ` · ${sessionDuration}` : ""}
+                </p>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                {hasTransfer ? <Badge tone="purple">Transferred</Badge> : null}
+                <Badge tone={sessionStatus === "missed" ? "amber" : "emerald"}>
+                  {formatCallStatus(sessionStatus)}
+                </Badge>
+              </div>
+            </div>
+            <p className="mt-1 text-xs font-semibold text-[#334155]">
+              {getCallSessionRouteLabel(session)}
             </p>
           </div>
-          <Badge tone="purple">Transferred</Badge>
         </div>
-      ) : null}
 
-      <div className={isMultiPhase ? "space-y-3" : ""}>
-        {session.calls.map((call, index) => {
-          const effectiveStatus = getEffectiveCallStatus(call);
-          const duration = getCallDurationText(call);
+        <CallSessionRecordingPanel
+          onLoadRecording={onLoadRecording}
+          onSelectCall={setSelectedRecordingCallId}
+          recordingStatesByCallId={recordingStatesByCallId}
+          selectedCall={selectedRecordingCall}
+          selectedCallId={selectedRecordingCallId}
+          session={session}
+        />
+
+        <CallSessionTranscriptPanel
+          expanded={isTranscriptExpanded}
+          onToggle={() => onToggleTranscript(session.id)}
+          transcripts={transcripts}
+        />
+
+        {session.summaries.length > 0 ? (
+          <CallSummaryPanel summaries={session.summaries} />
+        ) : null}
+
+        {session.calls.some((call) => {
           const hasTranscript = Boolean(call.transcript_id);
           const hasRecording = Boolean(call.recording_reference);
-          const recordingState =
-            recordingStatesByCallId[call.id] ??
-            ({
-              status: "loading",
-              recording: null,
-              audioUrl: null,
-              message: null,
-            } satisfies RecordingState);
-          const canRetryTranscript =
+          return (
             call.provider_name === "telnyx" &&
             hasRecording &&
             !hasTranscript &&
-            retryingTranscriptCallId !== call.id;
-          const transcript = call.transcript_id
-            ? transcriptsById.get(call.transcript_id) ?? null
-            : null;
-          const isTranscriptExpanded = expandedTranscriptByCallId[call.id] === true;
-
-          return (
-            <div
-              className={isMultiPhase ? "rounded-lg border border-[#E5E7EB] bg-white p-3" : ""}
-              key={call.id}
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-black text-[#0F172A]">
-                    {isMultiPhase ? `Phase ${index + 1}: ` : ""}
-                    {getCallDisplayTitle(call)}
-                  </p>
-                  <p className="mt-1 text-xs font-semibold text-[#64748B]">
-                    {getCallTimeLabel(call)}
-                    {duration ? ` · ${duration}` : ""}
-                  </p>
-                  <p className="mt-1 text-xs font-semibold text-[#64748B]">
-                    {getCallParticipantLabel(call, customerPhone)}
-                  </p>
-                </div>
-                <Badge tone={effectiveStatus === "missed" ? "amber" : "blue"}>
-                  {formatCallStatus(effectiveStatus)}
-                </Badge>
-              </div>
-
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Badge tone={hasRecording ? "blue" : "slate"}>
-                  {hasRecording ? "Recording" : "No recording yet"}
-                </Badge>
-                <Badge tone={hasTranscript ? "emerald" : "slate"}>
-                  {hasTranscript ? "Transcript" : "No transcript yet"}
-                </Badge>
-              </div>
-
-              {canRetryTranscript ? (
+            retryingTranscriptCallId !== call.id
+          );
+        }) ? (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {session.calls.map((call) => {
+              const hasTranscript = Boolean(call.transcript_id);
+              const hasRecording = Boolean(call.recording_reference);
+              const canRetryTranscript =
+                call.provider_name === "telnyx" &&
+                hasRecording &&
+                !hasTranscript &&
+                retryingTranscriptCallId !== call.id;
+              return canRetryTranscript ? (
                 <button
-                  className="mt-3 text-xs font-black text-[#0F6BFF]"
+                  className="text-xs font-black text-[#0F6BFF]"
+                  key={`retry-${call.id}`}
                   onClick={() => onRetryTranscript(call.id)}
                   type="button"
                 >
                   Retry transcription
                 </button>
-              ) : retryingTranscriptCallId === call.id ? (
-                <p className="mt-3 text-xs font-black text-[#64748B]">
-                  Retrying transcription...
-                </p>
-              ) : null}
-
-              {transcript?.transcript_text ? (
-                <TranscriptPanel
-                  expanded={isTranscriptExpanded}
-                  onToggle={() => onToggleTranscript(call.id)}
-                  segments={getTranscriptDialogueSegments(transcript.speaker_segments)}
-                  text={transcript.transcript_text}
-                />
-              ) : null}
-
-              {hasRecording ? (
-                <div className="mt-3">
-                  <RecordingPlayer recordingState={recordingState} />
-                </div>
-              ) : null}
-            </div>
-          );
-        })}
+              ) : null;
+            })}
+          </div>
+        ) : retryingTranscriptCallId && session.calls.some((call) => call.id === retryingTranscriptCallId) ? (
+          <p className="mt-2 text-xs font-black text-[#64748B]">Retrying transcription...</p>
+        ) : null}
       </div>
     </div>
   );
@@ -3652,6 +4032,76 @@ function Badge({
     <span className={`rounded-full px-2 py-1 text-[11px] font-black ${classes[tone]}`}>
       {children}
     </span>
+  );
+}
+
+function CallSummaryPanel({ summaries }: { summaries: MessageRow[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const [isSummaryTruncated, setIsSummaryTruncated] = useState(false);
+  const summaryRef = useRef<HTMLParagraphElement | null>(null);
+  const summaryText = summaries
+    .map((summary) => summary.body?.trim())
+    .filter((body): body is string => Boolean(body))
+    .join("\n\n");
+
+  useEffect(() => {
+    if (expanded) {
+      return;
+    }
+
+    const element = summaryRef.current;
+    if (!element) {
+      setIsSummaryTruncated(false);
+      return;
+    }
+
+    const measure = () => {
+      setIsSummaryTruncated(element.scrollHeight > element.clientHeight + 1);
+    };
+
+    measure();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", measure);
+      return () => window.removeEventListener("resize", measure);
+    }
+
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [expanded, summaryText]);
+
+  if (!summaryText) {
+    return null;
+  }
+
+  return (
+    <div className="mt-2 rounded-lg bg-blue-50/60 px-3 py-2.5">
+      <div className="flex items-start gap-2">
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-50 text-[#0F6BFF]">
+          <EventIcon name="ai" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-black text-[#0F172A]">Sarah AI Summary</p>
+          <p
+            className={`mt-1 text-xs font-medium leading-5 text-[#334155] ${
+              expanded ? "whitespace-pre-line" : "line-clamp-3"
+            }`}
+            ref={summaryRef}
+          >
+            {summaryText}
+          </p>
+          {isSummaryTruncated || expanded ? (
+            <button
+              className="mt-1 text-xs font-black text-[#0F6BFF]"
+              onClick={() => setExpanded((value) => !value)}
+              type="button"
+            >
+              {expanded ? "Show less" : "Show more"}
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -3690,27 +4140,347 @@ function PreviewBlock({
   );
 }
 
-function RecordingPlayer({ recordingState }: { recordingState: RecordingState }) {
-  const audioUrl = recordingState.status === "ready" ? recordingState.audioUrl : null;
+function TimelineEventCard({ event }: { event: CommunicationTimelineEvent }) {
+  const identity = getEventIdentity(event);
 
   return (
-    <div className="rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3">
-      <p className="text-sm font-semibold leading-6 text-[#334155]">
-        {recordingState.status === "loading"
-          ? "Loading recording..."
-          : recordingState.status === "error"
-            ? recordingState.message
-            : audioUrl
-              ? "Recording available."
-              : recordingState.message ?? "No recording available."}
-      </p>
-      {recordingState.status === "ready" && recordingState.recording?.durationMs ? (
-        <p className="mt-1 text-xs font-bold text-[#64748B]">
-          Duration {formatDuration(recordingState.recording.durationMs)}
+    <div className="rounded-xl border border-[#E5E7EB] bg-white p-3 shadow-[0_6px_18px_rgba(15,23,42,0.04)]">
+      <div className="flex items-start gap-3">
+        <div
+          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[11px] font-black ${identity.accent}`}
+        >
+          {identity.icon}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-black text-[#0F172A]">{identity.title}</p>
+              <p className="mt-0.5 text-xs font-semibold text-[#64748B]">
+                {formatTimeOnly(event.eventTime)} · {identity.route}
+              </p>
+            </div>
+          </div>
+          <p className="mt-2 line-clamp-4 text-sm font-medium leading-5 text-[#334155]">
+            {event.body ?? "No details captured."}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function formatPlayerTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return "0:00";
+  }
+
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = Math.floor(seconds % 60);
+  return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
+}
+
+function getCallPhaseLabel(call: CommunicationCallRow): string {
+  const handler = getCallHandler(call);
+  return handler.role === "ai" ? `${handler.name} (AI)` : `With ${handler.name}`;
+}
+
+function CallSessionRecordingPanel({
+  onLoadRecording,
+  onSelectCall,
+  recordingStatesByCallId,
+  selectedCall,
+  selectedCallId,
+  session,
+}: {
+  onLoadRecording: (callId: string) => void;
+  onSelectCall: (callId: string) => void;
+  recordingStatesByCallId: RecordingStateByCallId;
+  selectedCall: CommunicationCallRow | undefined;
+  selectedCallId: string;
+  session: CallSession;
+}) {
+  const selectedRecordingState =
+    selectedCall && recordingStatesByCallId[selectedCall.id]
+      ? recordingStatesByCallId[selectedCall.id]
+      : ({
+          status: "idle",
+          recording: null,
+          audioUrl: null,
+          message: null,
+        } satisfies RecordingState);
+
+  return (
+    <div className="mt-3 overflow-hidden rounded-xl border border-[#E5E7EB] bg-[#F8FAFC]">
+      <SeekableRecordingPlayer
+        call={selectedCall}
+        key={selectedCall?.id ?? "no-recording"}
+        onLoad={() => {
+          if (selectedCall) {
+            onLoadRecording(selectedCall.id);
+          }
+        }}
+        recordingState={selectedRecordingState}
+      />
+
+      <div className="grid border-t border-[#E5E7EB] bg-white sm:grid-cols-2">
+        {session.calls.map((call) => {
+          const handler = getCallHandler(call);
+          const duration = getCallDurationText(call);
+          const selected = call.id === selectedCallId;
+          const hasRecording = Boolean(call.recording_reference);
+
+          return (
+            <button
+              className={`flex min-w-0 items-center gap-2 border-b border-[#E5E7EB] px-3 py-2 text-left text-xs font-semibold last:border-b-0 sm:border-b-0 sm:border-r sm:last:border-r-0 ${
+                selected ? "bg-blue-50 text-[#0F172A]" : "bg-white text-[#334155]"
+              }`}
+              disabled={!hasRecording}
+              key={call.id}
+              onClick={() => onSelectCall(call.id)}
+              type="button"
+            >
+              <span
+                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${
+                  handler.role === "ai"
+                    ? "bg-blue-50 text-[#0F6BFF]"
+                    : "bg-slate-100 text-[#334155]"
+                }`}
+              >
+                <EventIcon name={handler.role === "ai" ? "ai" : "human"} />
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate font-black">
+                  {getCallPhaseLabel(call)}
+                  {duration ? ` · ${duration}` : ""}
+                </span>
+                <span className="block truncate text-[11px] font-semibold text-[#64748B]">
+                  {hasRecording ? getCallParticipantLabel(call) : "Recording unavailable"}
+                </span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function SeekableRecordingPlayer({
+  call,
+  onLoad,
+  recordingState,
+}: {
+  call: CommunicationCallRow | undefined;
+  onLoad: () => void;
+  recordingState: RecordingState;
+}) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [pendingPlay, setPendingPlay] = useState(false);
+  const [isSeeking, setIsSeeking] = useState(false);
+  const audioUrl = recordingState.status === "ready" ? recordingState.audioUrl : null;
+  const fallbackDurationSeconds = call?.duration_seconds ?? null;
+  const displayedDuration =
+    duration > 0
+      ? duration
+      : fallbackDurationSeconds && fallbackDurationSeconds > 0
+        ? fallbackDurationSeconds
+        : 0;
+  const progress = displayedDuration > 0 ? Math.min(currentTime / displayedDuration, 1) : 0;
+  const activeLabel = call ? getCallPhaseLabel(call) : "Recording";
+  const canPlay = Boolean(call?.recording_reference);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+
+    audio.playbackRate = playbackRate;
+  }, [audioUrl, playbackRate]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !audioUrl || !pendingPlay) {
+      return;
+    }
+
+    audio
+      .play()
+      .then(() => {
+        setIsPlaying(true);
+        setPendingPlay(false);
+      })
+      .catch(() => {
+        setIsPlaying(false);
+        setPendingPlay(false);
+      });
+  }, [audioUrl, pendingPlay]);
+
+  function seekFromPointer(clientX: number) {
+    const track = trackRef.current;
+    const audio = audioRef.current;
+    if (!track || !audio || displayedDuration <= 0) {
+      return;
+    }
+
+    const rect = track.getBoundingClientRect();
+    const ratio = Math.min(Math.max((clientX - rect.left) / rect.width, 0), 1);
+    const nextTime = ratio * displayedDuration;
+    audio.currentTime = nextTime;
+    setCurrentTime(nextTime);
+  }
+
+  function handleTogglePlay() {
+    if (!canPlay) {
+      return;
+    }
+
+    if (!audioUrl) {
+      setPendingPlay(true);
+      onLoad();
+      return;
+    }
+
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+
+    if (audio.paused) {
+      audio.playbackRate = playbackRate;
+      void audio.play().then(() => setIsPlaying(true));
+      return;
+    }
+
+    audio.pause();
+    setIsPlaying(false);
+  }
+
+  function handleDownload() {
+    if (!audioUrl || !call) {
+      return;
+    }
+
+    const link = document.createElement("a");
+    link.href = audioUrl;
+    link.download = `homefix-call-recording-${call.id}.mp3`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+
+  function handlePlaybackRateChange() {
+    const rates = [1, 1.25, 1.5, 2];
+    const currentIndex = rates.indexOf(playbackRate);
+    const nextRate = rates[(currentIndex + 1) % rates.length];
+    setPlaybackRate(nextRate);
+    if (audioRef.current) {
+      audioRef.current.playbackRate = nextRate;
+    }
+  }
+
+  return (
+    <div className="bg-white px-3 py-3">
+      <p className="mb-2 truncate text-xs font-black text-[#0F172A]">{activeLabel}</p>
+      <div className="flex h-14 items-center gap-3 rounded-xl bg-[#F8FAFC] px-3">
+        <button
+          aria-label={isPlaying ? "Pause recording" : "Play recording"}
+          className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-black text-white ${
+            canPlay ? "bg-[#0F6BFF]" : "bg-blue-200"
+          }`}
+          disabled={!canPlay || recordingState.status === "loading"}
+          onClick={handleTogglePlay}
+          type="button"
+        >
+          {recordingState.status === "loading" ? "…" : isPlaying ? "Ⅱ" : "▶"}
+        </button>
+        <div
+          className={`relative h-9 min-w-0 flex-1 ${
+            audioUrl ? "cursor-pointer" : "cursor-default"
+          }`}
+          onPointerDown={(event) => {
+            if (!audioUrl) {
+              return;
+            }
+            setIsSeeking(true);
+            seekFromPointer(event.clientX);
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }}
+          onPointerMove={(event) => {
+            if (isSeeking) {
+              seekFromPointer(event.clientX);
+            }
+          }}
+          onPointerUp={(event) => {
+            setIsSeeking(false);
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          }}
+          ref={trackRef}
+          role="slider"
+          aria-label="Recording position"
+          aria-valuemax={Math.round(displayedDuration)}
+          aria-valuemin={0}
+          aria-valuenow={Math.round(currentTime)}
+          tabIndex={audioUrl ? 0 : -1}
+        >
+          <div className="absolute inset-0 flex items-center gap-0.5 overflow-hidden">
+            {Array.from({ length: 44 }).map((_, index) => {
+              const height = 8 + ((index * 7) % 24);
+              const played = index / 43 <= progress;
+              return (
+                <span
+                  className={`w-1 rounded-full ${played ? "bg-[#0F6BFF]" : "bg-[#CBD5E1]"}`}
+                  key={index}
+                  style={{ height }}
+                />
+              );
+            })}
+          </div>
+        </div>
+        <span className="w-[76px] shrink-0 text-right text-xs font-semibold text-[#64748B]">
+          {formatPlayerTime(currentTime)} / {formatPlayerTime(displayedDuration)}
+        </span>
+        <button
+          className="flex h-8 w-10 shrink-0 items-center justify-center rounded-lg bg-white text-xs font-black text-[#334155]"
+          onClick={handlePlaybackRateChange}
+          type="button"
+        >
+          {playbackRate}x
+        </button>
+        <button
+          aria-label="Download recording"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-sm font-black text-[#334155] disabled:text-[#CBD5E1]"
+          disabled={!audioUrl}
+          onClick={handleDownload}
+          type="button"
+        >
+          ↓
+        </button>
+      </div>
+      {recordingState.status === "error" ? (
+        <p className="mt-2 text-xs font-semibold text-amber-700">
+          {recordingState.message ?? "Recording unavailable."}
         </p>
+      ) : !canPlay ? (
+        <p className="mt-2 text-xs font-semibold text-[#64748B]">Recording unavailable.</p>
       ) : null}
       {audioUrl ? (
-        <audio className="mt-3 w-full" controls preload="none" src={audioUrl}>
+        <audio
+          className="sr-only"
+          onDurationChange={(event) => setDuration(event.currentTarget.duration || 0)}
+          onEnded={() => setIsPlaying(false)}
+          onPause={() => setIsPlaying(false)}
+          onPlay={() => setIsPlaying(true)}
+          onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+          preload="none"
+          ref={audioRef}
+          src={audioUrl}
+        >
           <track kind="captions" />
         </audio>
       ) : null}
@@ -3752,66 +4522,106 @@ function getTranscriptDialogueSegments(value: Json): TranscriptDialogueSegment[]
     .filter((segment): segment is TranscriptDialogueSegment => Boolean(segment));
 }
 
-function TranscriptPanel({
+function CallSessionTranscriptPanel({
   expanded,
   onToggle,
-  segments,
-  text,
+  transcripts,
 }: {
   expanded: boolean;
   onToggle: () => void;
-  segments: TranscriptDialogueSegment[];
-  text: string;
+  transcripts: Array<{ call: CommunicationCallRow; transcript: TranscriptRow }>;
 }) {
+  const hasTranscript = transcripts.length > 0;
   const previewText =
-    segments[0]?.text ??
-    text
+    transcripts
+      .flatMap(({ transcript }) => getTranscriptDialogueSegments(transcript.speaker_segments))
+      .at(0)?.text ??
+    transcripts
+      .map(({ transcript }) => transcript.transcript_text)
+      .join("\n")
       .split("\n")
       .map((line) => line.trim())
       .find(Boolean) ??
-    "Transcript available.";
+    "Transcript will appear here when available.";
 
   return (
-    <div className="mt-4 rounded-xl bg-[#F8FAFC] p-4">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
-          Transcript
-        </p>
-        <button
-          className="text-xs font-black text-[#0F6BFF]"
-          onClick={onToggle}
-          type="button"
-        >
-          {expanded ? "Hide transcript" : "Show transcript"}
-        </button>
-      </div>
-      {!expanded ? (
-        <p className="mt-2 line-clamp-1 text-sm font-medium leading-6 text-[#334155]">
-          {previewText}
-        </p>
-      ) : segments.length > 0 ? (
-        <div className="mt-3 space-y-1.5">
-          {segments.map((segment, index) => (
-            <p
-              className="whitespace-pre-line text-sm font-medium leading-5 text-[#334155]"
-              key={`${segment.speaker}-${index}`}
-            >
-              <span className="font-black uppercase text-[#475569]">
-                {segment.speaker === "agent"
-                  ? "Sarah"
-                  : segment.speaker === "human_transfer"
-                    ? "Serhii"
-                    : "Customer"}:
-              </span>{" "}
-              {segment.text}
-            </p>
-          ))}
+    <div className="mt-2 overflow-hidden rounded-xl border border-[#E5E7EB] bg-white">
+      <button
+        className={`flex w-full items-center justify-between gap-3 text-left ${
+          hasTranscript ? "cursor-pointer" : "cursor-default"
+        }`}
+        disabled={!hasTranscript}
+        onClick={onToggle}
+        type="button"
+      >
+        <div className="flex min-w-0 items-center gap-2 px-3 py-2">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-[#F8FAFC] text-[#334155]">
+            <EventIcon name="note" />
+          </span>
+          <div className="min-w-0">
+            <p className="text-xs font-black text-[#0F172A]">Transcript</p>
+            {!expanded ? (
+              <p className="line-clamp-1 text-xs font-medium leading-5 text-[#64748B]">
+                {previewText}
+              </p>
+            ) : null}
+          </div>
         </div>
-      ) : (
-        <p className="mt-2 whitespace-pre-line text-sm font-medium leading-6 text-[#334155]">
-          {text}
-        </p>
-      )}
+        {!hasTranscript ? (
+          <span className="shrink-0 px-3 py-2 text-xs font-black text-[#94A3B8]">
+            No transcript yet
+          </span>
+        ) : (
+          <span
+            className={`shrink-0 px-3 py-2 text-lg font-black text-[#0F6BFF] transition ${
+              expanded ? "rotate-90" : ""
+            }`}
+          >
+            ›
+          </span>
+        )}
+      </button>
+      {expanded && hasTranscript ? (
+        <div className="space-y-3 border-t border-[#E5E7EB] bg-[#F8FAFC] px-3 py-3">
+          {transcripts.map(({ call, transcript }) => {
+            const handler = getCallHandler(call);
+            const segments = getTranscriptDialogueSegments(transcript.speaker_segments);
+            const phaseLabel =
+              handler.role === "ai" ? `${handler.name} AI` : `With ${handler.name}`;
+
+            return (
+              <div key={`transcript-${call.id}`}>
+                <p className="mb-1 text-[11px] font-black uppercase text-[#64748B]">
+                  {phaseLabel}
+                </p>
+                {segments.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {segments.map((segment, index) => (
+                      <p
+                        className="whitespace-pre-line text-xs font-medium leading-5 text-[#334155]"
+                        key={`${call.id}-${segment.speaker}-${index}`}
+                      >
+                        <span className="font-black uppercase text-[#475569]">
+                          {segment.speaker === "agent"
+                            ? "Sarah"
+                            : segment.speaker === "human_transfer"
+                              ? "Serhii"
+                              : "Customer"}:
+                        </span>{" "}
+                        {segment.text}
+                      </p>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="whitespace-pre-line text-xs font-medium leading-5 text-[#334155]">
+                    {transcript.transcript_text}
+                  </p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
     </div>
   );
 }
