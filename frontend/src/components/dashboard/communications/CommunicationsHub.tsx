@@ -10,6 +10,7 @@ import {
   type CommunicationConversation,
   type CommunicationTimelineEvent,
 } from "@/lib/communications";
+import { normalizeTranscriptForDisplay } from "@/lib/communications/transcript-normalization";
 import { formatServiceRequestDate } from "@/lib/service-request-records";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import type {
@@ -4554,9 +4555,12 @@ function CallSessionTranscriptPanel({
   const previewText =
     transcripts
       .flatMap(({ transcript }) => getTranscriptDialogueSegments(transcript.speaker_segments))
-      .at(0)?.text ??
+      .map((segment) => normalizeTranscriptForDisplay(segment.text))
+      .at(0) ??
     transcripts
       .map(({ transcript }) => transcript.transcript_text)
+      .filter((text): text is string => Boolean(text))
+      .map((text) => normalizeTranscriptForDisplay(text))
       .join("\n")
       .split("\n")
       .map((line) => line.trim())
@@ -4627,13 +4631,13 @@ function CallSessionTranscriptPanel({
                               ? "Serhii"
                               : "Customer"}:
                         </span>{" "}
-                        {segment.text}
+                        {normalizeTranscriptForDisplay(segment.text)}
                       </p>
                     ))}
                   </div>
                 ) : (
                   <p className="whitespace-pre-line text-xs font-medium leading-5 text-[#334155]">
-                    {transcript.transcript_text}
+                    {normalizeTranscriptForDisplay(transcript.transcript_text ?? "")}
                   </p>
                 )}
               </div>
