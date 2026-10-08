@@ -25,21 +25,28 @@ import {
   mapServiceRequestEstimateRow,
   mapServiceRequestInvoiceRow,
   mapServiceRequestNoteRow,
+  mapServiceRequestPaymentAllocationRow,
+  mapServiceRequestPaymentRow,
   mapServiceRequestPhotoRow,
   mapServiceRequestRow,
   PRICING_CATALOG_SELECT_COLUMNS,
   SERVICE_REQUEST_ESTIMATE_SELECT_COLUMNS,
   SERVICE_REQUEST_INVOICE_SELECT_COLUMNS,
   SERVICE_REQUEST_NOTE_SELECT_COLUMNS,
+  SERVICE_REQUEST_PAYMENT_ALLOCATION_SELECT_COLUMNS,
+  SERVICE_REQUEST_PAYMENT_SELECT_COLUMNS,
   SERVICE_REQUEST_NOTE_TYPES,
   SERVICE_REQUEST_PHOTO_SELECT_COLUMNS,
   SERVICE_REQUEST_CRM_STATUSES,
   SERVICE_REQUEST_SELECT_COLUMNS,
   SERVICE_REQUEST_STATUS_TONES,
+  type DashboardInvoiceFinancialSummary,
   type DashboardPricingCatalogItem,
   type DashboardServiceRequestEstimate,
   type DashboardServiceRequestInvoice,
   type DashboardServiceRequestPhoto,
+  type DashboardServiceRequestPayment,
+  type DashboardServiceRequestPaymentAllocation,
   type DashboardServiceRequestNote,
   type DashboardServiceRequest,
   type ServiceRequestWritableNoteType,
@@ -74,6 +81,8 @@ import type {
   ServiceRequestEstimateRow,
   ServiceRequestInvoiceRow,
   ServiceRequestNoteRow,
+  ServiceRequestPaymentAllocationRow,
+  ServiceRequestPaymentRow,
   ServiceRequestPhotoRow,
   ServiceRequestRow,
   TechnicianAvailabilityRuleRow,
@@ -85,6 +94,40 @@ type ServiceRequestDetailProps = {
   requestId: string;
   returnTo?: string;
 };
+
+function mapInvoiceFinancialSummaryPayload(
+  value: unknown,
+): DashboardInvoiceFinancialSummary | null {
+  if (value === null || typeof value !== "object") {
+    return null;
+  }
+
+  const payload = value as Record<string, unknown>;
+  const financialState = payload.financial_state;
+
+  if (
+    financialState !== "unpaid" &&
+    financialState !== "partially_paid" &&
+    financialState !== "paid"
+  ) {
+    return null;
+  }
+
+  return {
+    invoiceId: String(payload.invoice_id ?? ""),
+    serviceRequestId: String(payload.service_request_id ?? ""),
+    invoiceTotal: Number(payload.invoice_total ?? 0),
+    allocatedPaid: Number(payload.allocated_paid ?? 0),
+    balanceDue: Number(payload.balance_due ?? 0),
+    financialState,
+  };
+}
+
+function isPersistedEstimateUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    value,
+  );
+}
 
 type DetailState =
   | { status: "loading"; request: null; error: null }
@@ -103,6 +146,13 @@ type JobDeleteState =
   | { status: "confirming"; message: null }
   | { status: "deleting"; message: null }
   | { status: "error"; message: string };
+
+type InvoiceWorkspaceTab =
+  | "overview"
+  | "items"
+  | "payments"
+  | "details"
+  | "history";
 
 type AddressSaveState =
   | { status: "idle"; message: null }
@@ -336,6 +386,37 @@ function FinanceChevron({ open }: { open?: boolean }) {
   );
 }
 
+function moneyToCents(value: number): number {
+  return Math.round(value * 100);
+}
+
+function centsToMoney(value: number): number {
+  return value / 100;
+}
+
+function formatCentsAsInput(value: number): string {
+  return (Math.max(0, value) / 100).toFixed(2);
+}
+
+function parseMoneyInputToCents(value: string): number | null {
+  const normalized = value.trim().replace(/[$,\s]/g, "");
+
+  if (!/^\d+(?:\.\d{0,2})?$/.test(normalized) || normalized === "") {
+    return null;
+  }
+
+  const [dollars, cents = ""] = normalized.split(".");
+  return Number.parseInt(dollars, 10) * 100 + Number.parseInt(cents.padEnd(2, "0"), 10);
+}
+
+function buildPaymentIdempotencyKey() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+
+  return `manual-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 type ClientDistanceState = {
   label: string;
   status: "idle" | "ready" | "missing_origin" | "missing_destination" | "unavailable";
@@ -430,6 +511,26 @@ type InvoicesState =
   | { status: "ready"; invoices: DashboardServiceRequestInvoice[]; error: null }
   | { status: "error"; invoices: DashboardServiceRequestInvoice[]; error: string };
 
+type PaymentsState =
+  | {
+      status: "loading";
+      payments: DashboardServiceRequestPayment[];
+      allocations: DashboardServiceRequestPaymentAllocation[];
+      error: null;
+    }
+  | {
+      status: "ready";
+      payments: DashboardServiceRequestPayment[];
+      allocations: DashboardServiceRequestPaymentAllocation[];
+      error: null;
+    }
+  | {
+      status: "error";
+      payments: DashboardServiceRequestPayment[];
+      allocations: DashboardServiceRequestPaymentAllocation[];
+      error: string;
+    };
+
 type TechnicianProfilesState =
   | { status: "loading"; profiles: TechnicianProfileRow[]; error: null }
   | { status: "ready"; profiles: TechnicianProfileRow[]; error: null }
@@ -507,6 +608,35 @@ type InvoiceActionState =
   | { status: "saving"; message: string | null }
   | { status: "success"; message: string }
   | { status: "error"; message: string };
+
+type ManualPaymentTargetType = "estimate" | "invoice";
+type ManualPaymentMethod = "cash" | "check" | "zelle" | "venmo" | "cash_app";
+
+type ManualPaymentState =
+  | { status: "idle"; message: null }
+  | { status: "saving"; message: string | null }
+  | { status: "success"; message: string }
+  | { status: "error"; message: string };
+
+type ManualPaymentDraft = {
+  targetType: ManualPaymentTargetType;
+  targetId: string;
+  amount: string;
+  paymentMethod: ManualPaymentMethod;
+  referenceCode: string;
+  note: string;
+  idempotencyKey: string;
+};
+
+type ManualPaymentTarget = {
+  id: string;
+  type: ManualPaymentTargetType;
+  label: string;
+  detail: string;
+  total: number;
+  paid: number;
+  remaining: number;
+};
 
 type DispatcherPreviewSnapshot = {
   id: string;
@@ -1638,6 +1768,12 @@ export function ServiceRequestDetail({
     invoices: [],
     error: null,
   });
+  const [paymentsState, setPaymentsState] = useState<PaymentsState>({
+    status: "loading",
+    payments: [],
+    allocations: [],
+    error: null,
+  });
   const [technicianProfilesState, setTechnicianProfilesState] =
     useState<TechnicianProfilesState>({
       status: "loading",
@@ -1851,6 +1987,19 @@ export function ServiceRequestDetail({
   const [invoiceActionId, setInvoiceActionId] = useState<string | null>(null);
   const [invoiceActionState, setInvoiceActionState] =
     useState<InvoiceActionState>({ status: "idle", message: null });
+  const [invoiceWorkspaceTab, setInvoiceWorkspaceTab] =
+    useState<InvoiceWorkspaceTab>("overview");
+  const [isInvoiceMoreActionsOpen, setIsInvoiceMoreActionsOpen] =
+    useState(false);
+  const [isManualPaymentOpen, setIsManualPaymentOpen] = useState(false);
+  const [manualPaymentDraft, setManualPaymentDraft] =
+    useState<ManualPaymentDraft | null>(null);
+  const [manualPaymentState, setManualPaymentState] =
+    useState<ManualPaymentState>({ status: "idle", message: null });
+  const [expandedPaymentHistoryId, setExpandedPaymentHistoryId] =
+    useState<string | null>(null);
+  const [isManualPaymentDetailsOpen, setIsManualPaymentDetailsOpen] =
+    useState(false);
   const [estimateSaveState, setEstimateSaveState] = useState<EstimateSaveState>({
     status: "idle",
     message: null,
@@ -1876,6 +2025,19 @@ export function ServiceRequestDetail({
   const readyRequestId = state.status === "ready" ? state.request.id : null;
   const propertyLookupAddress =
     state.status === "ready" ? getPropertyLookupAddress(state.request) : null;
+
+  useEffect(() => {
+    if (!isManualPaymentOpen) {
+      return;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isManualPaymentOpen]);
 
   function getFinanceWorkspaceUrl() {
     return `/dashboard/leads/${requestId}?tab=finance`;
@@ -2098,6 +2260,7 @@ export function ServiceRequestDetail({
     void loadPricingCatalog();
     void loadEstimates();
     void loadInvoices();
+    void loadPayments();
     void loadTechnicianProfilesForMatching();
     void loadTechnicianAvailabilityRules();
     void loadLatestDispatcherSnapshot();
@@ -2115,6 +2278,8 @@ export function ServiceRequestDetail({
 
       void refreshServiceRequest();
       void loadEstimates();
+      void loadInvoices();
+      void loadPayments();
       void loadNotes();
     }
 
@@ -2636,11 +2801,91 @@ export function ServiceRequestDetail({
       return;
     }
 
+    const invoices = (data as unknown as ServiceRequestInvoiceRow[]).map(
+      mapServiceRequestInvoiceRow,
+    );
+
+    const invoicesWithSummaries = await Promise.all(
+      invoices.map(async (invoice) => {
+        const { data: summaryData, error: summaryError } = await supabase.rpc(
+          "get_service_request_invoice_financial_summary_rpc",
+          {
+            p_invoice_id: invoice.id,
+          },
+        );
+
+        if (summaryError) {
+          return invoice;
+        }
+
+        return {
+          ...invoice,
+          financialSummary: mapInvoiceFinancialSummaryPayload(summaryData),
+        };
+      }),
+    );
+
     setInvoicesState({
       status: "ready",
-      invoices: (data as unknown as ServiceRequestInvoiceRow[]).map(
-        mapServiceRequestInvoiceRow,
+      invoices: invoicesWithSummaries,
+      error: null,
+    });
+  }
+
+  async function loadPayments() {
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setPaymentsState({
+        status: "error",
+        payments: [],
+        allocations: [],
+        error: "Payments are not available for this workspace.",
+      });
+      return;
+    }
+
+    const [paymentsResult, allocationsResult] = await Promise.all([
+      supabase
+        .from("service_request_payments")
+        .select(SERVICE_REQUEST_PAYMENT_SELECT_COLUMNS)
+        .eq("service_request_id", requestId)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("service_request_payment_allocations")
+        .select(SERVICE_REQUEST_PAYMENT_ALLOCATION_SELECT_COLUMNS)
+        .eq("service_request_id", requestId)
+        .order("created_at", { ascending: false }),
+    ]);
+
+    if (paymentsResult.error) {
+      setPaymentsState({
+        status: "error",
+        payments: [],
+        allocations: [],
+        error: paymentsResult.error.message,
+      });
+      return;
+    }
+
+    if (allocationsResult.error) {
+      setPaymentsState({
+        status: "error",
+        payments: [],
+        allocations: [],
+        error: allocationsResult.error.message,
+      });
+      return;
+    }
+
+    setPaymentsState({
+      status: "ready",
+      payments: (paymentsResult.data as unknown as ServiceRequestPaymentRow[]).map(
+        mapServiceRequestPaymentRow,
       ),
+      allocations: (
+        allocationsResult.data as unknown as ServiceRequestPaymentAllocationRow[]
+      ).map(mapServiceRequestPaymentAllocationRow),
       error: null,
     });
   }
@@ -4251,6 +4496,12 @@ export function ServiceRequestDetail({
     setEstimateSaveState({ status: "idle", message: null });
   }
 
+  function openPaymentWorkflow(target?: ManualPaymentTarget) {
+    setActiveJobTab("estimate");
+    setIsFinancePaymentsOpen(true);
+    openManualPayment(target);
+  }
+
   async function createEstimate(options?: { sendAfterSave?: boolean }) {
     if (state.status !== "ready") {
       return null;
@@ -4693,6 +4944,20 @@ export function ServiceRequestDetail({
     estimateId: string,
     estimateNumber: string,
   ) {
+    if (!isPersistedEstimateUuid(estimateId)) {
+      const message =
+        "This estimate needs a saved database record before it can be approved.";
+
+      setEstimateSaveState({
+        status: "error",
+        message,
+      });
+      return {
+        ok: false as const,
+        message,
+      };
+    }
+
     setEstimateSaveState({
       status: "saving",
       message: `Approving ${estimateNumber} for customer...`,
@@ -4705,7 +4970,10 @@ export function ServiceRequestDetail({
         status: "error",
         message: "Manual approval is not available for this workspace.",
       });
-      return false;
+      return {
+        ok: false as const,
+        message: "Manual approval is not available for this workspace.",
+      };
     }
 
     const sessionResult = await getDashboardActionSession(supabase);
@@ -4715,7 +4983,7 @@ export function ServiceRequestDetail({
         status: "error",
         message: sessionResult.message,
       });
-      return false;
+      return { ok: false as const, message: sessionResult.message };
     }
 
     const { data: sessionData, error: sessionError } = sessionResult.response;
@@ -4726,7 +4994,10 @@ export function ServiceRequestDetail({
         status: "error",
         message: "Log in again before approving this estimate.",
       });
-      return false;
+      return {
+        ok: false as const,
+        message: "Log in again before approving this estimate.",
+      };
     }
 
     let response: Response;
@@ -4754,7 +5025,10 @@ export function ServiceRequestDetail({
         status: "error",
         message: "Estimate could not be approved for the customer. Please try again.",
       });
-      return false;
+      return {
+        ok: false as const,
+        message: "Estimate could not be approved for the customer. Please try again.",
+      };
     }
 
     if (!response.ok || !payload?.ok) {
@@ -4764,7 +5038,12 @@ export function ServiceRequestDetail({
           payload?.message ??
           "Estimate could not be approved for the customer. Please try again.",
       });
-      return false;
+      return {
+        ok: false as const,
+        message:
+          payload?.message ??
+          "Estimate could not be approved for the customer. Please try again.",
+      };
     }
 
     const approvedAt =
@@ -4812,7 +5091,7 @@ export function ServiceRequestDetail({
     });
     void loadEstimates();
     void loadNotes();
-    return true;
+    return { ok: true as const };
   }
 
   async function deleteDraftEstimateById(
@@ -4968,7 +5247,7 @@ export function ServiceRequestDetail({
       status: "success",
       message: `Invoice ${payload.invoice?.invoice_number ?? ""} created from ${estimate.estimateNumber}.`,
     });
-    void loadInvoices();
+    void Promise.all([loadInvoices(), loadPayments(), loadEstimates()]);
     void loadNotes();
   }
 
@@ -5071,7 +5350,93 @@ export function ServiceRequestDetail({
             ? `${invoice.invoiceNumber} marked paid.`
             : `${invoice.invoiceNumber} voided.`,
     });
+    void Promise.all([loadInvoices(), loadPayments(), loadEstimates()]);
+    void loadNotes();
+  }
+
+  async function deleteInvoice(invoice: DashboardServiceRequestInvoice) {
+    const confirmed = window.confirm(
+      "Delete this test invoice?\n\nThis permanently deletes the invoice and its line items. The Job, Customer, and Estimate will remain.",
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setInvoiceActionState({
+        status: "error",
+        message: "Invoice deletion is not available for this workspace.",
+      });
+      return;
+    }
+
+    const sessionResult = await getDashboardActionSession(supabase);
+
+    if (!sessionResult.ok) {
+      setInvoiceActionState({
+        status: "error",
+        message: sessionResult.message,
+      });
+      return;
+    }
+
+    const { data: sessionData, error: sessionError } = sessionResult.response;
+    const accessToken = sessionData.session?.access_token;
+
+    if (sessionError || !accessToken) {
+      setInvoiceActionState({
+        status: "error",
+        message: "Log in again before deleting this invoice.",
+      });
+      return;
+    }
+
+    setInvoiceActionId(invoice.id);
+    setInvoiceActionState({
+      status: "saving",
+      message: `Deleting ${invoice.invoiceNumber}...`,
+    });
+
+    let response: Response;
+    let payload: { ok?: boolean; message?: string } | null;
+
+    try {
+      response = await fetch(`/api/invoices/${invoice.id}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+      payload = (await response.json().catch(() => null)) as typeof payload;
+    } catch {
+      setInvoiceActionId(null);
+      setInvoiceActionState({
+        status: "error",
+        message: "Invoice could not be deleted. Please try again.",
+      });
+      return;
+    }
+
+    setInvoiceActionId(null);
+
+    if (!response.ok || !payload?.ok) {
+      setInvoiceActionState({
+        status: "error",
+        message: payload?.message ?? "Invoice could not be deleted.",
+      });
+      return;
+    }
+
+    setViewingInvoiceId((current) => (current === invoice.id ? null : current));
+    setInvoiceActionState({
+      status: "success",
+      message: `${invoice.invoiceNumber} deleted.`,
+    });
     void loadInvoices();
+    void loadEstimates();
     void loadNotes();
   }
 
@@ -6316,30 +6681,117 @@ export function ServiceRequestDetail({
     : invoiceHistory.filter((invoice) => invoice.invoiceStatus !== "void");
   const hiddenInvoiceHistoryCount =
     invoiceHistory.length - visibleInvoiceHistory.length;
+  const activePaymentAllocations = paymentsState.allocations.filter(
+    (allocation) => allocation.allocationStatus === "active",
+  );
+  const estimateAllocatedCents = new Map<string, number>();
+  const invoiceAllocatedCents = new Map<string, number>();
+
+  activePaymentAllocations.forEach((allocation) => {
+    const cents = moneyToCents(allocation.allocationAmount);
+
+    if (allocation.estimateId) {
+      estimateAllocatedCents.set(
+        allocation.estimateId,
+        (estimateAllocatedCents.get(allocation.estimateId) ?? 0) + cents,
+      );
+    }
+
+    if (allocation.invoiceId) {
+      invoiceAllocatedCents.set(
+        allocation.invoiceId,
+        (invoiceAllocatedCents.get(allocation.invoiceId) ?? 0) + cents,
+      );
+    }
+  });
+  const getInvoiceAllocatedCents = (invoice: DashboardServiceRequestInvoice) =>
+    invoice.financialSummary
+      ? moneyToCents(invoice.financialSummary.allocatedPaid)
+      : invoiceAllocatedCents.get(invoice.id) ?? 0;
+  const getInvoiceBalanceDue = (invoice: DashboardServiceRequestInvoice) => {
+    if (invoice.financialSummary) {
+      return invoice.financialSummary.balanceDue;
+    }
+
+    return centsToMoney(
+      Math.max(0, moneyToCents(invoice.total) - getInvoiceAllocatedCents(invoice)),
+    );
+  };
+
   const financeApprovedEstimates = estimatesState.estimates.filter(
     (estimate) =>
       estimate.estimateStatus === "approved" && estimate.archivedAt === null,
   );
-  const financeApprovedTotal = financeApprovedEstimates.reduce(
-    (total, estimate) => total + estimate.total,
-    0,
-  );
-  const financePaidInvoices = invoicesState.invoices.filter(
-    (invoice) => invoice.invoiceStatus === "paid" && invoice.voidedAt === null,
-  );
-  const financePaidTotal = financePaidInvoices.reduce(
-    (total, invoice) => total + invoice.total,
-    0,
+  const financePayableEstimates = financeApprovedEstimates.filter(
+    (estimate) => !invoicesByEstimateId.has(estimate.id),
   );
   const financeOpenInvoices = invoicesState.invoices.filter(
     (invoice) =>
       invoice.voidedAt === null &&
       (invoice.invoiceStatus === "draft" || invoice.invoiceStatus === "sent"),
   );
+  const financePaidTotal =
+    financePayableEstimates.reduce(
+      (total, estimate) =>
+        total + centsToMoney(estimateAllocatedCents.get(estimate.id) ?? 0),
+      0,
+    ) +
+    invoicesState.invoices
+      .filter((invoice) => invoice.voidedAt === null && invoice.invoiceStatus !== "void")
+      .reduce(
+        (total, invoice) => total + centsToMoney(getInvoiceAllocatedCents(invoice)),
+        0,
+      );
+  const financeApprovedTotal =
+    financePayableEstimates.reduce((total, estimate) => total + estimate.total, 0) +
+    invoicesState.invoices
+      .filter((invoice) => invoice.voidedAt === null && invoice.invoiceStatus !== "void")
+      .reduce((total, invoice) => total + invoice.total, 0);
   const financeBalanceDueTotal = Math.max(
     0,
-    financeOpenInvoices.reduce((total, invoice) => total + invoice.total, 0),
+    financePayableEstimates.reduce(
+      (total, estimate) =>
+        total +
+        Math.max(
+          0,
+          estimate.total - centsToMoney(estimateAllocatedCents.get(estimate.id) ?? 0),
+        ),
+      0,
+    ) +
+    financeOpenInvoices.reduce(
+      (total, invoice) =>
+        total + Math.max(0, getInvoiceBalanceDue(invoice)),
+      0,
+    ),
   );
+  const paymentHistory = paymentsState.payments
+    .map((payment) => {
+      const allocation =
+        activePaymentAllocations.find(
+          (currentAllocation) => currentAllocation.paymentId === payment.id,
+        ) ?? null;
+      const estimateTarget = allocation?.estimateId
+        ? estimatesState.estimates.find(
+            (estimate) => estimate.id === allocation.estimateId,
+          ) ?? null
+        : null;
+      const invoiceTarget = allocation?.invoiceId
+        ? invoicesState.invoices.find((invoice) => invoice.id === allocation.invoiceId) ??
+          null
+        : null;
+
+      return {
+        payment,
+        allocation,
+        estimateTarget,
+        invoiceTarget,
+      };
+    })
+    .sort(
+      (left, right) =>
+        new Date(right.payment.paidAt ?? right.payment.createdAt).getTime() -
+        new Date(left.payment.paidAt ?? left.payment.createdAt).getTime(),
+    );
   const financeEstimates = [...estimatesState.estimates].sort((left, right) => {
     const getStatusPriority = (
       status: DashboardServiceRequestEstimate["estimateStatus"],
@@ -6372,6 +6824,50 @@ export function ServiceRequestDetail({
         new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
     )[0] ??
     null;
+  const manualPaymentTargets: ManualPaymentTarget[] = [
+    ...financeApprovedEstimates
+      .filter((estimate) => !invoicesByEstimateId.has(estimate.id))
+      .map((estimate) => {
+        const paidCents = estimateAllocatedCents.get(estimate.id) ?? 0;
+        const totalCents = moneyToCents(estimate.total);
+
+        return {
+          id: estimate.id,
+          type: "estimate" as const,
+          label: `Deposit on ${estimate.estimateNumber}`,
+          detail: "Approved Estimate",
+          total: estimate.total,
+          paid: centsToMoney(paidCents),
+          remaining: centsToMoney(Math.max(0, totalCents - paidCents)),
+        };
+      }),
+    ...invoicesState.invoices
+      .filter((invoice) => invoice.voidedAt === null && invoice.invoiceStatus !== "void")
+      .map((invoice) => {
+        const paidCents = getInvoiceAllocatedCents(invoice);
+        const totalCents = moneyToCents(invoice.total);
+
+        return {
+          id: invoice.id,
+          type: "invoice" as const,
+          label: `Payment toward ${invoice.invoiceNumber}`,
+          detail: "Invoice",
+          total: invoice.total,
+          paid: centsToMoney(paidCents),
+          remaining: invoice.financialSummary
+            ? invoice.financialSummary.balanceDue
+            : centsToMoney(Math.max(0, totalCents - paidCents)),
+        };
+      }),
+  ].filter((target) => moneyToCents(target.remaining) > 0);
+  const selectedManualPaymentTarget =
+    manualPaymentDraft === null
+      ? null
+      : manualPaymentTargets.find(
+          (target) =>
+            target.id === manualPaymentDraft.targetId &&
+            target.type === manualPaymentDraft.targetType,
+        ) ?? null;
   const addressAutocomplete = getAddressAutocompleteAdapter();
   const fullAddress = getRequestFullAddress(request);
   const hasRoutableAddress = fullAddress.length > 0;
@@ -6656,7 +7152,7 @@ export function ServiceRequestDetail({
       label: "PAY",
       variant: "pay",
       disabled: false,
-      onClick: () => setActiveJobTab("estimate"),
+      onClick: () => openPaymentWorkflow(),
     },
     {
       label: "NOTE",
@@ -7429,28 +7925,225 @@ export function ServiceRequestDetail({
     });
   }
 
-  function toggleInvoiceView(invoiceId: string, isExpanded: boolean) {
-    setViewingInvoiceId(isExpanded ? null : invoiceId);
+  function openInvoiceWorkspace(invoiceId: string) {
+    setViewingInvoiceId(invoiceId);
     setViewingEstimateId(null);
+    setInvoiceWorkspaceTab("overview");
+    setIsInvoiceMoreActionsOpen(false);
+  }
+
+  function closeInvoiceWorkspace() {
+    setViewingInvoiceId(null);
+    setInvoiceWorkspaceTab("overview");
+    setIsInvoiceMoreActionsOpen(false);
+  }
+
+  function toggleInvoiceView(invoiceId: string) {
+    openInvoiceWorkspace(invoiceId);
   }
 
   function openEstimateFromList(estimate: DashboardServiceRequestEstimate) {
     if (estimate.sourceSystem === "workiz") {
       setViewingEstimateId(estimate.id);
       setViewingInvoiceId(null);
+      setIsInvoiceMoreActionsOpen(false);
       return;
     }
 
     openSavedManualEstimateEditor(estimate);
   }
 
+  function getManualPaymentMethodLabel(method: string | null) {
+    if (method === "cash_app") {
+      return "Cash App";
+    }
+
+    if (method === "zelle") {
+      return "Zelle";
+    }
+
+    if (method === "venmo") {
+      return "Venmo";
+    }
+
+    if (method === "check") {
+      return "Check";
+    }
+
+    return "Cash";
+  }
+
+  function openManualPayment(target?: ManualPaymentTarget) {
+    const nextTarget = target ?? manualPaymentTargets[0] ?? null;
+
+    if (!nextTarget) {
+      setManualPaymentDraft(null);
+      setManualPaymentState({
+        status: "error",
+        message: "Create an approved Estimate or Invoice before collecting payment.",
+      });
+      setIsManualPaymentOpen(true);
+      return;
+    }
+
+    setManualPaymentDraft({
+      targetType: nextTarget.type,
+      targetId: nextTarget.id,
+      amount: formatCentsAsInput(moneyToCents(nextTarget.remaining)),
+      paymentMethod: "cash",
+      referenceCode: "",
+      note: "",
+      idempotencyKey: buildPaymentIdempotencyKey(),
+    });
+    setManualPaymentState({ status: "idle", message: null });
+    setIsManualPaymentDetailsOpen(false);
+    setIsManualPaymentOpen(true);
+  }
+
+  function updateManualPaymentTarget(target: ManualPaymentTarget) {
+    setManualPaymentDraft((current) => ({
+      targetType: target.type,
+      targetId: target.id,
+      amount: formatCentsAsInput(moneyToCents(target.remaining)),
+      paymentMethod: current?.paymentMethod ?? "cash",
+      referenceCode: current?.referenceCode ?? "",
+      note: current?.note ?? "",
+      idempotencyKey: current?.idempotencyKey ?? buildPaymentIdempotencyKey(),
+    }));
+    setManualPaymentState({ status: "idle", message: null });
+  }
+
+  async function saveManualPayment() {
+    if (state.status !== "ready" || !manualPaymentDraft || !selectedManualPaymentTarget) {
+      setManualPaymentState({
+        status: "error",
+        message: "Choose a valid Estimate or Invoice before saving payment.",
+      });
+      return;
+    }
+
+    const amountCents = parseMoneyInputToCents(manualPaymentDraft.amount);
+    const remainingCents = moneyToCents(selectedManualPaymentTarget.remaining);
+
+    if (amountCents === null || amountCents <= 0) {
+      setManualPaymentState({
+        status: "error",
+        message: "Enter a valid payment amount.",
+      });
+      return;
+    }
+
+    if (amountCents > remainingCents) {
+      setManualPaymentState({
+        status: "error",
+        message: "Payment amount exceeds the selected balance.",
+      });
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setManualPaymentState({
+        status: "error",
+        message: "Manual payments are not available for this workspace.",
+      });
+      return;
+    }
+
+    const sessionResult = await getDashboardActionSession(supabase);
+
+    if (!sessionResult.ok) {
+      setManualPaymentState({
+        status: "error",
+        message: sessionResult.message,
+      });
+      return;
+    }
+
+    const { data: sessionData, error: sessionError } = sessionResult.response;
+    const accessToken = sessionData.session?.access_token;
+
+    if (sessionError || !accessToken) {
+      setManualPaymentState({
+        status: "error",
+        message: "Log in again before recording payment.",
+      });
+      return;
+    }
+
+    setManualPaymentState({ status: "saving", message: "Saving payment..." });
+
+    let response: Response;
+    let payload: { ok?: boolean; message?: string } | null;
+
+    try {
+      response = await fetch(`/api/service-requests/${state.request.id}/payments`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          targetType: manualPaymentDraft.targetType,
+          targetId: manualPaymentDraft.targetId,
+          amount: formatCentsAsInput(amountCents),
+          paymentMethod: manualPaymentDraft.paymentMethod,
+          referenceCode: manualPaymentDraft.referenceCode,
+          note: manualPaymentDraft.note,
+          idempotencyKey: manualPaymentDraft.idempotencyKey,
+        }),
+      });
+      payload = (await response.json().catch(() => null)) as typeof payload;
+    } catch {
+      setManualPaymentState({
+        status: "error",
+        message: "Payment request could not reach the server. Try again.",
+      });
+      return;
+    }
+
+    if (!response.ok || !payload?.ok) {
+      setManualPaymentState({
+        status: "error",
+        message: payload?.message ?? "Payment could not be recorded.",
+      });
+      return;
+    }
+
+    setManualPaymentState({
+      status: "success",
+      message: `${getManualPaymentMethodLabel(manualPaymentDraft.paymentMethod)} payment saved.`,
+    });
+    setManualPaymentDraft((current) =>
+      current
+        ? {
+            ...current,
+            idempotencyKey: buildPaymentIdempotencyKey(),
+          }
+        : current,
+    );
+    await Promise.all([loadPayments(), loadEstimates(), loadInvoices()]);
+    setIsFinancePaymentsOpen(true);
+    setTimeout(() => {
+      setIsManualPaymentOpen(false);
+      setManualPaymentDraft(null);
+      setManualPaymentState({ status: "idle", message: null });
+    }, 700);
+  }
+
   function renderEstimateCard(estimate: DashboardServiceRequestEstimate) {
     const linkedInvoice = invoicesByEstimateId.get(estimate.id) ?? null;
     const isImportedWorkiz = estimate.sourceSystem === "workiz";
+    const depositPaid = centsToMoney(estimateAllocatedCents.get(estimate.id) ?? 0);
+    const remainingDeposit = Math.max(0, estimate.total - depositPaid);
+    const paymentTarget = manualPaymentTargets.find(
+      (target) => target.type === "estimate" && target.id === estimate.id,
+    );
 
     return (
       <article
-        className="cursor-pointer border-b border-[#E5E7EB] bg-white px-0 py-2.5 transition last:border-b-0 hover:bg-blue-50/40 sm:py-3"
+        className="cursor-pointer border-b border-[#E5E7EB] bg-transparent px-0 py-2.5 transition last:border-b-0 hover:bg-blue-50/40 sm:py-3"
         key={estimate.id}
         onClick={() => openEstimateFromList(estimate)}
       >
@@ -7490,6 +8183,27 @@ export function ServiceRequestDetail({
               </>
             ) : null}
           </div>
+          {estimate.estimateStatus === "approved" && !linkedInvoice ? (
+            <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-xs font-bold text-[#64748B]">
+                Deposit paid {formatServiceRequestMoney(depositPaid)} · Remaining{" "}
+                {formatServiceRequestMoney(remainingDeposit)}
+              </p>
+              <button
+                className="self-start rounded-full border border-[#D7E4FF] px-3 py-1.5 text-xs font-black text-[#0F6BFF] transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 sm:self-auto"
+                disabled={!paymentTarget}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (paymentTarget) {
+                    openPaymentWorkflow(paymentTarget);
+                  }
+                }}
+                type="button"
+              >
+                Collect Deposit
+              </button>
+            </div>
+          ) : null}
         </div>
         {isImportedWorkiz && viewingEstimateId === estimate.id ? (
           <div className="mx-1.5 mt-3 rounded-md border border-blue-100 bg-blue-50 p-3 text-sm leading-6 text-[#334155] sm:mx-2">
@@ -7510,23 +8224,100 @@ export function ServiceRequestDetail({
     );
   }
 
+  function renderInvoiceSummaryCard(invoice: DashboardServiceRequestInvoice) {
+    const sourceEstimate = estimatesState.estimates.find(
+      (estimate) => estimate.id === invoice.estimateId,
+    );
+    const allocatedPaid = centsToMoney(getInvoiceAllocatedCents(invoice));
+    const balanceDue = Math.max(0, getInvoiceBalanceDue(invoice));
+
+    return (
+      <article
+        className="border-b border-[#E5E7EB] bg-transparent px-1.5 py-3 last:border-b-0 sm:px-2"
+        key={invoice.id}
+      >
+        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+          <button
+            className="min-w-0 text-left"
+            onClick={() => openInvoiceWorkspace(invoice.id)}
+            type="button"
+          >
+            <div className="flex min-w-0 items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-black text-[#0B1228]">
+                  {invoice.invoiceNumber}
+                </p>
+                <p className="mt-1 truncate text-xs font-bold text-[#657089]">
+                  {sourceEstimate
+                    ? `From ${sourceEstimate.estimateNumber}`
+                    : "Invoice"}
+                </p>
+              </div>
+              <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-1 text-[0.65rem] font-black text-emerald-700">
+                {formatServiceRequestSource(invoice.invoiceStatus)}
+              </span>
+            </div>
+            <div className="mt-2 grid grid-cols-3 divide-x divide-[#E3E8F0] border-y border-[#EEF2F7] py-2 text-left">
+              <div className="min-w-0 pr-2">
+                <p className="truncate text-[0.65rem] font-bold text-[#657089]">
+                  Total
+                </p>
+                <p className="mt-0.5 truncate text-sm font-black text-[#0B1228]">
+                  {formatServiceRequestMoney(invoice.total)}
+                </p>
+              </div>
+              <div className="min-w-0 px-2">
+                <p className="truncate text-[0.65rem] font-bold text-[#657089]">
+                  Paid
+                </p>
+                <p className="mt-0.5 truncate text-sm font-black text-emerald-700">
+                  {formatServiceRequestMoney(allocatedPaid)}
+                </p>
+              </div>
+              <div className="min-w-0 pl-2">
+                <p className="truncate text-[0.65rem] font-bold text-[#657089]">
+                  Balance Due
+                </p>
+                <p className="mt-0.5 truncate text-sm font-black text-[#0F6BFF]">
+                  {formatServiceRequestMoney(balanceDue)}
+                </p>
+              </div>
+            </div>
+          </button>
+          <button
+            className="w-full rounded-full border border-[#D7E4FF] px-4 py-2 text-xs font-black text-[#0F6BFF] transition hover:bg-blue-50 sm:w-auto"
+            onClick={() => openInvoiceWorkspace(invoice.id)}
+            type="button"
+          >
+            View Invoice
+          </button>
+        </div>
+      </article>
+    );
+  }
+
   function renderInvoiceCard(invoice: DashboardServiceRequestInvoice) {
     const isExpanded = viewingInvoice?.id === invoice.id;
     const isImportedWorkiz = invoice.sourceSystem === "workiz";
     const sourceEstimate = estimatesState.estimates.find(
       (estimate) => estimate.id === invoice.estimateId,
     );
+    const allocatedPaid = centsToMoney(getInvoiceAllocatedCents(invoice));
+    const balanceDue = Math.max(0, getInvoiceBalanceDue(invoice));
+    const paymentTarget = manualPaymentTargets.find(
+      (target) => target.type === "invoice" && target.id === invoice.id,
+    );
 
     return (
       <article
-        className={`rounded-md border p-4 transition ${
+        className={`py-2.5 transition ${
           isExpanded
-            ? "border-emerald-300/40 bg-emerald-300/10"
-            : "border-[#E5E7EB] bg-white"
+            ? "bg-emerald-50/40"
+            : "bg-transparent"
         }`}
         key={invoice.id}
       >
-        <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-start">
+        <div className="grid gap-3 px-1.5 sm:grid-cols-[1fr_auto] sm:items-start sm:px-2">
           <div className="min-w-0">
             {isExpanded ? (
               <p className="mb-2 text-xs font-black uppercase tracking-[0.16em] text-emerald-700">
@@ -7554,12 +8345,16 @@ export function ServiceRequestDetail({
 
           <div className="flex min-w-0 flex-col gap-3 sm:items-end">
             <p className="text-2xl font-bold text-emerald-700 sm:text-xl">
+              {formatServiceRequestMoney(balanceDue)}
+            </p>
+            <p className="-mt-2 text-xs font-bold text-[#64748B]">
+              {formatServiceRequestMoney(allocatedPaid)} paid of{" "}
               {formatServiceRequestMoney(invoice.total)}
             </p>
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
               <button
                 className="rounded-md border border-[#E5E7EB] px-3 py-2 text-xs font-bold text-[#334155] transition hover:border-emerald-300/50 hover:text-emerald-700"
-                onClick={() => toggleInvoiceView(invoice.id, isExpanded)}
+                onClick={() => toggleInvoiceView(invoice.id)}
                 type="button"
               >
                 {isExpanded ? "Hide" : "View Invoice"}
@@ -7579,11 +8374,15 @@ export function ServiceRequestDetail({
                 invoice.invoiceStatus === "sent") ? (
                 <button
                   className="rounded-md border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-xs font-bold text-emerald-700 transition hover:bg-emerald-300/20 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={invoiceActionState.status === "saving"}
-                  onClick={() => void updateInvoice(invoice, "paid")}
+                  disabled={!paymentTarget}
+                  onClick={() => {
+                    if (paymentTarget) {
+                      openPaymentWorkflow(paymentTarget);
+                    }
+                  }}
                   type="button"
                 >
-                  {invoiceActionId === invoice.id ? "Saving..." : "Mark Paid"}
+                  Collect Payment
                 </button>
               ) : null}
               {!isImportedWorkiz && invoice.invoiceStatus !== "paid" &&
@@ -7595,6 +8394,18 @@ export function ServiceRequestDetail({
                   type="button"
                 >
                   {invoiceActionId === invoice.id ? "Voiding..." : "Void Invoice"}
+                </button>
+              ) : null}
+              {!isImportedWorkiz && invoice.invoiceStatus === "draft" ? (
+                <button
+                  className="rounded-md border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={invoiceActionState.status === "saving"}
+                  onClick={() => void deleteInvoice(invoice)}
+                  type="button"
+                >
+                  {invoiceActionId === invoice.id
+                    ? "Deleting..."
+                    : "Delete Invoice"}
                 </button>
               ) : null}
             </div>
@@ -7623,7 +8434,7 @@ export function ServiceRequestDetail({
                 {sourceEstimate?.estimateNumber ?? "Unknown"}
               </p>
             </div>
-            <div className="mt-4 divide-y divide-[#E5E7EB] overflow-hidden rounded-md border border-[#E5E7EB]">
+            <div className="mt-4 divide-y divide-[#E5E7EB] border-y border-[#E5E7EB]">
               {isImportedWorkiz ? (
                 <div className="bg-[#F8FAFC] p-3 text-sm leading-6 text-[#64748B]">
                   <p className="font-black text-[#0F172A]">Historical Invoice Summary</p>
@@ -7662,8 +8473,556 @@ export function ServiceRequestDetail({
             <div className="mt-4 flex items-center justify-between border-t border-[#E5E7EB] pt-4">
               <p className="text-sm font-black text-[#0F172A]">Total</p>
               <p className="text-2xl font-black text-emerald-700">
+                {formatServiceRequestMoney(balanceDue)}
+              </p>
+            </div>
+          </div>
+        ) : null}
+      </article>
+    );
+  }
+
+  function renderInvoiceWorkspace(invoice: DashboardServiceRequestInvoice) {
+    const sourceEstimate = estimatesState.estimates.find(
+      (estimate) => estimate.id === invoice.estimateId,
+    );
+    const allocatedPaid = centsToMoney(getInvoiceAllocatedCents(invoice));
+    const balanceDue = Math.max(0, getInvoiceBalanceDue(invoice));
+    const paymentTarget = manualPaymentTargets.find(
+      (target) => target.type === "invoice" && target.id === invoice.id,
+    );
+    const invoicePayments = paymentHistory.filter(
+      (entry) => entry.invoiceTarget?.id === invoice.id,
+    );
+    const tabs: { id: InvoiceWorkspaceTab; label: string }[] = [
+      { id: "overview", label: "Overview" },
+      { id: "items", label: "Items" },
+      { id: "payments", label: "Payments" },
+      { id: "details", label: "Details" },
+      { id: "history", label: "History" },
+    ];
+    const canCollectPayment = Boolean(paymentTarget) && invoice.invoiceStatus !== "void";
+    const canSendInvoice = invoice.invoiceStatus === "draft";
+    const canVoidInvoice =
+      invoice.invoiceStatus !== "paid" && invoice.invoiceStatus !== "void";
+    const canDeleteInvoice = invoice.invoiceStatus === "draft";
+
+    const renderItems = () => (
+      <section className="border-t border-[#D7DEE8] pt-5">
+        <h3 className="text-lg font-black text-[#0B1228]">
+          Invoice Items ({invoice.items.length})
+        </h3>
+        <div className="mt-3 divide-y divide-[#E1E7F0] md:hidden">
+          {invoice.items.map((item) => {
+            const sourceItem = sourceEstimate?.items.find(
+              (estimateItem) => estimateItem.id === item.sourceEstimateItemId,
+            );
+            const lineType = sourceItem?.lineType ?? "custom";
+
+            return (
+              <div
+                className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 py-3"
+                key={item.id}
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-bold text-[#0B1228]">
+                    {item.itemTitle}
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-[#52627A]">
+                    {formatServiceRequestSource(lineType)} · {item.quantity} ×{" "}
+                    {formatServiceRequestMoney(item.unitPrice)}
+                  </p>
+                </div>
+                <p className="whitespace-nowrap text-sm font-black text-[#0B1228]">
+                  {formatServiceRequestMoney(item.lineTotal)}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+        <div className="mt-3 hidden border-y border-[#E1E7F0] md:block">
+          <div className="grid grid-cols-[minmax(0,1fr)_110px_80px_120px_120px] gap-3 border-b border-[#E1E7F0] py-2 text-xs font-black uppercase tracking-[0.12em] text-[#657089]">
+            <span>Item / Service</span>
+            <span>Type</span>
+            <span className="text-right">Qty</span>
+            <span className="text-right">Unit Price</span>
+            <span className="text-right">Total</span>
+          </div>
+          {invoice.items.map((item) => {
+            const sourceItem = sourceEstimate?.items.find(
+              (estimateItem) => estimateItem.id === item.sourceEstimateItemId,
+            );
+            const lineType = sourceItem?.lineType ?? "custom";
+
+            return (
+              <div
+                className="grid grid-cols-[minmax(0,1fr)_110px_80px_120px_120px] gap-3 border-b border-[#EEF2F7] py-3 text-sm last:border-b-0"
+                key={item.id}
+              >
+                <span className="min-w-0 truncate font-bold text-[#0B1228]">
+                  {item.itemTitle}
+                </span>
+                <span className="font-semibold text-[#52627A]">
+                  {formatServiceRequestSource(lineType)}
+                </span>
+                <span className="text-right font-semibold text-[#52627A]">
+                  {item.quantity}
+                </span>
+                <span className="text-right font-semibold text-[#52627A]">
+                  {formatServiceRequestMoney(item.unitPrice)}
+                </span>
+                <span className="text-right font-black text-[#0B1228]">
+                  {formatServiceRequestMoney(item.lineTotal)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+        <div className="mt-4 space-y-2 border-t border-[#E1E7F0] pt-4 text-sm">
+          <div className="flex items-center justify-between gap-4 text-[#52627A]">
+            <span>Subtotal</span>
+            <span className="font-semibold text-[#0B1228]">
+              {formatServiceRequestMoney(invoice.subtotal)}
+            </span>
+          </div>
+          {invoice.discountAmount && invoice.discountAmount > 0 ? (
+            <div className="flex items-center justify-between gap-4 text-[#52627A]">
+              <span>Discount</span>
+              <span className="font-semibold text-[#0B1228]">
+                -{formatServiceRequestMoney(invoice.discountAmount)}
+              </span>
+            </div>
+          ) : null}
+          <div className="flex items-center justify-between gap-4 text-[#52627A]">
+            <span>Tax</span>
+            <span className="font-semibold text-[#0B1228]">
+              {formatServiceRequestMoney(invoice.tax ?? 0)}
+            </span>
+          </div>
+          <div className="flex items-end justify-between gap-4 pt-2">
+            <span className="text-base font-black text-[#0B1228]">Invoice Total</span>
+            <span className="text-2xl font-black text-[#0B1228]">
+              {formatServiceRequestMoney(invoice.total)}
+            </span>
+          </div>
+        </div>
+      </section>
+    );
+
+    const renderPayments = () => (
+      <section className="border-t border-[#D7DEE8] pt-5">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-lg font-black text-[#0B1228]">
+            Payments ({invoicePayments.length})
+          </h3>
+          <button
+            className="rounded-full border border-[#BFD3FF] px-3 py-1.5 text-sm font-black text-[#0F6BFF] transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!canCollectPayment}
+            onClick={() => {
+              if (paymentTarget) {
+                openPaymentWorkflow(paymentTarget);
+              }
+            }}
+            type="button"
+          >
+            + Collect Payment
+          </button>
+        </div>
+        {invoicePayments.length > 0 ? (
+          <div className="mt-3 divide-y divide-[#E1E7F0]">
+            {invoicePayments.map((entry) => {
+              const paidAt =
+                entry.payment.paidAt ??
+                entry.payment.paymentDate ??
+                entry.payment.createdAt;
+
+              return (
+                <div
+                  className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 py-3"
+                  key={entry.payment.id}
+                >
+                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 text-lg font-black text-emerald-700">
+                    $
+                  </span>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-black text-[#0B1228]">
+                      {getManualPaymentMethodLabel(entry.payment.paymentMethod)} Payment
+                    </p>
+                    <p className="mt-1 truncate text-sm font-semibold text-[#52627A]">
+                      {formatServiceRequestDate(paidAt)}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="whitespace-nowrap text-base font-black text-emerald-700">
+                      +{formatServiceRequestMoney(entry.payment.amount)}
+                    </p>
+                    <p className="mt-1 text-sm font-semibold text-[#52627A]">
+                      {formatServiceRequestSource(entry.payment.paymentStatus)}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="mt-3 border-y border-[#E1E7F0] py-3 text-sm font-semibold text-[#657089]">
+            No invoice payments recorded yet.
+          </p>
+        )}
+      </section>
+    );
+
+    const renderDetails = () => (
+      <section className="border-t border-[#D7DEE8] pt-5">
+        <h3 className="text-lg font-black text-[#0B1228]">Invoice Details</h3>
+        <div className="mt-3 divide-y divide-[#E1E7F0] text-sm">
+          {[
+            ["Status", formatServiceRequestSource(invoice.invoiceStatus)],
+            ["Created", formatServiceRequestDate(invoice.createdAt)],
+            ["Source Estimate", sourceEstimate?.estimateNumber ?? "Unknown"],
+            ["Sent", invoice.sentAt ? formatServiceRequestDate(invoice.sentAt) : "Not sent"],
+            ["Paid", allocatedPaid > 0 ? formatServiceRequestMoney(allocatedPaid) : "Not paid"],
+          ].map(([label, value]) => (
+            <div
+              className="grid grid-cols-[120px_minmax(0,1fr)] gap-3 py-3"
+              key={label}
+            >
+              <span className="font-semibold text-[#52627A]">{label}</span>
+              <span className="min-w-0 font-semibold text-[#0B1228]">{value}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+    );
+
+    const showItems = invoiceWorkspaceTab === "overview" || invoiceWorkspaceTab === "items";
+    const showPayments =
+      invoiceWorkspaceTab === "overview" || invoiceWorkspaceTab === "payments";
+    const showDetails =
+      invoiceWorkspaceTab === "overview" || invoiceWorkspaceTab === "details";
+
+    return (
+      <section className="relative mx-auto mt-2 max-w-5xl bg-white pb-[calc(5.25rem+env(safe-area-inset-bottom))] sm:mt-3 sm:rounded-2xl sm:border sm:border-[#E1E7F0] sm:px-8 sm:py-6 sm:shadow-sm">
+        <div className="px-1 sm:px-0">
+          <div className="grid grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-start gap-2 sm:grid-cols-[3rem_minmax(0,1fr)_3rem]">
+            <button
+              aria-label="Back to Job Finance"
+              className="flex h-10 w-10 items-center justify-center rounded-full border border-[#DCE4EF] text-xl leading-none text-[#1F2A44] transition hover:bg-[#F8FAFC] sm:h-11 sm:w-11 sm:text-2xl"
+              onClick={closeInvoiceWorkspace}
+              type="button"
+            >
+              ←
+            </button>
+            <div className="min-w-0 text-center">
+              <h2 className="break-words text-[clamp(1rem,4.3vw,1.25rem)] font-black leading-tight text-[#0B1A33] sm:text-2xl">
+                Invoice #{invoice.invoiceNumber.replace(/^INV-/, "")}
+              </h2>
+              <span className="mt-1 inline-flex rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-black text-emerald-700 sm:mt-2 sm:px-3 sm:py-1 sm:text-sm">
+                {formatServiceRequestSource(invoice.invoiceStatus)}
+              </span>
+              <button
+                className="mt-1 block w-full break-words text-xs font-semibold leading-5 text-[#657089] hover:text-[#0F6BFF] sm:mt-2 sm:text-base"
+                disabled={!sourceEstimate}
+                onClick={() => {
+                  if (sourceEstimate) {
+                    openEstimateFromList(sourceEstimate);
+                  }
+                }}
+                type="button"
+              >
+                From Estimate {sourceEstimate?.estimateNumber ?? "Unknown"}
+              </button>
+            </div>
+            <div className="relative flex justify-end">
+              <button
+                aria-label="More invoice actions"
+                className="flex h-10 w-10 items-center justify-center rounded-full border border-[#DCE4EF] text-[#1F2A44] transition hover:bg-[#F8FAFC] sm:h-11 sm:w-11"
+                onClick={() => setIsInvoiceMoreActionsOpen((current) => !current)}
+                type="button"
+              >
+                <FinanceHomeIcon className="h-5 w-5" name="more" />
+              </button>
+              {isInvoiceMoreActionsOpen ? (
+                <div className="absolute right-0 top-12 z-20 w-48 rounded-xl border border-[#E1E7F0] bg-white p-2 text-sm font-bold shadow-xl">
+                  {canVoidInvoice ? (
+                    <button
+                      className="block w-full rounded-lg px-3 py-2 text-left text-amber-800 hover:bg-amber-50 disabled:opacity-50"
+                      disabled={invoiceActionState.status === "saving"}
+                      onClick={() => {
+                        setIsInvoiceMoreActionsOpen(false);
+                        void updateInvoice(invoice, "void");
+                      }}
+                      type="button"
+                    >
+                      Void Invoice
+                    </button>
+                  ) : null}
+                  {canDeleteInvoice ? (
+                    <button
+                      className="block w-full rounded-lg px-3 py-2 text-left text-red-600 hover:bg-red-50 disabled:opacity-50"
+                      disabled={invoiceActionState.status === "saving"}
+                      onClick={() => {
+                        setIsInvoiceMoreActionsOpen(false);
+                        void deleteInvoice(invoice);
+                      }}
+                      type="button"
+                    >
+                      Delete Invoice
+                    </button>
+                  ) : null}
+                  {!canVoidInvoice && !canDeleteInvoice ? (
+                    <p className="px-3 py-2 text-[#657089]">No actions available</p>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="mt-3 border-b border-[#D7DEE8] sm:mt-5">
+            <div className="grid grid-cols-5 text-center text-xs font-black text-[#52627A] sm:flex sm:justify-center sm:gap-12 sm:text-base">
+              {tabs.map((tab) => (
+                <button
+                  className={`min-w-0 border-b-4 px-1 pb-2 transition sm:px-0 sm:pb-3 ${
+                    invoiceWorkspaceTab === tab.id
+                      ? "border-[#0F6BFF] text-[#0F6BFF]"
+                      : "border-transparent hover:text-[#0F6BFF]"
+                  }`}
+                  key={tab.id}
+                  onClick={() => setInvoiceWorkspaceTab(tab.id)}
+                  type="button"
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 divide-x divide-[#D7DEE8] py-3 sm:py-5">
+            <div className="min-w-0 pr-2 sm:pr-3">
+              <p className="text-[0.75rem] font-semibold leading-4 text-[#657089] sm:text-sm">Total</p>
+              <p className="mt-1 whitespace-nowrap break-keep text-[clamp(1.05rem,4.7vw,1.25rem)] font-bold leading-tight text-[#0B1228] tabular-nums sm:mt-2 sm:text-3xl">
                 {formatServiceRequestMoney(invoice.total)}
               </p>
+            </div>
+            <div className="min-w-0 px-2 sm:px-3">
+              <p className="text-[0.75rem] font-semibold leading-4 text-[#657089] sm:text-sm">Paid</p>
+              <p className="mt-1 whitespace-nowrap break-keep text-[clamp(1.05rem,4.7vw,1.25rem)] font-bold leading-tight text-emerald-700 tabular-nums sm:mt-2 sm:text-3xl">
+                {formatServiceRequestMoney(allocatedPaid)}
+              </p>
+            </div>
+            <div className="min-w-0 pl-2 sm:pl-3">
+              <p className="text-[0.75rem] font-semibold leading-4 text-[#657089] sm:text-sm">Balance Due</p>
+              <p className="mt-1 whitespace-nowrap break-keep text-[clamp(1.1rem,5vw,1.375rem)] font-bold leading-tight text-[#0F6BFF] tabular-nums sm:mt-2 sm:text-3xl">
+                {formatServiceRequestMoney(balanceDue)}
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-6">
+            {showItems ? renderItems() : null}
+            {showPayments ? renderPayments() : null}
+            {showDetails ? renderDetails() : null}
+            {invoiceWorkspaceTab === "history" ? (
+              <section className="border-t border-[#D7DEE8] pt-5">
+                <h3 className="text-lg font-black text-[#0B1228]">History</h3>
+                <div className="mt-3 divide-y divide-[#E1E7F0] text-sm">
+                  <div className="py-3">
+                    <p className="font-bold text-[#0B1228]">Invoice created</p>
+                    <p className="mt-1 text-[#52627A]">
+                      {formatServiceRequestDate(invoice.createdAt)}
+                    </p>
+                  </div>
+                  {invoice.sentAt ? (
+                    <div className="py-3">
+                      <p className="font-bold text-[#0B1228]">Invoice sent</p>
+                      <p className="mt-1 text-[#52627A]">
+                        {formatServiceRequestDate(invoice.sentAt)}
+                      </p>
+                    </div>
+                  ) : null}
+                  {invoice.paidAt ? (
+                    <div className="py-3">
+                      <p className="font-bold text-[#0B1228]">Invoice paid</p>
+                      <p className="mt-1 text-[#52627A]">
+                        {formatServiceRequestDate(invoice.paidAt)}
+                      </p>
+                    </div>
+                  ) : null}
+                  {invoice.voidedAt ? (
+                    <div className="py-3">
+                      <p className="font-bold text-[#0B1228]">Invoice voided</p>
+                      <p className="mt-1 text-[#52627A]">
+                        {formatServiceRequestDate(invoice.voidedAt)}
+                      </p>
+                    </div>
+                  ) : null}
+                </div>
+              </section>
+            ) : null}
+          </div>
+        </div>
+
+        {invoiceActionState.message ? (
+          <p
+            className={`mt-4 px-1 text-sm font-semibold ${
+              invoiceActionState.status === "error"
+                ? "text-amber-800"
+                : "text-emerald-700"
+            }`}
+          >
+            {invoiceActionState.message}
+          </p>
+        ) : null}
+
+        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-[#E1E7F0] bg-white/95 px-3 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(15,23,42,0.08)] backdrop-blur sm:absolute sm:rounded-b-2xl sm:px-4 sm:py-3 sm:pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
+          <div className="mx-auto grid max-w-5xl grid-cols-[0.82fr_0.9fr_1.28fr] gap-2 sm:grid-cols-3 sm:gap-3">
+            <button
+              className="inline-flex h-11 min-w-0 items-center justify-center rounded-xl border border-[#D7DEE8] px-2 text-xs font-bold text-[#0B1228] transition hover:bg-[#F8FAFC] sm:h-12 sm:text-sm"
+              onClick={() =>
+                setInvoiceActionState({
+                  status: "error",
+                  message: "Invoice preview is not available yet.",
+                })
+              }
+              type="button"
+            >
+              <span className="hidden sm:inline">Preview Invoice</span>
+              <span className="sm:hidden">Preview</span>
+            </button>
+            <button
+              className="inline-flex h-11 min-w-0 items-center justify-center rounded-xl border border-[#D7DEE8] px-2 text-xs font-bold text-[#0B1228] transition hover:bg-[#F8FAFC] disabled:cursor-not-allowed disabled:opacity-50 sm:h-12 sm:text-sm"
+              disabled={!canSendInvoice || invoiceActionState.status === "saving"}
+              onClick={() => void updateInvoice(invoice, "send")}
+              type="button"
+            >
+              <span className="hidden sm:inline">Send Invoice</span>
+              <span className="sm:hidden">Send</span>
+            </button>
+            <button
+              className="inline-flex h-11 min-w-0 items-center justify-center rounded-xl bg-[#0F6BFF] px-2 text-[0.72rem] font-bold text-white shadow-sm transition hover:bg-[#0959D9] disabled:cursor-not-allowed disabled:opacity-50 sm:h-12 sm:text-sm"
+              disabled={!canCollectPayment}
+              onClick={() => {
+                if (paymentTarget) {
+                  openPaymentWorkflow(paymentTarget);
+                }
+              }}
+              type="button"
+            >
+              <span className="whitespace-nowrap">Collect Payment</span>
+            </button>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  function renderPaymentHistoryItem(entry: (typeof paymentHistory)[number]) {
+    const isExpanded = expandedPaymentHistoryId === entry.payment.id;
+    const targetLabel =
+      entry.invoiceTarget?.invoiceNumber ??
+      entry.estimateTarget?.estimateNumber ??
+      entry.allocation?.allocationSource ??
+      "Payment";
+    const targetType = entry.invoiceTarget ? "Invoice" : entry.estimateTarget ? "Estimate" : "Job";
+    const reference =
+      entry.payment.referenceCode ??
+      entry.payment.confirmationCode ??
+      entry.payment.providerPaymentId ??
+      null;
+    const paidAt = entry.payment.paidAt ?? entry.payment.paymentDate ?? entry.payment.createdAt;
+    const providerIdentifier =
+      entry.payment.providerPaymentId ??
+      entry.payment.confirmationCode ??
+      entry.payment.referenceCode ??
+      null;
+
+    return (
+      <article
+        className="border-b border-[#E5E7EB] bg-transparent last:border-b-0"
+        key={entry.payment.id}
+      >
+        <button
+          className="grid min-h-16 w-full grid-cols-[2rem_1fr_auto_1rem] items-center gap-2 py-2.5 text-left transition hover:bg-[#F8FAFC] sm:grid-cols-[2.25rem_1fr_auto_1rem]"
+          onClick={() =>
+            setExpandedPaymentHistoryId((current) =>
+              current === entry.payment.id ? null : entry.payment.id,
+            )
+          }
+          type="button"
+        >
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-xs font-black text-emerald-700 sm:h-9 sm:w-9">
+            {entry.payment.paymentMethod === "check"
+              ? "Ck"
+              : entry.payment.paymentMethod === "zelle"
+                ? "Z"
+                : entry.payment.paymentMethod === "venmo"
+                  ? "V"
+                  : "$"}
+          </span>
+          <span className="min-w-0">
+            <span className="block truncate text-sm font-black leading-5 text-[#0F172A]">
+              {getManualPaymentMethodLabel(entry.payment.paymentMethod)} Payment
+            </span>
+            <span className="mt-0.5 block truncate text-xs font-bold text-[#64748B]">
+              {formatServiceRequestDate(paidAt)}
+            </span>
+          </span>
+          <span className="text-right">
+            <span className="block whitespace-nowrap text-sm font-black text-emerald-700 sm:text-base">
+              +{formatServiceRequestMoney(entry.payment.amount)}
+            </span>
+            <span className="mt-0.5 block text-[0.65rem] font-black uppercase tracking-[0.12em] text-[#64748B]">
+              {formatServiceRequestSource(entry.payment.paymentStatus)}
+            </span>
+          </span>
+          <span className="text-[#64748B]">
+            <FinanceChevron open={isExpanded} />
+          </span>
+        </button>
+        {isExpanded ? (
+          <div className="border-t border-[#EEF2F7] bg-transparent pb-3 pl-10 pr-1 text-xs leading-5 text-[#475569] sm:pl-11">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <p>
+                <span className="font-black text-[#0F172A]">Linked to: </span>
+                {targetType} {targetLabel}
+              </p>
+              <p>
+                <span className="font-black text-[#0F172A]">Full time: </span>
+                {formatServiceRequestDate(paidAt)}
+              </p>
+              <p>
+                <span className="font-black text-[#0F172A]">Status: </span>
+                {formatServiceRequestSource(entry.payment.paymentStatus)}
+              </p>
+              <p>
+                <span className="font-black text-[#0F172A]">Recorded by: </span>
+                {entry.payment.recordedByProfileId ?? "Not recorded"}
+              </p>
+              {reference ? (
+                <p>
+                  <span className="font-black text-[#0F172A]">Reference: </span>
+                  {reference}
+                </p>
+              ) : null}
+              {providerIdentifier ? (
+                <p className="break-all">
+                  <span className="font-black text-[#0F172A]">Provider ID: </span>
+                  {providerIdentifier}
+                </p>
+              ) : null}
+              {entry.payment.description ? (
+                <p className="sm:col-span-2">
+                  <span className="font-black text-[#0F172A]">Internal note: </span>
+                  {entry.payment.description}
+                </p>
+              ) : null}
+              {entry.allocation ? (
+                <p className="sm:col-span-2">
+                  <span className="font-black text-[#0F172A]">Allocation: </span>
+                  {formatServiceRequestMoney(entry.allocation.allocationAmount)} ·{" "}
+                  {formatServiceRequestSource(entry.allocation.allocationSource)}
+                </p>
+              ) : null}
             </div>
           </div>
         ) : null}
@@ -10963,12 +12322,25 @@ export function ServiceRequestDetail({
             initialEstimate={financeEstimateMode === "saved" ? manualEstimate : null}
             isCreatingInvoice={invoiceActionState.status === "saving"}
             key={`${financeEstimateMode}:${manualEstimateId ?? "new"}`}
+            depositPaid={
+              manualEstimate
+                ? centsToMoney(estimateAllocatedCents.get(manualEstimate.id) ?? 0)
+                : 0
+            }
             customerHref={estimateCustomerProfileHref}
             linkedInvoiceNumber={
               manualEstimate ? invoicesByEstimateId.get(manualEstimate.id)?.invoiceNumber ?? null : null
             }
             onClose={closeManualEstimateEditor}
             onCreateInvoice={(estimate) => createInvoiceFromEstimate(estimate)}
+            onCollectPayment={(estimate) => {
+              const target = manualPaymentTargets.find(
+                (paymentTarget) =>
+                  paymentTarget.type === "estimate" && paymentTarget.id === estimate.id,
+              );
+
+              openPaymentWorkflow(target);
+            }}
             onSaved={loadEstimates}
             onSwitchEstimate={(estimate) =>
               openSavedManualEstimateEditor(estimate, { history: "replace" })
@@ -10985,26 +12357,28 @@ export function ServiceRequestDetail({
             request={state.request}
             sendingEstimateId={sendingEstimateId}
           />
+        ) : viewingInvoice ? (
+          renderInvoiceWorkspace(viewingInvoice)
         ) : (
-      <section className="mt-4 bg-[#F8FAFE] px-3 pb-6 pt-4 sm:rounded-[2rem] sm:px-5 sm:pt-5">
-        <div className="grid grid-cols-3 gap-2 sm:gap-3">
+      <section className="mt-4 bg-transparent px-0 pb-5 pt-2">
+        <div className="grid grid-cols-3 border-y border-[#E3E8F0]">
           {[
             {
               label: "Approved",
               value: formatServiceRequestMoney(financeApprovedTotal),
               detail:
-                financeApprovedEstimates.length > 0
-                  ? `${financeApprovedEstimates.length} approved`
-                  : "No approved estimates",
+                financePayableEstimates.length + invoicesState.invoices.length > 0
+                  ? "Live obligation"
+                  : "No approved work",
               valueTone: "text-emerald-700",
             },
             {
               label: "Paid",
               value: formatServiceRequestMoney(financePaidTotal),
               detail:
-                financePaidInvoices.length > 0
-                  ? `${financePaidInvoices.length} payment${
-                      financePaidInvoices.length === 1 ? "" : "s"
+                paymentHistory.length > 0
+                  ? `${paymentHistory.length} payment${
+                      paymentHistory.length === 1 ? "" : "s"
                     }`
                   : "No payments",
               valueTone: "text-[#0F6BFF]",
@@ -11013,36 +12387,34 @@ export function ServiceRequestDetail({
               label: "Balance Due",
               value: formatServiceRequestMoney(financeBalanceDueTotal),
               detail:
-                financeOpenInvoices.length > 0
-                  ? `${financeOpenInvoices.length} open invoice${
-                      financeOpenInvoices.length === 1 ? "" : "s"
-                    }`
+                financeBalanceDueTotal > 0
+                  ? "Collectable balance"
                   : "No open invoices",
               valueTone: "text-orange-700",
             },
           ].map((card) => (
             <div
-              className="flex min-h-[92px] min-w-0 flex-col justify-start gap-2.5 rounded-[1rem] border border-[#DCE3EF] bg-white px-3 py-3.5 shadow-none sm:min-h-[100px] sm:rounded-[1.15rem] sm:px-4"
+              className="flex min-h-[70px] min-w-0 flex-col justify-start gap-1.5 border-r border-[#E3E8F0] px-2.5 py-2.5 last:border-r-0 sm:min-h-[76px] sm:px-3.5"
               key={card.label}
             >
-              <span className="block truncate text-[0.74rem] font-bold text-[#657089] sm:text-sm">
+              <span className="block truncate text-[0.68rem] font-bold text-[#657089] sm:text-xs">
                 {card.label}
               </span>
               <span
-                className={`block whitespace-nowrap text-[clamp(0.82rem,3.35vw,1.04rem)] font-black leading-[1.08] tracking-[-0.035em] sm:text-lg ${card.valueTone}`}
+                className={`block whitespace-nowrap text-[clamp(0.82rem,3.25vw,1rem)] font-black leading-[1.08] sm:text-lg ${card.valueTone}`}
               >
                 {card.value}
               </span>
-              <span className="block whitespace-nowrap text-[0.62rem] font-bold text-[#657089] sm:text-xs">
+              <span className="block truncate text-[0.6rem] font-bold text-[#657089] sm:text-xs">
                 {card.detail}
               </span>
             </div>
           ))}
         </div>
 
-        <div className="mt-5 space-y-0 border-y border-[#E3E8F0]">
+        <div className="mt-2 border-b border-[#E3E8F0]">
           <div className="border-b border-[#E3E8F0] bg-transparent last:border-b-0">
-            <div className="flex items-center justify-between gap-3 py-4 sm:py-4">
+            <div className="flex items-center justify-between gap-3 py-3.5 sm:py-4">
               <button
                 className="flex min-w-0 flex-1 items-center gap-3 text-left"
                 onClick={() => setIsFinanceEstimatesOpen((current) => !current)}
@@ -11079,19 +12451,19 @@ export function ServiceRequestDetail({
               </button>
             </div>
             {isFinanceEstimatesOpen ? (
-              <div className="border-t border-[#EEF2F7] px-4 py-2">
+              <div className="border-t border-[#EEF2F7] px-1.5 py-1.5 sm:px-2">
                 {estimatesState.status === "loading" ? (
                   <p className="text-sm font-semibold text-[#64748B]">
                     Loading estimates...
                   </p>
                 ) : null}
                 {estimatesState.status === "error" ? (
-                  <p className="rounded-2xl bg-amber-50 p-3 text-sm font-semibold text-amber-800">
+                  <p className="py-2 text-sm font-semibold text-amber-800">
                     {estimatesState.error}
                   </p>
                 ) : null}
                 {estimatesState.status === "ready" && financeEstimates.length === 0 ? (
-                  <p className="rounded-2xl bg-[#F8FAFC] p-4 text-sm font-semibold text-[#64748B]">
+                  <p className="py-2 text-sm font-semibold text-[#64748B]">
                     No estimates yet.
                   </p>
                 ) : null}
@@ -11102,7 +12474,7 @@ export function ServiceRequestDetail({
 
           <div className="border-b border-[#E3E8F0] bg-transparent last:border-b-0">
             <button
-              className="flex w-full items-center justify-between gap-3 py-4 text-left sm:py-4"
+              className="flex w-full items-center justify-between gap-3 py-3.5 text-left sm:py-4"
               onClick={() => setIsFinanceInvoiceOpen((current) => !current)}
               type="button"
             >
@@ -11133,21 +12505,21 @@ export function ServiceRequestDetail({
               </span>
             </button>
             {isFinanceInvoiceOpen ? (
-            <div className="border-t border-[#EEF2F7] p-4">
+            <div className="border-t border-[#EEF2F7] px-1.5 py-2.5 sm:px-2">
               {invoicesState.status === "loading" ? (
                 <p className="text-sm font-semibold text-[#64748B]">
                   Loading invoices...
                 </p>
               ) : null}
               {invoicesState.status === "error" ? (
-                <p className="rounded-2xl bg-amber-50 p-3 text-sm font-semibold text-amber-800">
+                <p className="py-2 text-sm font-semibold text-amber-800">
                   {invoicesState.error}
                 </p>
               ) : null}
               {financePrimaryInvoice ? (
-                renderInvoiceCard(financePrimaryInvoice)
+                renderInvoiceSummaryCard(financePrimaryInvoice)
               ) : invoicesState.status === "ready" ? (
-                <p className="rounded-2xl bg-[#F8FAFC] p-4 text-sm font-semibold text-[#64748B]">
+                <p className="py-2 text-sm font-semibold text-[#64748B]">
                   No invoice yet. Create one from an approved estimate.
                 </p>
               ) : null}
@@ -11157,7 +12529,7 @@ export function ServiceRequestDetail({
 
           <div className="border-b border-[#E3E8F0] bg-transparent last:border-b-0">
             <button
-              className="flex w-full items-center justify-between gap-3 py-4 text-left sm:py-4"
+              className="flex w-full items-center justify-between gap-3 py-3.5 text-left sm:py-4"
               onClick={() => setIsFinancePaymentsOpen((current) => !current)}
               type="button"
             >
@@ -11170,24 +12542,46 @@ export function ServiceRequestDetail({
                     Payments
                   </span>
                   <span className="mt-0.5 block truncate text-[0.82rem] font-semibold text-[#657089]">
-                    {financePaidInvoices.length > 0
-                      ? `${financePaidInvoices.length} recorded paid invoice${financePaidInvoices.length === 1 ? "" : "s"}`
+                    {paymentHistory.length > 0
+                      ? `${paymentHistory.length} recorded payment${paymentHistory.length === 1 ? "" : "s"}`
                       : "No payments yet"}
                   </span>
                 </span>
               </span>
-              <span className="shrink-0 text-[#0B1A33]">
+              <span className="flex shrink-0 items-center gap-3">
                 <FinanceChevron open={isFinancePaymentsOpen} />
               </span>
             </button>
             {isFinancePaymentsOpen ? (
-              <div className="border-t border-[#EEF2F7] p-4">
-                {financePaidInvoices.length > 0 ? (
-                  <div className="space-y-3">
-                    {financePaidInvoices.map(renderInvoiceCard)}
+              <div className="border-t border-[#EEF2F7] px-1.5 py-2.5 sm:px-2">
+                <div className="mb-1 flex items-center justify-between gap-3">
+                  <p className="text-sm font-black text-[#0F172A]">
+                    Payment History
+                  </p>
+                  <button
+                    className="rounded-full border border-[#D7E4FF] px-3 py-1.5 text-xs font-black text-[#0F6BFF] transition hover:bg-blue-50"
+                    onClick={() => openPaymentWorkflow()}
+                    type="button"
+                  >
+                    Collect Payment
+                  </button>
+                </div>
+                {paymentsState.status === "loading" ? (
+                  <p className="text-sm font-semibold text-[#64748B]">
+                    Loading payments...
+                  </p>
+                ) : null}
+                {paymentsState.status === "error" ? (
+                  <p className="rounded-2xl bg-amber-50 p-3 text-sm font-semibold text-amber-800">
+                    {paymentsState.error}
+                  </p>
+                ) : null}
+                {paymentHistory.length > 0 ? (
+                  <div>
+                    {paymentHistory.map(renderPaymentHistoryItem)}
                   </div>
                 ) : (
-                  <p className="rounded-2xl bg-[#F8FAFC] p-4 text-sm font-semibold text-[#64748B]">
+                  <p className="py-2 text-sm font-semibold text-[#64748B]">
                     No payments recorded yet.
                   </p>
                 )}
@@ -11197,7 +12591,7 @@ export function ServiceRequestDetail({
 
           <div className="border-b border-[#E3E8F0] bg-transparent last:border-b-0">
             <button
-              className="flex w-full items-center justify-between gap-3 py-4 text-left sm:py-4"
+              className="flex w-full items-center justify-between gap-3 py-3.5 text-left sm:py-4"
               onClick={() => setIsFinanceExpensesOpen((current) => !current)}
               type="button"
             >
@@ -11219,52 +12613,12 @@ export function ServiceRequestDetail({
               </span>
             </button>
             {isFinanceExpensesOpen ? (
-              <div className="border-t border-[#EEF2F7] p-4">
-                <p className="rounded-2xl bg-[#F8FAFC] p-4 text-sm font-semibold text-[#64748B]">
+              <div className="border-t border-[#EEF2F7] px-1.5 py-2.5 sm:px-2">
+                <p className="py-2 text-sm font-semibold text-[#64748B]">
                   No technician expenses yet.
                 </p>
               </div>
             ) : null}
-          </div>
-        </div>
-
-        <div className="mt-7 px-3 sm:px-7">
-          <div className="pt-3">
-            <h3 className="text-lg font-black text-[#0B1228]">Quick Actions</h3>
-            <div className="mt-3 grid grid-cols-4 gap-2.5">
-              <button
-                className="flex min-h-[46px] min-w-0 items-center justify-center gap-1.5 rounded-[0.9rem] bg-white px-1.5 py-2 text-center text-[0.68rem] font-black leading-4 text-[#0F5BFF] shadow-[0_7px_18px_rgba(15,23,42,0.045)] ring-1 ring-[#D7E4FF] transition hover:-translate-y-0.5 sm:min-h-[60px] sm:flex-col sm:gap-1.5 sm:text-xs"
-                onClick={() => setActiveJobTab("notes")}
-                type="button"
-              >
-                <FinanceHomeIcon className="h-6 w-6 shrink-0 sm:h-8 sm:w-8" name="note" />
-                <span className="min-w-0">Add Note</span>
-              </button>
-              <button
-                className="flex min-h-[46px] min-w-0 items-center justify-center gap-1.5 rounded-[0.9rem] bg-white px-1.5 py-2 text-center text-[0.68rem] font-black leading-4 text-[#0F5BFF] shadow-[0_7px_18px_rgba(15,23,42,0.045)] ring-1 ring-[#E7ECF5] transition hover:-translate-y-0.5 sm:min-h-[60px] sm:flex-col sm:gap-1.5 sm:text-xs"
-                onClick={openAttachmentCameraPicker}
-                type="button"
-              >
-                <FinanceHomeIcon className="h-6 w-6 shrink-0 sm:h-8 sm:w-8" name="photo" />
-                <span className="min-w-0">Add Photo</span>
-              </button>
-              <button
-                className="flex min-h-[46px] min-w-0 items-center justify-center gap-1.5 rounded-[0.9rem] bg-white px-1.5 py-2 text-center text-[0.68rem] font-black leading-4 text-[#0F5BFF] shadow-[0_7px_18px_rgba(15,23,42,0.045)] ring-1 ring-[#E7ECF5] transition hover:-translate-y-0.5 sm:min-h-[60px] sm:flex-col sm:gap-1.5 sm:text-xs"
-                onClick={openAttachmentGalleryPicker}
-                type="button"
-              >
-                <FinanceHomeIcon className="h-6 w-6 shrink-0 sm:h-8 sm:w-8" name="upload" />
-                <span className="min-w-0">Upload Document</span>
-              </button>
-              <button
-                className="flex min-h-[46px] min-w-0 items-center justify-center gap-1.5 rounded-[0.9rem] bg-white px-1.5 py-2 text-center text-[0.68rem] font-black leading-4 text-[#0F5BFF] shadow-[0_7px_18px_rgba(15,23,42,0.045)] ring-1 ring-[#E7ECF5] transition hover:-translate-y-0.5 sm:min-h-[60px] sm:flex-col sm:gap-1.5 sm:text-xs"
-                onClick={() => setActiveJobTab("photos")}
-                type="button"
-              >
-                <FinanceHomeIcon className="h-6 w-6 shrink-0 sm:h-8 sm:w-8" name="more" />
-                <span className="min-w-0">More</span>
-              </button>
-            </div>
           </div>
         </div>
 
@@ -13840,6 +15194,374 @@ export function ServiceRequestDetail({
               ) : null}
             </div>
           )}
+        </div>
+      ) : null}
+
+      {isManualPaymentOpen ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-hidden bg-[#0F172A]/55 backdrop-blur-sm sm:px-3 sm:py-4 sm:items-center">
+          <div className="flex h-[100dvh] w-full flex-col overflow-hidden rounded-none bg-white shadow-2xl sm:max-h-[92vh] sm:max-w-2xl sm:rounded-3xl">
+            <div className="flex shrink-0 items-center justify-between gap-4 border-b border-[#E5E7EB] px-4 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))] sm:items-start sm:border-b-0 sm:p-6 sm:pb-0">
+              <div>
+                <p className="hidden text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF] sm:block">
+                  Manual Payment
+                </p>
+                <h3 className="text-xl font-black text-[#0F172A] sm:mt-1 sm:text-2xl">
+                  Collect Payment
+                </h3>
+                <p className="mt-0.5 text-xs font-bold text-[#64748B] sm:hidden">
+                  {selectedManualPaymentTarget?.label ?? "Estimate / Invoice"}
+                </p>
+                <p className="mt-1 hidden text-sm font-semibold leading-6 text-[#64748B] sm:block">
+                  Record cash, check, or app payments against this job&apos;s Estimate or Invoice.
+                </p>
+              </div>
+              <button
+                aria-label="Close payment form"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[#E5E7EB] text-xl font-black text-[#64748B] transition hover:border-[#0F6BFF] hover:text-[#0F6BFF] sm:h-10 sm:w-10"
+                disabled={manualPaymentState.status === "saving"}
+                onClick={() => {
+                  setIsManualPaymentOpen(false);
+                  setManualPaymentState({ status: "idle", message: null });
+                }}
+                type="button"
+              >
+                x
+              </button>
+            </div>
+
+            {manualPaymentTargets.length === 0 || !manualPaymentDraft ? (
+              <div className="flex-1 overflow-y-auto px-4 py-4 sm:mt-5 sm:p-6 sm:pt-5">
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                <p className="text-sm font-black text-amber-900">
+                  No payable Estimate or Invoice is available.
+                </p>
+                <p className="mt-1 text-sm font-semibold leading-6 text-amber-800">
+                  Approve an Estimate or create an Invoice before recording a manual payment.
+                </p>
+                <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                  <button
+                    className="rounded-xl bg-[#0F6BFF] px-4 py-3 text-sm font-black text-white transition hover:bg-[#0057D9]"
+                    onClick={() => {
+                      setIsManualPaymentOpen(false);
+                      setManualPaymentState({ status: "idle", message: null });
+                      setIsFinanceEstimatesOpen(true);
+                      openNewManualEstimateEditor();
+                    }}
+                    type="button"
+                  >
+                    Create Estimate
+                  </button>
+                  <button
+                    className="rounded-xl border border-amber-300 bg-white px-4 py-3 text-sm font-black text-amber-900"
+                    onClick={() => {
+                      setIsManualPaymentOpen(false);
+                      setManualPaymentState({ status: "idle", message: null });
+                    }}
+                    type="button"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+              </div>
+            ) : (
+              <>
+              <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4 pb-[calc(6.75rem+env(safe-area-inset-bottom))] sm:mt-5 sm:space-y-5 sm:p-6 sm:pt-5 sm:pb-6">
+                {selectedManualPaymentTarget ? (
+                  <div className="rounded-2xl bg-blue-50/70 p-3 ring-1 ring-blue-100 sm:bg-gradient-to-br sm:from-blue-50 sm:to-[#F8FAFC] sm:p-4">
+                    <div className="flex items-center gap-2.5 sm:gap-3">
+                      <span className="hidden h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white text-[#0F6BFF] shadow-sm sm:flex">
+                        <FinanceHomeIcon className="h-6 w-6" name="invoice" />
+                      </span>
+                      <div className="grid min-w-0 flex-1 grid-cols-3 gap-2 text-center sm:block sm:text-left">
+                        <div>
+                          <p className="text-[0.65rem] font-black uppercase tracking-[0.12em] text-[#64748B] sm:text-sm sm:normal-case sm:tracking-normal sm:text-[#0F172A]">
+                            Total
+                          </p>
+                          <p className="mt-0.5 text-sm font-black text-[#0F172A] sm:hidden">
+                            {formatServiceRequestMoney(selectedManualPaymentTarget.total)}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[0.65rem] font-black uppercase tracking-[0.12em] text-[#64748B] sm:hidden">
+                            Paid
+                          </p>
+                          <p className="mt-0.5 text-sm font-black text-emerald-700 sm:hidden">
+                            {formatServiceRequestMoney(selectedManualPaymentTarget.paid)}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[0.65rem] font-black uppercase tracking-[0.12em] text-[#64748B] sm:hidden">
+                            Remaining
+                          </p>
+                          <p className="mt-0.5 text-sm font-black text-[#0F6BFF] sm:hidden">
+                            {formatServiceRequestMoney(selectedManualPaymentTarget.remaining)}
+                          </p>
+                        </div>
+                        <p className="mt-1 hidden text-xs font-bold leading-5 text-[#64748B] sm:block">
+                          Total {formatServiceRequestMoney(selectedManualPaymentTarget.total)}
+                          <span aria-hidden="true"> · </span>
+                          Paid {formatServiceRequestMoney(selectedManualPaymentTarget.paid)}
+                          <span aria-hidden="true"> · </span>
+                          Balance{" "}
+                          {formatServiceRequestMoney(selectedManualPaymentTarget.remaining)}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div>
+                  <label
+                    className="text-sm font-black text-[#0F172A]"
+                    htmlFor="manual-payment-amount"
+                  >
+                    Amount
+                  </label>
+                  <div className="mt-2 flex overflow-hidden rounded-xl border border-[#D7DEE8] bg-white focus-within:border-[#0F6BFF] focus-within:ring-4 focus-within:ring-blue-100 sm:max-w-sm">
+                    <span className="flex w-11 shrink-0 items-center justify-center border-r border-[#D7DEE8] bg-[#F8FAFC] text-base font-black text-[#334155] sm:w-12">
+                      $
+                    </span>
+                    <input
+                      className="min-w-0 flex-1 px-3 py-3 text-xl font-black text-[#0F172A] outline-none sm:text-lg"
+                      disabled={manualPaymentState.status === "saving"}
+                      id="manual-payment-amount"
+                      inputMode="decimal"
+                      onChange={(event) => {
+                        const nextAmount = event.currentTarget.value;
+                        setManualPaymentDraft((current) =>
+                          current ? { ...current, amount: nextAmount } : current,
+                        );
+                        setManualPaymentState({ status: "idle", message: null });
+                      }}
+                      placeholder="0.00"
+                      value={manualPaymentDraft.amount}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
+                    Payment method
+                  </p>
+                  <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-5">
+                    {(["cash", "check", "zelle", "venmo", "cash_app"] as const).map(
+                      (method) => {
+                        const methodIcon =
+                          method === "cash"
+                            ? "$"
+                            : method === "check"
+                              ? "Ck"
+                              : method === "zelle"
+                                ? "Z"
+                                : method === "venmo"
+                                  ? "V"
+                                  : "$";
+                        const iconClass =
+                          method === "zelle"
+                            ? "bg-violet-50 text-violet-700"
+                            : method === "venmo"
+                              ? "bg-blue-50 text-blue-700"
+                              : "bg-emerald-50 text-emerald-700";
+
+                        return (
+                        <button
+                          className={`flex min-h-[5rem] flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-2 text-xs font-black transition sm:min-h-20 sm:gap-2 sm:px-3 sm:py-3 sm:text-sm ${
+                            manualPaymentDraft.paymentMethod === method
+                              ? "border-[#0F6BFF] bg-blue-50 text-[#0F6BFF] shadow-[0_10px_24px_rgba(15,107,255,0.12)]"
+                              : "border-[#E5E7EB] bg-white text-[#334155] hover:border-blue-200"
+                          }`}
+                          disabled={manualPaymentState.status === "saving"}
+                          key={method}
+                          onClick={() => {
+                            setManualPaymentDraft((current) =>
+                              current ? { ...current, paymentMethod: method } : current,
+                            );
+                            setManualPaymentState({ status: "idle", message: null });
+                          }}
+                          type="button"
+                        >
+                          <span
+                            className={`flex h-7 w-7 items-center justify-center rounded-lg text-sm font-black sm:h-8 sm:w-8 sm:text-base ${iconClass}`}
+                          >
+                            {methodIcon}
+                          </span>
+                          {getManualPaymentMethodLabel(method)}
+                        </button>
+                        );
+                      },
+                    )}
+                  </div>
+                  <div className="mt-3 hidden space-y-2 sm:block">
+                    {["Card - Stripe", "Apple Pay / Google Pay"].map((method) => (
+                      <button
+                        className="flex w-full items-center justify-between rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3 text-sm font-black text-[#94A3B8]"
+                        disabled
+                        key={method}
+                        type="button"
+                      >
+                        <span>{method}</span>
+                        <span className="rounded-full bg-[#E2E8F0] px-3 py-1 text-[0.65rem] uppercase tracking-[0.12em] text-[#64748B]">
+                          Coming Soon
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <p className="text-sm font-black text-[#0F172A]">Apply payment to</p>
+                  <div className="mt-2 overflow-hidden rounded-xl border border-[#D7DEE8] bg-white">
+                    {manualPaymentTargets.map((target) => {
+                      const isSelected =
+                        manualPaymentDraft.targetType === target.type &&
+                        manualPaymentDraft.targetId === target.id;
+
+                      return (
+                        <button
+                          className={`flex w-full items-start gap-3 border-b border-[#E5E7EB] px-3 py-3 text-left last:border-b-0 sm:px-4 ${
+                            isSelected ? "bg-blue-50/60" : "bg-white hover:bg-[#F8FAFC]"
+                          }`}
+                          disabled={manualPaymentState.status === "saving"}
+                          key={`${target.type}:${target.id}`}
+                          onClick={() => updateManualPaymentTarget(target)}
+                          type="button"
+                        >
+                          <span
+                            className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
+                              isSelected
+                                ? "border-[#0F6BFF] bg-[#0F6BFF]"
+                                : "border-[#94A3B8] bg-white"
+                            }`}
+                          >
+                            {isSelected ? (
+                              <span className="h-2 w-2 rounded-full bg-white" />
+                            ) : null}
+                          </span>
+                          <span className="min-w-0">
+                            <span className="block text-sm font-black text-[#0F172A]">
+                              {target.label}
+                            </span>
+                            <span className="mt-1 block text-xs font-semibold leading-5 text-[#64748B]">
+                              {target.detail} · {formatServiceRequestMoney(target.remaining)} available
+                            </span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-[#E5E7EB] bg-white sm:border-0">
+                  <button
+                    className="flex w-full items-center justify-between px-3 py-3 text-left text-sm font-black text-[#0F172A] sm:hidden"
+                    onClick={() =>
+                      setIsManualPaymentDetailsOpen((current) => !current)
+                    }
+                    type="button"
+                  >
+                    Additional Details
+                    <span className="text-lg text-[#64748B]">
+                      {isManualPaymentDetailsOpen ? "−" : "+"}
+                    </span>
+                  </button>
+                  <div
+                    className={`grid gap-4 px-3 pb-3 sm:grid sm:px-0 sm:pb-0 ${
+                      isManualPaymentDetailsOpen ? "grid" : "hidden"
+                    }`}
+                  >
+                    <div>
+                      <label
+                        className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]"
+                        htmlFor="manual-payment-reference"
+                      >
+                        Reference
+                      </label>
+                      <input
+                        className="mt-2 w-full rounded-xl border border-[#D7DEE8] bg-white px-3 py-3 text-sm font-bold text-[#0F172A] outline-none transition focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
+                        disabled={manualPaymentState.status === "saving"}
+                        id="manual-payment-reference"
+                        onChange={(event) => {
+                          const nextReferenceCode = event.currentTarget.value;
+                          setManualPaymentDraft((current) =>
+                            current
+                              ? { ...current, referenceCode: nextReferenceCode }
+                              : current,
+                          );
+                          setManualPaymentState({ status: "idle", message: null });
+                        }}
+                        placeholder={
+                          manualPaymentDraft.paymentMethod === "check"
+                            ? "Check number"
+                            : "Confirmation code"
+                        }
+                        value={manualPaymentDraft.referenceCode}
+                      />
+                    </div>
+
+                    <div>
+                      <label
+                        className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]"
+                        htmlFor="manual-payment-note"
+                      >
+                        Internal note
+                      </label>
+                      <textarea
+                        className="mt-2 min-h-24 w-full rounded-xl border border-[#D7DEE8] bg-white px-3 py-3 text-sm font-semibold leading-6 text-[#0F172A] outline-none transition focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
+                        disabled={manualPaymentState.status === "saving"}
+                        id="manual-payment-note"
+                        onChange={(event) => {
+                          const nextNote = event.currentTarget.value;
+                          setManualPaymentDraft((current) =>
+                            current ? { ...current, note: nextNote } : current,
+                          );
+                          setManualPaymentState({ status: "idle", message: null });
+                        }}
+                        placeholder="Optional note for the payment record"
+                        value={manualPaymentDraft.note}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {manualPaymentState.message ? (
+                  <p
+                    className={`rounded-xl border px-3 py-2 text-sm font-bold ${
+                      manualPaymentState.status === "error"
+                        ? "border-red-200 bg-red-50 text-red-700"
+                        : manualPaymentState.status === "success"
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                          : "border-blue-200 bg-blue-50 text-[#0F6BFF]"
+                    }`}
+                  >
+                    {manualPaymentState.message}
+                  </p>
+                ) : null}
+              </div>
+                <div className="grid shrink-0 grid-cols-2 gap-2 border-t border-[#E5E7EB] bg-white px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 sm:border-t-0 sm:px-6 sm:pb-6">
+                  <button
+                    className="rounded-xl border border-[#E5E7EB] px-4 py-3 text-sm font-black text-[#0F172A] disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={manualPaymentState.status === "saving"}
+                    onClick={() => {
+                      setIsManualPaymentOpen(false);
+                      setManualPaymentState({ status: "idle", message: null });
+                    }}
+                    type="button"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="rounded-xl bg-[#0F6BFF] px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={manualPaymentState.status === "saving"}
+                    onClick={() => void saveManualPayment()}
+                    type="button"
+                  >
+                    {manualPaymentState.status === "saving" ? "Saving..." : "Save Payment"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       ) : null}
 

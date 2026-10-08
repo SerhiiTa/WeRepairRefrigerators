@@ -1059,6 +1059,11 @@ export type Database = {
           external_payment_id: string | null;
           external_import_key: string | null;
           payment_status:
+            | "pending"
+            | "processing"
+            | "succeeded"
+            | "failed"
+            | "canceled"
             | "paid"
             | "refunded"
             | "partially_refunded"
@@ -1077,6 +1082,11 @@ export type Database = {
           card_last4: string | null;
           raw_document: string | null;
           description: string | null;
+          provider?: string | null;
+          provider_payment_id?: string | null;
+          provider_event_id?: string | null;
+          recorded_by_profile_id?: string | null;
+          payment_metadata?: Json;
           imported_at: string | null;
           import_metadata: Json;
           created_at: string;
@@ -1084,6 +1094,35 @@ export type Database = {
         };
         Insert: Partial<Database["public"]["Tables"]["service_request_payments"]["Row"]>;
         Update: Partial<Database["public"]["Tables"]["service_request_payments"]["Row"]>;
+        Relationships: [];
+      };
+      service_request_payment_allocations: {
+        Row: {
+          id: string;
+          company_id: string;
+          service_request_id: string;
+          payment_id: string;
+          estimate_id: string | null;
+          invoice_id: string | null;
+          carried_from_estimate_id: string | null;
+          allocation_amount: number;
+          allocation_status: "active" | "void";
+          allocation_source:
+            | "manual"
+            | "payment_request"
+            | "estimate_deposit"
+            | "estimate_deposit_carry_forward"
+            | "provider_webhook"
+            | "import"
+            | "system";
+          created_by_profile_id: string | null;
+          carried_forward_at: string | null;
+          allocation_metadata: Json;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Partial<Database["public"]["Tables"]["service_request_payment_allocations"]["Row"]>;
+        Update: Partial<Database["public"]["Tables"]["service_request_payment_allocations"]["Row"]>;
         Relationships: [];
       };
       service_request_financial_snapshots: {
@@ -1585,6 +1624,24 @@ export type Database = {
         };
         Returns: Json;
       };
+      get_service_request_estimate_financial_summary_rpc: {
+        Args: {
+          p_estimate_id: string;
+        };
+        Returns: Json;
+      };
+      get_service_request_invoice_financial_summary_rpc: {
+        Args: {
+          p_invoice_id: string;
+        };
+        Returns: Json;
+      };
+      service_request_payment_principal_amount: {
+        Args: {
+          p_payment_id: string;
+        };
+        Returns: number;
+      };
       create_service_request_with_customer_rpc: {
         Args: {
           p_customer_first_name: string;
@@ -1926,6 +1983,10 @@ export type ServiceRequestInvoiceItemRow =
   PublicSchema["Tables"]["service_request_invoice_items"]["Row"];
 export type ServiceRequestInvoiceRow =
   PublicSchema["Tables"]["service_request_invoices"]["Row"];
+export type ServiceRequestPaymentRow =
+  PublicSchema["Tables"]["service_request_payments"]["Row"];
+export type ServiceRequestPaymentAllocationRow =
+  PublicSchema["Tables"]["service_request_payment_allocations"]["Row"];
 export type ServiceRequestNoteRow =
   PublicSchema["Tables"]["service_request_notes"]["Row"];
 export type ServiceRequestPhotoRow =

@@ -14,6 +14,8 @@ import type {
   ServiceRequestInvoiceItemRow,
   ServiceRequestInvoiceRow,
   ServiceRequestNoteRow,
+  ServiceRequestPaymentAllocationRow,
+  ServiceRequestPaymentRow,
   ServiceRequestPhotoRow,
   ServiceRequestRow,
 } from "@/lib/supabase/types";
@@ -249,9 +251,70 @@ export type DashboardServiceRequestInvoice = {
   amountDue: number | null;
   discountAmount: number | null;
   importMetadata: unknown;
+  financialSummary: DashboardInvoiceFinancialSummary | null;
   createdAt: string;
   updatedAt: string;
   items: DashboardServiceRequestInvoiceItem[];
+};
+
+export type DashboardServiceRequestPayment = {
+  id: string;
+  companyId: string | null;
+  serviceRequestId: string;
+  invoiceId: string | null;
+  sourceSystem: "native" | "workiz";
+  paymentStatus: ServiceRequestPaymentRow["payment_status"];
+  paymentType: string | null;
+  paymentMethod: string | null;
+  amount: number;
+  serviceFee: number | null;
+  netAmount: number | null;
+  tipAmount: number | null;
+  paymentDate: string | null;
+  paidAt: string | null;
+  confirmationCode: string | null;
+  referenceCode: string | null;
+  description: string | null;
+  provider: string | null;
+  providerPaymentId: string | null;
+  recordedByProfileId: string | null;
+  paymentMetadata: unknown;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DashboardServiceRequestPaymentAllocation = {
+  id: string;
+  companyId: string;
+  serviceRequestId: string;
+  paymentId: string;
+  estimateId: string | null;
+  invoiceId: string | null;
+  carriedFromEstimateId: string | null;
+  allocationAmount: number;
+  allocationStatus: ServiceRequestPaymentAllocationRow["allocation_status"];
+  allocationSource: ServiceRequestPaymentAllocationRow["allocation_source"];
+  createdByProfileId: string | null;
+  carriedForwardAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DashboardEstimateFinancialSummary = {
+  estimateId: string;
+  serviceRequestId: string;
+  estimateTotal: number;
+  depositPaid: number;
+  remainingEstimatedAmount: number;
+};
+
+export type DashboardInvoiceFinancialSummary = {
+  invoiceId: string;
+  serviceRequestId: string;
+  invoiceTotal: number;
+  allocatedPaid: number;
+  balanceDue: number;
+  financialState: "unpaid" | "partially_paid" | "paid";
 };
 
 export type DashboardServiceRequestAppointment = {
@@ -502,6 +565,56 @@ export const SERVICE_REQUEST_INVOICE_SELECT_COLUMNS = [
   "created_at",
   "updated_at",
   "service_request_invoice_items(id,invoice_id,source_estimate_item_id,item_title,quantity,unit_price,line_total,notes,created_at)",
+].join(",");
+
+export const SERVICE_REQUEST_PAYMENT_SELECT_COLUMNS = [
+  "id",
+  "company_id",
+  "service_request_id",
+  "invoice_id",
+  "source_system",
+  "external_payment_id",
+  "external_import_key",
+  "payment_status",
+  "payment_type",
+  "payment_method",
+  "amount",
+  "service_fee",
+  "net_amount",
+  "tip_amount",
+  "payment_date",
+  "paid_at",
+  "confirmation_code",
+  "reference_code",
+  "card_last4",
+  "provider",
+  "provider_payment_id",
+  "provider_event_id",
+  "recorded_by_profile_id",
+  "description",
+  "imported_at",
+  "import_metadata",
+  "payment_metadata",
+  "created_at",
+  "updated_at",
+].join(",");
+
+export const SERVICE_REQUEST_PAYMENT_ALLOCATION_SELECT_COLUMNS = [
+  "id",
+  "company_id",
+  "service_request_id",
+  "payment_id",
+  "estimate_id",
+  "invoice_id",
+  "carried_from_estimate_id",
+  "allocation_amount",
+  "allocation_status",
+  "allocation_source",
+  "created_by_profile_id",
+  "carried_forward_at",
+  "allocation_metadata",
+  "created_at",
+  "updated_at",
 ].join(",");
 
 export const SERVICE_REQUEST_PHOTO_SELECT_COLUMNS = [
@@ -804,11 +917,63 @@ export function mapServiceRequestInvoiceRow(
     amountDue: row.amount_due ?? null,
     discountAmount: row.discount_amount ?? null,
     importMetadata: row.import_metadata ?? null,
+    financialSummary: null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     items: (row.service_request_invoice_items ?? []).map(
       mapServiceRequestInvoiceItemRow,
     ),
+  };
+}
+
+export function mapServiceRequestPaymentRow(
+  row: ServiceRequestPaymentRow,
+): DashboardServiceRequestPayment {
+  return {
+    id: row.id,
+    companyId: row.company_id,
+    serviceRequestId: row.service_request_id,
+    invoiceId: row.invoice_id,
+    sourceSystem: row.source_system ?? "native",
+    paymentStatus: row.payment_status,
+    paymentType: row.payment_type,
+    paymentMethod: row.payment_method,
+    amount: Number(row.amount),
+    serviceFee: row.service_fee === null ? null : Number(row.service_fee),
+    netAmount: row.net_amount === null ? null : Number(row.net_amount),
+    tipAmount: row.tip_amount === null ? null : Number(row.tip_amount),
+    paymentDate: row.payment_date,
+    paidAt: row.paid_at,
+    confirmationCode: row.confirmation_code,
+    referenceCode: row.reference_code,
+    description: row.description,
+    provider: row.provider ?? null,
+    providerPaymentId: row.provider_payment_id ?? null,
+    recordedByProfileId: row.recorded_by_profile_id ?? null,
+    paymentMetadata: row.payment_metadata ?? null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function mapServiceRequestPaymentAllocationRow(
+  row: ServiceRequestPaymentAllocationRow,
+): DashboardServiceRequestPaymentAllocation {
+  return {
+    id: row.id,
+    companyId: row.company_id,
+    serviceRequestId: row.service_request_id,
+    paymentId: row.payment_id,
+    estimateId: row.estimate_id,
+    invoiceId: row.invoice_id,
+    carriedFromEstimateId: row.carried_from_estimate_id,
+    allocationAmount: Number(row.allocation_amount),
+    allocationStatus: row.allocation_status,
+    allocationSource: row.allocation_source,
+    createdByProfileId: row.created_by_profile_id,
+    carriedForwardAt: row.carried_forward_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 

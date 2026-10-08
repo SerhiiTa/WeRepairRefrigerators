@@ -87,7 +87,10 @@ type ManualEstimateEditorProps = {
   onApproveForCustomer: (estimate: {
     id: string;
     estimateNumber: string;
-  }) => Promise<boolean> | boolean;
+  }) =>
+    | Promise<{ ok: true } | { ok: false; message: string }>
+    | { ok: true }
+    | { ok: false; message: string };
   onSendEstimate: (estimate: {
     id: string;
     estimateNumber: string;
@@ -97,11 +100,21 @@ type ManualEstimateEditorProps = {
     estimateNumber: string;
   }) => Promise<boolean> | boolean;
   onCreateInvoice?: (estimate: DashboardServiceRequestEstimate) => Promise<void> | void;
+  onCollectPayment?: (estimate: DashboardServiceRequestEstimate) => void;
   customerHref?: string | null;
   linkedInvoiceNumber?: string | null;
+  depositPaid?: number;
   isCreatingInvoice?: boolean;
   sendingEstimateId: string | null;
 };
+
+type EstimateWorkspaceTab =
+  | "details"
+  | "items"
+  | "terms"
+  | "notes"
+  | "attachments"
+  | "history";
 
 type SaveState =
   | { status: "idle"; message: null }
@@ -250,6 +263,14 @@ function buildLineId() {
   }
 
   return `manual-line-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function isPersistedEstimateUuid(value: string | null): value is string {
+  return Boolean(
+    value?.match(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    ),
+  );
 }
 
 function formatCompactJobNumber(request: DashboardServiceRequest) {
@@ -566,8 +587,10 @@ export function ManualEstimateEditor({
   onSendEstimate,
   onDeleteEstimate,
   onCreateInvoice,
+  onCollectPayment,
   customerHref,
   linkedInvoiceNumber,
+  depositPaid = 0,
   isCreatingInvoice = false,
   sendingEstimateId,
 }: ManualEstimateEditorProps) {
@@ -617,8 +640,11 @@ export function ManualEstimateEditor({
   const [validationAttempted, setValidationAttempted] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isEstimateMenuOpen, setIsEstimateMenuOpen] = useState(false);
+  const [isAddItemMenuOpen, setIsAddItemMenuOpen] = useState(false);
   const [isApproveConfirmOpen, setIsApproveConfirmOpen] = useState(false);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
+  const [activeWorkspaceTab, setActiveWorkspaceTab] =
+    useState<EstimateWorkspaceTab>("items");
   const [deleteState, setDeleteState] = useState<DeleteState>({
     status: "idle",
     message: null,
@@ -842,10 +868,14 @@ export function ManualEstimateEditor({
     saveState.status !== "saving" &&
     sendingEstimateId === null &&
     !["declined", "void"].includes(estimateStatus);
+  const canEditFinancialFields =
+    estimateStatus === "unsaved" || estimateStatus === "draft";
   const canApproveForCustomer =
-    savedEstimateId !== null &&
+    isPersistedEstimateUuid(savedEstimateId) &&
     saveState.status !== "saving" &&
-    !["approved", "declined", "void"].includes(estimateStatus);
+    !["approved", "converted_to_invoice", "declined", "void"].includes(estimateStatus);
+  const canShowDraftActions =
+    canEditFinancialFields || estimateStatus === "sent" || estimateStatus === "presented";
   const canDeleteEstimate =
     savedEstimateId !== null &&
     estimateStatus === "draft" &&
@@ -893,6 +923,20 @@ export function ManualEstimateEditor({
     initialEstimate?.estimateStatus === "approved" &&
     !linkedInvoiceNumber &&
     Boolean(onCreateInvoice);
+  const canCollectPayment =
+    initialEstimate?.estimateStatus === "approved" &&
+    !linkedInvoiceNumber &&
+    Boolean(onCollectPayment);
+  const estimateTotalForDisplay = initialEstimate?.total ?? totals.total;
+  const remainingEstimateBalance = Math.max(0, estimateTotalForDisplay - depositPaid);
+  const workspaceTabs: Array<{ id: EstimateWorkspaceTab; label: string }> = [
+    { id: "details", label: "Details" },
+    { id: "items", label: "Items" },
+    { id: "terms", label: "Terms" },
+    { id: "notes", label: "Notes" },
+    { id: "attachments", label: "Attachments" },
+    { id: "history", label: "History" },
+  ];
   const editableSignature = useMemo(
     () =>
       JSON.stringify({
@@ -938,6 +982,10 @@ export function ManualEstimateEditor({
   }
 
   function openAddItem(type: ManualEstimateLineType = "part") {
+    if (!canEditFinancialFields) {
+      return;
+    }
+
     setItemDraft({
       mode: "add",
       lineId: null,
@@ -946,6 +994,10 @@ export function ManualEstimateEditor({
   }
 
   function addPriceBookItem(item: PriceBookSearchItem) {
+    if (!canEditFinancialFields) {
+      return;
+    }
+
     setLines((current) => [...current, createLineFromPriceBookItem(item)]);
     setPriceBookSearch("");
     setValidationAttempted(false);
@@ -953,6 +1005,10 @@ export function ManualEstimateEditor({
   }
 
   function openEditItem(line: ManualEstimateLine) {
+    if (!canEditFinancialFields) {
+      return;
+    }
+
     setOpenLineMenuId(null);
     setItemDraft({
       mode: "edit",
@@ -962,7 +1018,7 @@ export function ManualEstimateEditor({
   }
 
   function saveItemDraft() {
-    if (!itemDraft) {
+    if (!itemDraft || !canEditFinancialFields) {
       return;
     }
 
@@ -989,12 +1045,20 @@ export function ManualEstimateEditor({
   }
 
   function deleteLine(lineId: string) {
+    if (!canEditFinancialFields) {
+      return;
+    }
+
     setLines((current) => current.filter((line) => line.id !== lineId));
     setOpenLineMenuId(null);
     resetFeedback();
   }
 
   function copyLine(line: ManualEstimateLine) {
+    if (!canEditFinancialFields) {
+      return;
+    }
+
     setLines((current) => [
       ...current,
       {
@@ -1098,6 +1162,17 @@ export function ManualEstimateEditor({
     options: { source?: "autosave" | "navigation" | "manual" } = {},
   ): Promise<SaveResult> {
     const source = options.source ?? "manual";
+
+    if (!canEditFinancialFields) {
+      if (source !== "autosave") {
+        setSaveState({
+          status: "error",
+          message: "Approved estimates are read-only. Duplicate this estimate to make changes.",
+        });
+      }
+
+      return null;
+    }
 
     if (activeSavePromiseRef.current) {
       const activePromise = activeSavePromiseRef.current;
@@ -1278,7 +1353,12 @@ export function ManualEstimateEditor({
   }
 
   useEffect(() => {
-    if (!hasUnsavedChanges || saveErrors.length > 0 || saveState.status === "saving") {
+    if (
+      !canEditFinancialFields ||
+      !hasUnsavedChanges ||
+      saveErrors.length > 0 ||
+      saveState.status === "saving"
+    ) {
       return;
     }
 
@@ -1289,7 +1369,13 @@ export function ManualEstimateEditor({
     return () => window.clearTimeout(autosaveTimer);
     // saveDraft intentionally reads the latest render snapshot; editableSignature is the debounce key.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editableSignature, hasUnsavedChanges, saveErrors.length, saveState.status]);
+  }, [
+    canEditFinancialFields,
+    editableSignature,
+    hasUnsavedChanges,
+    saveErrors.length,
+    saveState.status,
+  ]);
 
   useEffect(() => {
     if (savedFeedbackTimerRef.current) {
@@ -1389,7 +1475,9 @@ export function ManualEstimateEditor({
     if (!savedEstimate || !canApproveForCustomer) {
       setSaveState({
         status: "error",
-        message: "Save this estimate before recording approval.",
+        message: isPersistedEstimateUuid(savedEstimateId)
+          ? "Save this estimate before recording approval."
+          : "This estimate needs a saved database record before it can be approved.",
       });
       setIsApproveConfirmOpen(false);
       return;
@@ -1400,16 +1488,16 @@ export function ManualEstimateEditor({
     setIsApproveConfirmOpen(false);
 
     try {
-      const approved = await onApproveForCustomer({
+      const approvalResult = await onApproveForCustomer({
         id: savedEstimate.id,
         estimateNumber: savedEstimate.estimateNumber,
       });
 
-      if (!approved) {
+      if (!approvalResult.ok) {
         setPendingAction(null);
         setSaveState({
           status: "error",
-          message: "Estimate could not be approved for the customer. Please try again.",
+          message: approvalResult.message,
         });
         return;
       }
@@ -1462,9 +1550,9 @@ export function ManualEstimateEditor({
   }
 
   return (
-    <section className="fixed inset-0 z-40 overflow-y-auto bg-white pb-[calc(5.75rem+env(safe-area-inset-bottom))] text-[#0B1228]">
-      <div className="sticky top-0 z-10 border-b border-[#E5E7EB] bg-white/95 px-3 py-2.5 backdrop-blur sm:static sm:border-b-0 sm:px-0 sm:pb-4">
-        <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 sm:px-6">
+    <section className="fixed inset-0 z-40 overflow-y-auto bg-white pb-[calc(7.5rem+env(safe-area-inset-bottom))] text-[#0B1228] lg:static lg:z-auto lg:overflow-visible lg:rounded-[2rem] lg:border lg:border-[#E5E7EB] lg:bg-white lg:pb-0 lg:shadow-[0_18px_48px_rgba(15,23,42,0.08)]">
+      <div className="sticky top-0 z-10 border-b border-[#E5E7EB] bg-white/95 px-3 py-2 backdrop-blur lg:static lg:rounded-t-[2rem] lg:px-6 lg:py-3">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3">
           <button
             aria-label="Back to Finance"
             className="flex h-10 w-10 items-center justify-center rounded-full text-[#0F172A] transition hover:bg-[#F1F5F9]"
@@ -1474,7 +1562,7 @@ export function ManualEstimateEditor({
             <EstimateIcon name="back" />
           </button>
           <div className="min-w-0 text-center">
-            <h2 className="truncate text-lg font-black tracking-[-0.02em] sm:text-2xl">
+            <h2 className="truncate text-lg font-black tracking-[-0.02em] sm:text-xl">
               {savedEstimateNumber ?? "New Estimate"}
             </h2>
             <span className="mt-1 inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-xs font-black text-[#0F6BFF]">
@@ -1498,6 +1586,17 @@ export function ManualEstimateEditor({
             {isEstimateMenuOpen ? (
               <div className="absolute right-0 z-30 mt-2 w-52 overflow-hidden rounded-2xl border border-[#E5E7EB] bg-white py-2 text-sm font-bold shadow-[0_18px_44px_rgba(15,23,42,0.18)]">
                 <button
+                  className="block w-full px-4 py-2.5 text-left text-[#0F172A] hover:bg-[#F8FAFC] disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={lines.length === 0}
+                  onClick={() => {
+                    setIsEstimateMenuOpen(false);
+                    setIsPreviewOpen(true);
+                  }}
+                  type="button"
+                >
+                  Preview Proposal
+                </button>
+                <button
                   className="block w-full px-4 py-2.5 text-left text-[#0F172A] hover:bg-[#F8FAFC]"
                   onClick={() => {
                     setIsEstimateMenuOpen(false);
@@ -1515,17 +1614,6 @@ export function ManualEstimateEditor({
                   type="button"
                 >
                   Duplicate
-                </button>
-                <button
-                  className="block w-full px-4 py-2.5 text-left text-[#0F172A] hover:bg-[#F8FAFC] disabled:cursor-not-allowed disabled:opacity-40"
-                  disabled={!canApproveForCustomer}
-                  onClick={() => {
-                    setIsEstimateMenuOpen(false);
-                    setIsApproveConfirmOpen(true);
-                  }}
-                  type="button"
-                >
-                  Approve for Customer
                 </button>
                 <button
                   className="block w-full px-4 py-2.5 text-left text-[#0F6BFF] hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-40"
@@ -1553,6 +1641,18 @@ export function ManualEstimateEditor({
                     {isCreatingInvoice ? "Creating Invoice..." : "Convert to Invoice"}
                   </button>
                 ) : null}
+                {canCollectPayment && initialEstimate ? (
+                  <button
+                    className="block w-full px-4 py-2.5 text-left text-[#0F6BFF] hover:bg-blue-50"
+                    onClick={() => {
+                      setIsEstimateMenuOpen(false);
+                      onCollectPayment?.(initialEstimate);
+                    }}
+                    type="button"
+                  >
+                    Collect Payment
+                  </button>
+                ) : null}
                 {linkedInvoiceNumber ? (
                   <div className="px-4 py-2.5 text-left text-xs font-black text-emerald-700">
                     Invoice {linkedInvoiceNumber}
@@ -1577,7 +1677,7 @@ export function ManualEstimateEditor({
           </div>
         </div>
         {estimates.length > 1 ? (
-          <div className="mx-auto mt-3 flex max-w-3xl gap-2 overflow-x-auto px-1 pb-1 sm:px-6">
+          <div className="mx-auto mt-3 flex max-w-6xl gap-2 overflow-x-auto px-1 pb-1">
             {estimates.map((estimate, index) => {
               const isActive = estimate.id === activeSwitcherEstimateId;
 
@@ -1604,70 +1704,119 @@ export function ManualEstimateEditor({
         ) : null}
       </div>
 
-      <div className="mx-auto max-w-3xl px-3 pt-3 sm:px-6 sm:pt-0">
-        <div className="grid gap-2">
-          {customerHref ? (
-            <Link
-              className="flex gap-3 rounded-2xl border border-[#E5E7EB] bg-white p-3 text-left transition hover:bg-[#F8FAFC]"
-              href={customerHref}
-              onClick={(event) => void openCustomerAfterSave(event, customerHref)}
-            >
-              <EstimateCustomerCardContent
-                address={address}
-                customerInitials={customerInitials}
-                customerName={request.customerName || "Customer"}
-                customerPhone={request.customerPhone}
-              />
-            </Link>
-          ) : (
-            <div className="flex gap-3 rounded-2xl border border-[#E5E7EB] bg-white p-3 text-left">
-              <EstimateCustomerCardContent
-                address={address}
-                customerInitials={customerInitials}
-                customerName={request.customerName || "Customer"}
-                customerPhone={request.customerPhone}
-              />
-            </div>
-          )}
-        </div>
-
-          <div className="rounded-2xl bg-[#F8FAFC] p-3">
-            <p className="text-sm font-black text-[#0F172A]">
-              {formatCompactJobNumber(request)}
-            </p>
-            <p className="mt-0.5 text-sm font-semibold text-[#475569]">
-              {[request.applianceType, request.issueDescription]
-                .filter(Boolean)
-                .join(" - ") || "Job details"}
-            </p>
-          </div>
-
-        <section className="mt-4">
-          <div className="flex items-center justify-between gap-3">
-            <h3 className="text-lg font-black">Items ({lines.length})</h3>
+        <div className="mx-auto mt-2 flex max-w-6xl gap-2 overflow-x-auto border-b border-[#E5E7EB] pb-0.5">
+          {workspaceTabs.map((tab) => (
             <button
-              className="inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-sm font-black text-[#0F6BFF] transition hover:bg-blue-50"
-              onClick={() => openAddItem("part")}
+              className={`shrink-0 border-b-2 px-3 py-2 text-sm font-black transition lg:px-4 ${
+                activeWorkspaceTab === tab.id
+                  ? "border-[#0F6BFF] text-[#0F6BFF]"
+                  : "border-transparent text-[#64748B] hover:text-[#0F172A]"
+              }`}
+              key={tab.id}
+              onClick={() => setActiveWorkspaceTab(tab.id)}
               type="button"
             >
-              <EstimateIcon className="h-4 w-4" name="plus" />
-              Custom Line Item
+              {tab.label}
             </button>
-          </div>
+          ))}
+        </div>
 
-          <div className="relative mt-3">
-            <label className="block text-xs font-black text-[#64748B]" htmlFor="price-book-search">
-              Search Price Book
-            </label>
-            <input
-              autoComplete="off"
-              className="mt-1 w-full rounded-xl border border-[#D7E4FF] bg-white px-3 py-2.5 text-sm font-bold text-[#0F172A] outline-none transition placeholder:text-[#94A3B8] focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
-              id="price-book-search"
-              onChange={(event) => setPriceBookSearch(event.target.value)}
-              placeholder="Search parts, labor, services, fees"
-              type="search"
-              value={priceBookSearch}
-            />
+      <div className="mx-auto max-w-6xl px-3 pt-4 lg:px-6 lg:pt-4">
+        {activeWorkspaceTab === "details" ? (
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+            <div className="grid gap-3">
+              {customerHref ? (
+                <Link
+                  className="flex gap-3 rounded-2xl border border-[#E5E7EB] bg-white p-4 text-left transition hover:bg-[#F8FAFC]"
+                  href={customerHref}
+                  onClick={(event) => void openCustomerAfterSave(event, customerHref)}
+                >
+                  <EstimateCustomerCardContent
+                    address={address}
+                    customerInitials={customerInitials}
+                    customerName={request.customerName || "Customer"}
+                    customerPhone={request.customerPhone}
+                  />
+                </Link>
+              ) : (
+                <div className="flex gap-3 rounded-2xl border border-[#E5E7EB] bg-white p-4 text-left">
+                  <EstimateCustomerCardContent
+                    address={address}
+                    customerInitials={customerInitials}
+                    customerName={request.customerName || "Customer"}
+                    customerPhone={request.customerPhone}
+                  />
+                </div>
+              )}
+              <div className="rounded-2xl bg-[#F8FAFC] p-4">
+                <p className="text-sm font-black text-[#0F172A]">
+                  {formatCompactJobNumber(request)}
+                </p>
+                <p className="mt-0.5 text-sm font-semibold text-[#475569]">
+                  {[request.applianceType, request.issueDescription]
+                    .filter(Boolean)
+                    .join(" - ") || "Job details"}
+                </p>
+              </div>
+            </div>
+            <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
+              <EditableTextSection
+                label="What we found"
+                onChange={(value) => {
+                  setWhatWeFound(value);
+                  resetFeedback();
+                }}
+                onDictate={() => null}
+                readOnly={!canEditFinancialFields}
+                value={whatWeFound}
+              />
+              <EditableTextSection
+                label="Repair solution"
+                onChange={(value) => {
+                  setRepairSolution(value);
+                  resetFeedback();
+                }}
+                readOnly={!canEditFinancialFields}
+                value={repairSolution}
+              />
+            </div>
+          </div>
+        ) : null}
+
+        {activeWorkspaceTab === "items" ? (
+          <>
+            <section className="relative rounded-2xl border border-[#E5E7EB] bg-white">
+              <div className="flex flex-col gap-3 border-b border-[#E5E7EB] p-4 lg:flex-row lg:items-end lg:justify-between">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="text-lg font-black">Items ({lines.length})</h3>
+                    {canEditFinancialFields ? (
+                    <div className="relative lg:hidden">
+                      <button
+                        className="inline-flex min-h-11 items-center gap-1.5 rounded-xl bg-[#0F6BFF] px-3 text-sm font-black text-white shadow-sm"
+                        onClick={() => setIsAddItemMenuOpen((current) => !current)}
+                        type="button"
+                      >
+                        <EstimateIcon className="h-4 w-4" name="plus" />
+                        Add Item
+                      </button>
+                    </div>
+                    ) : null}
+                  </div>
+                  {canEditFinancialFields ? (
+                  <div className="relative mt-3 max-w-3xl">
+                    <label className="block text-xs font-black text-[#64748B]" htmlFor="price-book-search">
+                      Search Price Book
+                    </label>
+                    <input
+                      autoComplete="off"
+                      className="mt-1 w-full rounded-xl border border-[#D7E4FF] bg-white px-3 py-2.5 text-sm font-bold text-[#0F172A] outline-none transition placeholder:text-[#94A3B8] focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
+                      id="price-book-search"
+                      onChange={(event) => setPriceBookSearch(event.target.value)}
+                      placeholder="Search parts, labor, services, fees"
+                      type="search"
+                      value={priceBookSearch}
+                    />
             {priceBookSearch.trim().length >= 2 ? (
               <div className="absolute left-0 right-0 z-20 mt-2 max-h-72 overflow-y-auto rounded-2xl border border-[#E5E7EB] bg-white shadow-[0_18px_44px_rgba(15,23,42,0.14)]">
                 {priceBookState.status === "loading" ? (
@@ -1711,27 +1860,75 @@ export function ManualEstimateEditor({
                 )}
               </div>
             ) : null}
+                  </div>
+                  ) : null}
+                </div>
+                {canEditFinancialFields ? (
+                <div className="relative hidden lg:block">
+                  <button
+                    className="inline-flex min-h-11 items-center gap-1.5 rounded-xl bg-[#0F6BFF] px-4 text-sm font-black text-white shadow-sm transition hover:bg-[#0958D9]"
+                    onClick={() => setIsAddItemMenuOpen((current) => !current)}
+                    type="button"
+                  >
+                    <EstimateIcon className="h-4 w-4" name="plus" />
+                    Add Item
+                  </button>
+                </div>
+                ) : null}
+                {canEditFinancialFields && isAddItemMenuOpen ? (
+                  <div className="absolute right-4 top-24 z-30 w-52 overflow-hidden rounded-2xl border border-[#E5E7EB] bg-white py-2 text-sm font-bold shadow-[0_18px_44px_rgba(15,23,42,0.18)] lg:right-10 lg:top-32">
+                    {[
+                      { label: "Add Part", type: "part" as const },
+                      { label: "Add Labor", type: "labor" as const },
+                      { label: "Add Service / Fee", type: "service" as const },
+                      { label: "Custom Line Item", type: "other" as const },
+                    ].map((item) => (
+                      <button
+                        className="block w-full px-4 py-2.5 text-left text-[#0F172A] hover:bg-[#F8FAFC]"
+                        key={item.label}
+                        onClick={() => {
+                          setIsAddItemMenuOpen(false);
+                          openAddItem(item.type);
+                        }}
+                        type="button"
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
           </div>
 
           {lines.length > 0 ? (
-            <div className="mt-3 border-t border-[#E5E7EB]">
+            <>
+            <div className="hidden lg:block">
+              <div className="grid grid-cols-[48%_10%_16%_16%_10%] border-b border-[#E5E7EB] bg-[#F8FAFC] px-4 py-2 text-xs font-black uppercase tracking-[0.08em] text-[#64748B]">
+                <div>Item / Service</div>
+                <div className="text-center">Qty</div>
+                <div className="text-right">Unit Price</div>
+                <div className="text-right">Total</div>
+                <div className="text-right">Actions</div>
+              </div>
               {lines.map((line) => {
                 const errors = itemErrors.get(line.id) ?? [];
 
                 return (
                   <article
-                    className="relative grid cursor-pointer grid-cols-[1.75rem_minmax(0,1fr)_2.25rem] border-b border-[#E5E7EB] bg-white"
+                    className={`relative grid min-h-[56px] grid-cols-[48%_10%_16%_16%_10%] items-center border-b border-[#E5E7EB] bg-white px-4 text-sm transition ${
+                      canEditFinancialFields
+                        ? "cursor-pointer hover:bg-[#F8FAFC]"
+                        : ""
+                    }`}
                     key={line.id}
-                    onClick={() => openEditItem(line)}
+                    onClick={() => {
+                      if (canEditFinancialFields) {
+                        openEditItem(line);
+                      }
+                    }}
                   >
-                    <div className="flex items-center justify-center text-[#94A3B8]">
-                      <span aria-hidden="true" className="text-base leading-none">
-                        ⁝
-                      </span>
-                    </div>
-                    <div className="min-w-0 py-2.5 pr-2">
+                    <div className="min-w-0 pr-3">
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                        <h4 className="min-w-0 text-sm font-black leading-5 text-[#0F172A]">
+                        <h4 className="min-w-0 truncate font-black leading-5 text-[#0F172A]">
                           {line.name || "Untitled item"}
                         </h4>
                         <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[0.68rem] font-black text-emerald-700">
@@ -1743,32 +1940,29 @@ export function ManualEstimateEditor({
                           {line.description}
                         </p>
                       ) : null}
-                      <dl className="mt-2 grid grid-cols-2 gap-x-2 text-xs">
-                        <div>
-                          <dt className="font-semibold text-[#64748B]">Qty</dt>
-                          <dd className="mt-1 font-black">{line.quantity}</dd>
-                        </div>
-                        <div>
-                          <dt className="font-semibold text-[#64748B]">Price</dt>
-                          <dd className="mt-1 font-black">
-                            {line.customerVisible && line.customerUnitPrice <= 0 ? (
-                              <span className="text-amber-700">Required</span>
-                            ) : (
-                              formatServiceRequestMoney(line.customerUnitPrice)
-                            )}
-                          </dd>
-                        </div>
-                      </dl>
                       {validationAttempted && errors.length > 0 ? (
                         <p className="mt-2 text-xs font-bold text-amber-800">
                           {errors.join(" · ")}
                         </p>
                       ) : null}
                     </div>
-                    <div className="flex items-start justify-end py-2.5">
+                    <div className="text-center font-black text-[#0F172A]">{line.quantity}</div>
+                    <div className="text-right font-black text-[#0F172A]">
+                      {line.customerVisible && line.customerUnitPrice <= 0 ? (
+                        <span className="text-amber-700">Required</span>
+                      ) : (
+                        formatServiceRequestMoney(line.customerUnitPrice)
+                      )}
+                    </div>
+                    <div className="text-right font-black text-[#0F172A]">
+                      {formatServiceRequestMoney(getLineTotal(line))}
+                    </div>
+                    <div className="flex justify-end">
+                      {canEditFinancialFields ? (
+                      <>
                       <button
                         aria-label={`Actions for ${line.name || "item"}`}
-                        className="flex h-8 w-8 items-center justify-center rounded-lg text-[#64748B] transition hover:bg-[#F8FAFC]"
+                        className="flex h-10 w-10 items-center justify-center rounded-lg text-[#64748B] transition hover:bg-[#EEF2FF]"
                         onClick={(event) => {
                           event.stopPropagation();
                           setOpenLineMenuId((current) =>
@@ -1807,43 +2001,110 @@ export function ManualEstimateEditor({
                           </button>
                         </div>
                       ) : null}
+                      </>
+                      ) : (
+                        <span className="text-xs font-black text-[#94A3B8]">Locked</span>
+                      )}
                     </div>
                   </article>
                 );
               })}
             </div>
-          ) : null}
-          <div className="mt-2 grid grid-cols-3 border-y border-[#E5E7EB] bg-white">
-            <button
-              className="inline-flex min-h-10 items-center justify-center gap-1 px-1 text-xs font-black text-[#0F6BFF]"
-              onClick={() => openAddItem("part")}
-              type="button"
-            >
-              <EstimateIcon className="h-3.5 w-3.5" name="plus" />
-              Add Part
-            </button>
-            <button
-              className="inline-flex min-h-10 items-center justify-center gap-1 px-1 text-xs font-black text-[#0F6BFF]"
-              onClick={() => openAddItem("labor")}
-              type="button"
-            >
-              <EstimateIcon className="h-3.5 w-3.5" name="plus" />
-              Add Labor
-            </button>
-            <button
-              className="inline-flex min-h-10 items-center justify-center gap-1 px-1 text-xs font-black text-[#0F6BFF]"
-              onClick={() => openAddItem("service")}
-              type="button"
-            >
-              <EstimateIcon className="h-3.5 w-3.5" name="plus" />
-              Add Service / Fee
-            </button>
-          </div>
-        </section>
+            <div className="divide-y divide-[#E5E7EB] lg:hidden">
+              {lines.map((line) => {
+                const errors = itemErrors.get(line.id) ?? [];
 
-        <section className="mt-4 border-b border-[#E5E7EB] pb-4">
-          <h3 className="text-lg font-black">Totals</h3>
-          <dl className="mt-3 space-y-3 text-sm">
+                return (
+                  <article
+                    className="relative bg-white px-4 py-3"
+                    key={line.id}
+                  >
+                    <button
+                      className={`block min-h-11 w-full text-left ${
+                        canEditFinancialFields ? "" : "cursor-default"
+                      }`}
+                      onClick={() => {
+                        if (canEditFinancialFields) {
+                          openEditItem(line);
+                        }
+                      }}
+                      type="button"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h4 className="truncate text-sm font-black text-[#0F172A]">
+                              {line.name || "Untitled item"}
+                            </h4>
+                            <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[0.68rem] font-black text-emerald-700">
+                              {lineTypeLabel(line.type)}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-xs font-semibold text-[#64748B]">
+                            {line.quantity} x {formatServiceRequestMoney(line.customerUnitPrice)}
+                          </p>
+                        </div>
+                        <p className="shrink-0 text-sm font-black text-[#0F172A]">
+                          {formatServiceRequestMoney(getLineTotal(line))}
+                        </p>
+                      </div>
+                    </button>
+                    {canEditFinancialFields ? (
+                    <button
+                      aria-label={`Actions for ${line.name || "item"}`}
+                      className="absolute right-2 top-9 flex h-10 w-10 items-center justify-center rounded-lg text-[#64748B]"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setOpenLineMenuId((current) =>
+                          current === line.id ? null : line.id,
+                        );
+                      }}
+                      type="button"
+                    >
+                      <EstimateIcon className="h-4 w-4" name="more" />
+                    </button>
+                    ) : null}
+                    {canEditFinancialFields && openLineMenuId === line.id ? (
+                      <div className="absolute right-2 top-16 z-20 w-32 overflow-hidden rounded-xl border border-[#E5E7EB] bg-white py-1 text-sm font-bold shadow-lg">
+                        <button
+                          className="block w-full px-3 py-2 text-left text-[#0F172A] hover:bg-[#F8FAFC]"
+                          onClick={() => openEditItem(line)}
+                          type="button"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="block w-full px-3 py-2 text-left text-[#0F172A] hover:bg-[#F8FAFC]"
+                          onClick={() => copyLine(line)}
+                          type="button"
+                        >
+                          Copy
+                        </button>
+                        <button
+                          className="block w-full px-3 py-2 text-left text-red-700 hover:bg-red-50"
+                          onClick={() => deleteLine(line.id)}
+                          type="button"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    ) : null}
+                    {validationAttempted && errors.length > 0 ? (
+                      <p className="mt-2 text-xs font-bold text-amber-800">
+                        {errors.join(" · ")}
+                      </p>
+                    ) : null}
+                  </article>
+                );
+              })}
+            </div>
+            </>
+          ) : null}
+            </section>
+
+            <section className="mt-4 rounded-2xl border border-[#E5E7EB] bg-white p-4">
+          <h3 className="text-base font-black">Financial Summary</h3>
+          <dl className="mt-3 grid gap-2 text-sm lg:grid-cols-4">
             <div className="flex items-center justify-between">
               <dt className="text-[#0F172A]">Subtotal</dt>
               <dd className="font-black">{formatServiceRequestMoney(totals.subtotal)}</dd>
@@ -1858,13 +2119,42 @@ export function ManualEstimateEditor({
               <dt className="text-[#475569]">Tax ({totals.taxRate.toFixed(3)}%)</dt>
               <dd className="text-[#475569]">{formatServiceRequestMoney(totals.tax)}</dd>
             </div>
-            <div className="flex items-center justify-between border-t border-[#E5E7EB] pt-4">
+            <div className="flex items-center justify-between border-t border-[#E5E7EB] pt-2 lg:border-t-0 lg:pt-0">
               <dt className="text-lg font-black">Total</dt>
               <dd className="text-2xl font-black text-[#0F6BFF]">
                 {formatServiceRequestMoney(totals.total)}
               </dd>
             </div>
           </dl>
+          {estimateStatus === "approved" ? (
+            <div className="mt-4 grid gap-3 rounded-2xl border border-blue-100 bg-blue-50 p-4 sm:grid-cols-3">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.12em] text-[#64748B]">
+                  Estimate Total
+                </p>
+                <p className="mt-1 text-lg font-black text-[#0F172A]">
+                  {formatServiceRequestMoney(estimateTotalForDisplay)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.12em] text-[#64748B]">
+                  Deposit Paid
+                </p>
+                <p className="mt-1 text-lg font-black text-emerald-700">
+                  {formatServiceRequestMoney(depositPaid)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.12em] text-[#64748B]">
+                  Remaining
+                </p>
+                <p className="mt-1 text-lg font-black text-orange-600">
+                  {formatServiceRequestMoney(remainingEstimateBalance)}
+                </p>
+              </div>
+            </div>
+          ) : null}
+          {canEditFinancialFields ? (
           <div className="mt-4 grid grid-cols-3 gap-3">
             <label className="block">
               <span className="text-xs font-black text-[#64748B]">Discount type</span>
@@ -1902,98 +2192,15 @@ export function ManualEstimateEditor({
               />
             </label>
           </div>
-        </section>
+          ) : null}
+            </section>
+          </>
+        ) : null}
 
-        <section className="mt-4 grid gap-2 border-b border-[#E5E7EB] pb-4">
-          <button
-            className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#0F6BFF] px-4 py-3 text-sm font-black text-white transition hover:bg-[#0057D9] disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={!canAttemptSend}
-            onClick={() => void sendToClient()}
-            type="button"
-          >
-            Send for Approval
-          </button>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              className="rounded-xl border border-[#D7E4FF] bg-white px-3 py-2.5 text-sm font-black text-[#0F6BFF] opacity-55"
-              disabled
-              title="Deposit collection requires the future payment/deposit backend."
-              type="button"
-            >
-              Collect Deposit
-            </button>
-            <button
-              className="rounded-xl border border-[#D7E4FF] bg-white px-3 py-2.5 text-sm font-black text-[#0F6BFF] opacity-55"
-              disabled
-              title="Signature capture requires the future signature backend."
-              type="button"
-            >
-              Get Signature
-            </button>
-          </div>
-          <details className="rounded-xl border border-[#E5E7EB] bg-white">
-            <summary className="flex cursor-pointer list-none items-center justify-center px-4 py-3 text-sm font-black text-[#0F172A]">
-              More Actions
-              <span className="ml-2 text-[#64748B]">v</span>
-            </summary>
-            <div className="grid gap-2 border-t border-[#E5E7EB] p-3 text-sm font-black">
-              <button
-                className="rounded-lg border border-[#E5E7EB] px-3 py-2 text-[#0F6BFF]"
-                disabled={lines.length === 0}
-                onClick={() => setIsPreviewOpen(true)}
-                type="button"
-              >
-                Preview Proposal
-              </button>
-              <button
-                className="rounded-lg border border-[#E5E7EB] px-3 py-2 text-[#0F172A]"
-                onClick={duplicateEstimate}
-                type="button"
-              >
-                Duplicate
-              </button>
-              {canCreateInvoice && initialEstimate ? (
-                <button
-                  className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={isCreatingInvoice}
-                  onClick={() => void onCreateInvoice?.(initialEstimate)}
-                  type="button"
-                >
-                  {isCreatingInvoice ? "Creating Invoice..." : "Convert to Invoice"}
-                </button>
-              ) : null}
-              {linkedInvoiceNumber ? (
-                <p className="rounded-lg bg-emerald-50 px-3 py-2 text-emerald-700">
-                  Converted to invoice {linkedInvoiceNumber}
-                </p>
-              ) : null}
-            </div>
-          </details>
-        </section>
-
-        <div className="mt-4 border-b border-[#E5E7EB]">
-          <EditableTextSection
-            label="What we found"
-            onChange={(value) => {
-              setWhatWeFound(value);
-              resetFeedback();
-            }}
-            onDictate={() => null}
-            value={whatWeFound}
-          />
-          <EditableTextSection
-            label="Repair solution"
-            onChange={(value) => {
-              setRepairSolution(value);
-              resetFeedback();
-            }}
-            value={repairSolution}
-          />
-        </div>
-
-        <section className="mt-5 overflow-hidden border-y border-[#E5E7EB] bg-white">
-          <details className="border-b border-[#E5E7EB]">
-            <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3.5 text-sm font-black">
+        {activeWorkspaceTab === "terms" ? (
+          <section className="overflow-hidden rounded-2xl border border-[#E5E7EB] bg-white">
+            <details className="border-b border-[#E5E7EB]" open>
+              <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3.5 text-sm font-black">
               Warranty
               <span className="font-semibold text-[#94A3B8]">
                 {warrantyText.trim() ? "Set" : "Not set"}
@@ -2006,13 +2213,14 @@ export function ManualEstimateEditor({
               </label>
               <textarea
                 className="mt-2 min-h-24 w-full rounded-xl border border-[#E5E7EB] px-3 py-2 text-sm font-semibold leading-6"
+                disabled={!canEditFinancialFields}
                 onChange={(event) => setWarrantyText(event.target.value)}
                 value={warrantyText}
               />
             </div>
-          </details>
-          <details className="border-b border-[#E5E7EB]">
-            <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3.5 text-sm font-black">
+            </details>
+            <details open>
+              <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3.5 text-sm font-black">
               Estimated completion
               <span className="font-semibold text-[#94A3B8]">
                 {estimatedCompletion.trim() ? "Set" : "Not set"}
@@ -2025,39 +2233,38 @@ export function ManualEstimateEditor({
               </label>
               <textarea
                 className="mt-2 min-h-24 w-full rounded-xl border border-[#E5E7EB] px-3 py-2 text-sm font-semibold leading-6"
+                disabled={!canEditFinancialFields}
                 onChange={(event) => setEstimatedCompletion(event.target.value)}
                 value={estimatedCompletion}
               />
             </div>
-          </details>
-          <details className="border-b border-[#E5E7EB]">
-            <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3.5 text-sm font-black">
-              Notes
-              <span className="font-semibold text-[#94A3B8]">
-                None
-                <span className="ml-2 text-[#64748B]">›</span>
-              </span>
-            </summary>
-            <div className="px-4 pb-4 text-sm font-semibold leading-6 text-[#64748B]">
-              Notes stay in the Job Workspace for now.
-            </div>
-          </details>
-          <details>
-            <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3.5 text-sm font-black">
-              Attachments
-              <span className="font-semibold text-[#94A3B8]">
-                0
-                <span className="ml-2 text-[#64748B]">›</span>
-              </span>
-            </summary>
-            <div className="px-4 pb-4 text-sm font-semibold leading-6 text-[#64748B]">
-              Attachments stay in the Job Workspace for now.
-            </div>
-          </details>
-        </section>
+            </details>
+          </section>
+        ) : null}
+
+        {activeWorkspaceTab === "notes" ? (
+          <section className="rounded-2xl border border-[#E5E7EB] bg-white p-4 text-sm font-semibold leading-6 text-[#64748B]">
+            Notes stay in the Job Workspace for now.
+          </section>
+        ) : null}
+
+        {activeWorkspaceTab === "attachments" ? (
+          <section className="rounded-2xl border border-[#E5E7EB] bg-white p-4 text-sm font-semibold leading-6 text-[#64748B]">
+            Attachments stay in the Job Workspace for now.
+          </section>
+        ) : null}
+
+        {activeWorkspaceTab === "history" ? (
+          <section className="rounded-2xl border border-[#E5E7EB] bg-white p-4">
+            <h3 className="text-lg font-black text-[#0F172A]">History</h3>
+            <p className="mt-2 text-sm font-semibold leading-6 text-[#64748B]">
+              Detailed Estimate lifecycle history is not available in this workspace yet.
+            </p>
+          </section>
+        ) : null}
       </div>
 
-      <div className="fixed inset-x-0 bottom-0 z-30 border-t border-[#E5E7EB] bg-white/95 px-3 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-12px_32px_rgba(15,23,42,0.08)] backdrop-blur sm:absolute sm:rounded-b-[2rem]">
+      <div className="fixed inset-x-0 bottom-0 z-30 border-t border-[#E5E7EB] bg-white/95 px-3 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-12px_32px_rgba(15,23,42,0.08)] backdrop-blur lg:sticky lg:bottom-0 lg:mx-auto lg:mt-6 lg:max-w-6xl lg:rounded-b-[2rem] lg:border-x lg:px-6">
         {(validationAttempted && sendErrors.length > 0) || saveState.status === "error" ? (
           <p
             className={`mb-2 text-xs font-bold ${
@@ -2069,26 +2276,55 @@ export function ManualEstimateEditor({
             {saveState.message ?? sendErrors[0]}
           </p>
         ) : null}
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            className="rounded-xl border border-[#D7E4FF] bg-white px-2 py-3 text-xs font-black text-[#0F6BFF] disabled:cursor-not-allowed disabled:opacity-50 sm:text-sm"
-            disabled={lines.length === 0}
-            onClick={() => setIsPreviewOpen(true)}
-            type="button"
-          >
-            Preview proposal
-          </button>
-          <button
-            className="rounded-xl bg-[#FFD400] px-2 py-3 text-xs font-black text-[#0F172A] disabled:cursor-not-allowed disabled:opacity-45 sm:text-sm"
-            disabled={!canAttemptSend}
-            onClick={() => void sendToClient()}
-            type="button"
-          >
-            {pendingAction === "send" || sendingEstimateId === savedEstimateId
-              ? "Sending..."
-              : "Send for Approval"}
-          </button>
-        </div>
+        {estimateStatus === "approved" && initialEstimate ? (
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              className="rounded-xl border border-[#D7E4FF] bg-white px-2 py-3 text-xs font-black text-[#0F6BFF] disabled:cursor-not-allowed disabled:opacity-50 sm:text-sm"
+              disabled={!canCreateInvoice || isCreatingInvoice}
+              onClick={() => void onCreateInvoice?.(initialEstimate)}
+              type="button"
+            >
+              {linkedInvoiceNumber
+                ? `Invoice ${linkedInvoiceNumber}`
+                : isCreatingInvoice
+                  ? "Creating..."
+                  : "Convert to Invoice"}
+            </button>
+            <button
+              className="rounded-xl bg-[#0F6BFF] px-2 py-3 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-45 sm:text-sm"
+              disabled={!canCollectPayment}
+              onClick={() => onCollectPayment?.(initialEstimate)}
+              type="button"
+            >
+              Collect Payment
+            </button>
+          </div>
+        ) : canShowDraftActions ? (
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              className="rounded-xl border border-[#D7E4FF] bg-white px-2 py-3 text-xs font-black text-[#0F6BFF] disabled:cursor-not-allowed disabled:opacity-50 sm:text-sm"
+              disabled={!canAttemptSend}
+              onClick={() => void sendToClient()}
+              type="button"
+            >
+              {pendingAction === "send" || sendingEstimateId === savedEstimateId
+                ? "Sending..."
+                : "Send for Approval"}
+            </button>
+            <button
+              className="rounded-xl bg-[#0F6BFF] px-2 py-3 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-45 sm:text-sm"
+              disabled={!canApproveForCustomer}
+              onClick={() => setIsApproveConfirmOpen(true)}
+              type="button"
+            >
+              Mark as Approved
+            </button>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-3 text-center text-sm font-black text-[#64748B]">
+            This estimate is read-only. Duplicate it to make changes.
+          </div>
+        )}
       </div>
 
       {itemDraft ? (
@@ -2106,11 +2342,29 @@ export function ManualEstimateEditor({
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/55 px-3 py-4 backdrop-blur-sm sm:items-center">
           <div className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl">
             <h3 className="text-lg font-black text-[#0F172A]">
-              Approve this estimate on behalf of the customer?
+              Mark Estimate as Approved?
             </h3>
             <p className="mt-2 text-sm font-semibold leading-6 text-[#475569]">
-              This records technician manual approval. It will not be shown as a
-              customer-clicked approval.
+              Confirm that the customer has agreed to this Estimate.
+            </p>
+            <div className="mt-4 rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] p-3">
+              <p className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
+                Approval method
+              </p>
+              <p className="mt-1 text-sm font-black text-[#0F172A]">
+                Technician / Manual
+              </p>
+              <p className="mt-1 text-xs font-semibold leading-5 text-[#64748B]">
+                This records technician manual approval and does not send a customer message.
+              </p>
+            </div>
+            {saveState.status === "error" && saveState.message ? (
+              <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-800">
+                {saveState.message}
+              </p>
+            ) : null}
+            <p className="mt-3 text-sm font-black text-[#0F172A]">
+              {formatServiceRequestMoney(estimateTotalForDisplay)}
             </p>
             <div className="mt-5 grid grid-cols-2 gap-2">
               <button
@@ -2125,7 +2379,7 @@ export function ManualEstimateEditor({
                 onClick={() => void approveForCustomer()}
                 type="button"
               >
-                Approve
+                Confirm Approval
               </button>
             </div>
           </div>
@@ -2190,11 +2444,13 @@ function EditableTextSection({
   label,
   value,
   onChange,
+  readOnly = false,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   onDictate?: () => void;
+  readOnly?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
 
@@ -2202,6 +2458,7 @@ function EditableTextSection({
     <section className="border-t border-[#E5E7EB] py-4 first:border-t-0 first:pt-0">
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-lg font-black">{label}</h3>
+        {readOnly ? null : (
         <button
           className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-sm font-black text-[#0F6BFF]"
           onClick={() => setEditing((current) => !current)}
@@ -2210,8 +2467,9 @@ function EditableTextSection({
           <EstimateIcon className="h-4 w-4" name="edit" />
           {editing ? "Done" : "Edit"}
         </button>
+        )}
       </div>
-      {editing ? (
+      {editing && !readOnly ? (
         <textarea
           className="mt-3 min-h-24 w-full rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-2 text-sm font-semibold leading-6 outline-none focus:border-[#0F6BFF] focus:bg-white"
           onChange={(event) => onChange(event.target.value)}
