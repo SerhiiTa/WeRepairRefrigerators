@@ -3952,6 +3952,138 @@ function DateSeparator({ label }: { label: string }) {
   );
 }
 
+const MESSAGE_URL_PATTERN = /https?:\/\/[^\s<>()]+/gi;
+
+function trimTrailingUrlPunctuation(value: string): { url: string; trailing: string } {
+  let url = value;
+  let trailing = "";
+
+  while (/[.,!?;:]$/.test(url)) {
+    trailing = `${url.slice(-1)}${trailing}`;
+    url = url.slice(0, -1);
+  }
+
+  return { url, trailing };
+}
+
+function getMessageUrls(body: string): string[] {
+  const urls = new Set<string>();
+
+  for (const match of body.matchAll(MESSAGE_URL_PATTERN)) {
+    const raw = match[0];
+    const { url } = trimTrailingUrlPunctuation(raw);
+
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        urls.add(url);
+      }
+    } catch {
+      // Ignore malformed URL-like text.
+    }
+  }
+
+  return Array.from(urls);
+}
+
+function MessageBodyWithLinks({
+  body,
+  outbound = false,
+}: {
+  body: string;
+  outbound?: boolean;
+}) {
+  const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
+  const parts: ReactNode[] = [];
+  let lastIndex = 0;
+
+  for (const match of body.matchAll(MESSAGE_URL_PATTERN)) {
+    const raw = match[0];
+    const matchIndex = match.index ?? 0;
+    const { url, trailing } = trimTrailingUrlPunctuation(raw);
+
+    if (matchIndex > lastIndex) {
+      parts.push(body.slice(lastIndex, matchIndex));
+    }
+
+    let validLink = false;
+
+    try {
+      const parsed = new URL(url);
+      validLink = parsed.protocol === "http:" || parsed.protocol === "https:";
+    } catch {
+      validLink = false;
+    }
+
+    if (validLink) {
+      parts.push(
+        <a
+          className={`break-all font-black underline decoration-current/40 underline-offset-2 ${
+            outbound ? "text-white" : "text-[#0F6BFF]"
+          }`}
+          href={url}
+          key={`${matchIndex}:${url}`}
+          rel="noreferrer"
+          target="_blank"
+        >
+          {url}
+        </a>,
+      );
+    } else {
+      parts.push(raw);
+    }
+
+    if (trailing) {
+      parts.push(trailing);
+    }
+
+    lastIndex = matchIndex + raw.length;
+  }
+
+  if (lastIndex < body.length) {
+    parts.push(body.slice(lastIndex));
+  }
+
+  const urls = getMessageUrls(body);
+
+  async function copyUrl(url: string) {
+    if (typeof navigator === "undefined" || !navigator.clipboard) {
+      return;
+    }
+
+    await navigator.clipboard.writeText(url);
+    setCopiedUrl(url);
+    window.setTimeout(() => {
+      setCopiedUrl((current) => (current === url ? null : current));
+    }, 1800);
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="whitespace-pre-wrap break-words text-sm font-medium leading-5">
+        {parts.length > 0 ? parts : body}
+      </p>
+      {urls.length > 0 ? (
+        <div className="flex flex-wrap gap-2">
+          {urls.map((url) => (
+            <button
+              className={`rounded-full border px-2.5 py-1 text-[11px] font-black transition ${
+                outbound
+                  ? "border-white/30 bg-white/10 text-white hover:bg-white/20"
+                  : "border-blue-200 bg-blue-50 text-[#0F6BFF] hover:bg-blue-100"
+              }`}
+              key={url}
+              onClick={() => void copyUrl(url)}
+              type="button"
+            >
+              {copiedUrl === url ? "Copied" : "Copy Link"}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 function SmsMessageGroup({
   attachmentsByMessageId,
   messages,
@@ -4004,7 +4136,7 @@ function SmsMessageGroup({
                 }`}
               >
                 {message.body ? (
-                  <p className="text-sm font-medium leading-5">{message.body}</p>
+                  <MessageBodyWithLinks body={message.body} outbound={outbound} />
                 ) : attachments.length === 0 ? (
                   <p className="text-sm font-medium leading-5">Message body unavailable.</p>
                 ) : null}
@@ -4050,9 +4182,9 @@ function MessageEventCard({
             {formatTimeOnly(message.occurred_at)} · {identity.route}
           </p>
           {message.body ? (
-            <p className="mt-2 line-clamp-4 text-sm font-medium leading-5 text-[#334155]">
-              {message.body}
-            </p>
+            <div className="mt-2 text-[#334155]">
+              <MessageBodyWithLinks body={message.body} />
+            </div>
           ) : attachments.length === 0 ? (
             <p className="mt-2 text-sm font-medium leading-5 text-[#334155]">
               Message body unavailable.

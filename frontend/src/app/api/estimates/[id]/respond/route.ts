@@ -154,8 +154,10 @@ export async function POST(
     data && typeof data === "object" && "id" in data && typeof data.id === "string"
       ? data.id
       : null;
+  const wasIdempotentReplay =
+    data && typeof data === "object" && "idempotent" in data && data.idempotent === true;
 
-  if (estimateId) {
+  if (estimateId && !wasIdempotentReplay) {
     await refreshCommunicationSummaryAfterResponse({ estimateId, response });
   }
 

@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent } from "react";
+import type { MouseEvent, ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 import {
   CustomerEstimatePreview,
@@ -628,6 +629,14 @@ function getInitialWarrantyText(
   );
 }
 
+function EstimateWorkspacePortal({ children }: { children: ReactNode }) {
+  if (typeof document === "undefined") {
+    return null;
+  }
+
+  return createPortal(children, document.body);
+}
+
 export function ManualEstimateEditor({
   request,
   initialEstimate,
@@ -725,6 +734,26 @@ export function ManualEstimateEditor({
     status: "idle",
     message: null,
   });
+  const hasOpenEstimateOverlay =
+    Boolean(itemDraft) ||
+    isSendEstimateOpen ||
+    isApproveConfirmOpen ||
+    isUndoApprovalConfirmOpen ||
+    isDeleteConfirmOpen ||
+    isPreviewOpen;
+
+  useEffect(() => {
+    if (!hasOpenEstimateOverlay) {
+      return;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [hasOpenEstimateOverlay]);
 
   useEffect(() => {
     let isMounted = true;
@@ -2630,19 +2659,22 @@ export function ManualEstimateEditor({
       </div>
 
       {itemDraft ? (
-        <ManualEstimateItemSheet
-          draft={itemDraft}
-          onCancel={() => setItemDraft(null)}
-          onChange={(line) =>
-            setItemDraft((current) => (current ? { ...current, line } : null))
-          }
-          onSave={saveItemDraft}
-        />
+        <EstimateWorkspacePortal>
+          <ManualEstimateItemSheet
+            draft={itemDraft}
+            onCancel={() => setItemDraft(null)}
+            onChange={(line) =>
+              setItemDraft((current) => (current ? { ...current, line } : null))
+            }
+            onSave={saveItemDraft}
+          />
+        </EstimateWorkspacePortal>
       ) : null}
 
       {isSendEstimateOpen ? (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/55 px-3 py-4 backdrop-blur-sm sm:items-center">
-          <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-2xl">
+        <EstimateWorkspacePortal>
+        <div className="fixed inset-0 z-[120] flex items-center justify-center overflow-y-auto bg-[#0F172A]/55 px-3 py-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] backdrop-blur-sm">
+          <div className="max-h-[calc(100svh-2rem)] w-full max-w-md overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-xs font-black uppercase tracking-[0.16em] text-[#0F6BFF]">
@@ -2772,11 +2804,13 @@ export function ManualEstimateEditor({
             </div>
           </div>
         </div>
+        </EstimateWorkspacePortal>
       ) : null}
 
       {isApproveConfirmOpen ? (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/55 px-3 py-4 backdrop-blur-sm sm:items-center">
-          <div className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl">
+        <EstimateWorkspacePortal>
+        <div className="fixed inset-0 z-[120] flex items-center justify-center overflow-y-auto bg-[#0F172A]/55 px-3 py-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] backdrop-blur-sm">
+          <div className="max-h-[calc(100svh-2rem)] w-full max-w-sm overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl">
             <h3 className="text-lg font-black text-[#0F172A]">
               Mark Estimate as Approved?
             </h3>
@@ -2820,11 +2854,13 @@ export function ManualEstimateEditor({
             </div>
           </div>
         </div>
+        </EstimateWorkspacePortal>
       ) : null}
 
       {isUndoApprovalConfirmOpen ? (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/55 px-3 py-4 backdrop-blur-sm sm:items-center">
-          <div className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl">
+        <EstimateWorkspacePortal>
+        <div className="fixed inset-0 z-[120] flex items-center justify-center overflow-y-auto bg-[#0F172A]/55 px-3 py-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] backdrop-blur-sm">
+          <div className="max-h-[calc(100svh-2rem)] w-full max-w-sm overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl">
             <h3 className="text-lg font-black text-[#0F172A]">
               Undo estimate approval?
             </h3>
@@ -2855,11 +2891,13 @@ export function ManualEstimateEditor({
             </div>
           </div>
         </div>
+        </EstimateWorkspacePortal>
       ) : null}
 
       {isDeleteConfirmOpen ? (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/55 px-3 py-4 backdrop-blur-sm sm:items-center">
-          <div className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl">
+        <EstimateWorkspacePortal>
+        <div className="fixed inset-0 z-[120] flex items-center justify-center overflow-y-auto bg-[#0F172A]/55 px-3 py-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] backdrop-blur-sm">
+          <div className="max-h-[calc(100svh-2rem)] w-full max-w-sm overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl">
             <h3 className="text-lg font-black text-[#0F172A]">
               Delete this draft estimate?
             </h3>
@@ -2894,10 +2932,12 @@ export function ManualEstimateEditor({
             </div>
           </div>
         </div>
+        </EstimateWorkspacePortal>
       ) : null}
 
       {isPreviewOpen ? (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-[#F8FAFC]">
+        <EstimateWorkspacePortal>
+        <div className="fixed inset-0 z-[120] overflow-y-auto bg-[#F8FAFC]">
           <div className="min-h-full pb-[env(safe-area-inset-bottom)]">
             <CustomerEstimatePreview
               data={customerPreviewData}
@@ -2906,6 +2946,7 @@ export function ManualEstimateEditor({
             />
           </div>
         </div>
+        </EstimateWorkspacePortal>
       ) : null}
     </section>
   );
@@ -3013,7 +3054,7 @@ function ManualEstimateItemSheet({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/55 px-3 py-4 backdrop-blur-sm sm:items-center">
+    <div className="fixed inset-0 z-[120] flex items-center justify-center overflow-y-auto bg-[#0F172A]/55 px-3 py-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] backdrop-blur-sm">
       <div className="max-h-[92vh] w-full max-w-xl overflow-y-auto rounded-t-[2rem] bg-white p-5 shadow-2xl sm:rounded-[2rem]">
         <div className="flex items-start justify-between gap-4">
           <div>

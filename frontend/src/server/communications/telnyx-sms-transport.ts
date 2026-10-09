@@ -115,6 +115,118 @@ function shouldUseStableFlatTranscription(): boolean {
   return true;
 }
 
+function isPrivateIpv4(hostname: string): boolean {
+  const parts = hostname.split(".").map((part) => Number.parseInt(part, 10));
+
+  if (parts.length !== 4 || parts.some((part) => Number.isNaN(part) || part < 0 || part > 255)) {
+    return false;
+  }
+
+  const [first, second] = parts;
+
+  return (
+    first === 10 ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168)
+  );
+}
+
+function isLocalQaSupabaseUrl(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+
+  try {
+    const url = new URL(value);
+    return (
+      url.hostname === "localhost" ||
+      url.hostname === "127.0.0.1" ||
+      url.hostname === "::1" ||
+      isPrivateIpv4(url.hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isLocalQaSmsMockEnabled(): boolean {
+  return (
+    process.env.WRA_QA_ENVIRONMENT === "local" &&
+    process.env.WRA_DISABLE_PROVIDER_CALLS === "1" &&
+    process.env.TELNYX_MOCK_MODE === "1" &&
+    isLocalQaSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL)
+  );
+}
+
+async function getOrCreateLocalQaSmsSourceAccount(
+  companyId: string,
+): Promise<SourceAccountRow | null> {
+  const supabase = getSupabaseServiceRoleClient();
+  if (!supabase || !isLocalQaSmsMockEnabled()) {
+    return null;
+  }
+
+  const mockIdentifier = "+15550009999";
+  const { data: existing, error: existingError } = await supabase
+    .from("communication_source_accounts")
+    .select("*")
+    .eq("company_id", companyId)
+    .eq("provider_name", "telnyx")
+    .eq("source_identifier", mockIdentifier)
+    .eq("is_active", true)
+    .limit(1)
+    .maybeSingle();
+
+  if (existingError) {
+    console.error("[local-qa-sms-source-account-error]", {
+      code: existingError.code,
+      message: existingError.message,
+    });
+    return null;
+  }
+
+  if (existing) {
+    return existing as SourceAccountRow;
+  }
+
+  const now = new Date().toISOString();
+  const { data: created, error: createError } = await supabase
+    .from("communication_source_accounts")
+    .insert({
+      company_id: companyId,
+      source_type: "sms",
+      provider_name: "telnyx",
+      source_identifier: mockIdentifier,
+      display_name: "QA Local Mock SMS",
+      is_active: true,
+      supports_inbound_sms: true,
+      supports_outbound_sms: true,
+      supports_inbound_voice: false,
+      supports_outbound_voice: false,
+      is_default_outbound_sms: true,
+      is_default_outbound_voice: false,
+      metadata: {
+        qa_only: true,
+        mock_provider: true,
+        created_by: "dev-qa",
+      },
+      created_at: now,
+      updated_at: now,
+    })
+    .select("*")
+    .single();
+
+  if (createError || !created) {
+    console.error("[local-qa-sms-source-account-create-error]", {
+      code: createError?.code,
+      message: createError?.message,
+    });
+    return null;
+  }
+
+  return created as SourceAccountRow;
+}
+
 function getStringFromRecord(
   record: Record<string, unknown>,
   keys: string[],
@@ -2229,7 +2341,7 @@ export async function sendConversationSms({
   if (!supabase) {
     return { ok: false, status: 503, message: "Supabase service role is not configured." };
   }
-  if (!apiKey) {
+  if (!apiKey && !isLocalQaSmsMockEnabled()) {
     return { ok: false, status: 503, message: "Telnyx SMS API credentials are not configured." };
   }
 
@@ -2253,7 +2365,11 @@ export async function sendConversationSms({
     return { ok: false, status: 400, message: "Conversation does not have a valid recipient phone." };
   }
 
-  const sourceAccount = await findOutboundSmsSourceAccount(conversation);
+  const sourceAccount =
+    (await findOutboundSmsSourceAccount(conversation)) ??
+    (isLocalQaSmsMockEnabled()
+      ? await getOrCreateLocalQaSmsSourceAccount(conversation.company_id)
+      : null);
   const fromPhone = normalizeSmsPhone(sourceAccount?.source_identifier ?? null);
   if (!sourceAccount || !fromPhone) {
     return { ok: false, status: 400, message: "No active outbound SMS source is configured for this company." };
@@ -2300,6 +2416,38 @@ export async function sendConversationSms({
       .eq("id", messageId);
 
     return { ok: false, status: 503, message: failureReason, messageId };
+  }
+
+  if (isLocalQaSmsMockEnabled()) {
+    const sentAt = new Date().toISOString();
+    const providerMessageId = `mock-telnyx-${messageId}`;
+
+    await supabase
+      .from("communication_messages")
+      .update({
+        delivery_status: "sent",
+        provider_message_id: providerMessageId,
+        sent_at: sentAt,
+      })
+      .eq("id", messageId);
+
+    await supabase
+      .from("communication_conversations")
+      .update({
+        source_account_id: sourceAccount.id,
+        provider_name: "telnyx",
+        primary_source_type: "sms",
+        status: "linked",
+      })
+      .eq("id", conversation.id)
+      .eq("company_id", conversation.company_id);
+
+    await supabase.rpc("apply_communication_outbound_state_rpc", {
+      p_conversation_id: conversation.id,
+      p_occurred_at: sentAt,
+    });
+
+    return { ok: true, messageId, providerMessageId };
   }
 
   const response = await fetch(TELNYX_MESSAGES_URL, {
@@ -2361,7 +2509,7 @@ export async function checkConversationSmsReadiness(
   if (!supabase) {
     return { ok: false, status: 503, message: "Supabase service role is not configured." };
   }
-  if (!apiKey) {
+  if (!apiKey && !isLocalQaSmsMockEnabled()) {
     return { ok: false, status: 503, message: "Telnyx SMS API credentials are not configured." };
   }
 
@@ -2385,7 +2533,11 @@ export async function checkConversationSmsReadiness(
     return { ok: false, status: 400, message: "Conversation does not have a valid recipient phone." };
   }
 
-  const sourceAccount = await findOutboundSmsSourceAccount(conversation);
+  const sourceAccount =
+    (await findOutboundSmsSourceAccount(conversation)) ??
+    (isLocalQaSmsMockEnabled()
+      ? await getOrCreateLocalQaSmsSourceAccount(conversation.company_id)
+      : null);
   const fromPhone = normalizeSmsPhone(sourceAccount?.source_identifier ?? null);
   if (!sourceAccount || !fromPhone) {
     return { ok: false, status: 400, message: "No active outbound SMS source is configured for this company." };

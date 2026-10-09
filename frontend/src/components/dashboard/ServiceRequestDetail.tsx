@@ -12616,7 +12616,7 @@ export function ServiceRequestDetail({
             estimates={financeEstimates}
             initialEstimate={financeEstimateMode === "saved" ? manualEstimate : null}
             isCreatingInvoice={invoiceActionState.status === "saving"}
-            key={`${financeEstimateMode}:${manualEstimateId ?? "new"}`}
+            key={`${financeEstimateMode}:${manualEstimateId ?? "new"}:${manualEstimate?.estimateStatus ?? "none"}:${manualEstimate?.customerRespondedAt ?? "none"}`}
             depositPaid={
               manualEstimate
                 ? centsToMoney(estimateAllocatedCents.get(manualEstimate.id) ?? 0)

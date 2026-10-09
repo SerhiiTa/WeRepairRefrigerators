@@ -978,13 +978,26 @@ export function mapServiceRequestPaymentAllocationRow(
 }
 
 export function formatServiceRequestDate(value: string): string {
-  return new Intl.DateTimeFormat("en", {
+  const date = new Date(value);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago",
     month: "short",
     day: "numeric",
     year: "numeric",
     hour: "numeric",
     minute: "2-digit",
-  }).format(new Date(value));
+  }).formatToParts(date);
+  const getPart = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+
+  const month = getPart("month");
+  const day = getPart("day");
+  const year = getPart("year");
+  const hour = getPart("hour");
+  const minute = getPart("minute");
+  const dayPeriod = getPart("dayPeriod");
+
+  return `${month} ${day}, ${year} at ${hour}:${minute} ${dayPeriod}`.trim();
 }
 
 export function formatServiceRequestMoney(value: number): string {

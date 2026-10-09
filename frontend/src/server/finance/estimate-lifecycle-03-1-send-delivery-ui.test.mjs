@@ -160,7 +160,25 @@ assert.match(
 includesAll(telnyxTransport, [
   "export async function checkConversationSmsReadiness",
   "export async function sendConversationSms",
+  "isLocalQaSmsMockEnabled",
+  "WRA_QA_ENVIRONMENT",
+  "WRA_DISABLE_PROVIDER_CALLS",
+  "TELNYX_MOCK_MODE",
+  "NEXT_PUBLIC_SUPABASE_URL",
+  "getOrCreateLocalQaSmsSourceAccount",
+  "QA Local Mock SMS",
+  "mock-telnyx-${messageId}",
 ]);
+assert.match(
+  telnyxTransport,
+  /if \(!apiKey && !isLocalQaSmsMockEnabled\(\)\)[\s\S]*Telnyx SMS API credentials are not configured/,
+  "Local QA SMS mock should be the only path that bypasses missing Telnyx API credentials.",
+);
+assert.match(
+  telnyxTransport,
+  /if \(isLocalQaSmsMockEnabled\(\)\)[\s\S]*providerMessageId = `mock-telnyx-\$\{messageId\}`[\s\S]*return \{ ok: true, messageId, providerMessageId \}/,
+  "Local QA SMS mock should persist an outbound Communications message without calling Telnyx.",
+);
 
 includesAll(communicationTypes, ["sendEstimateMessage", "providerMessageId"]);
 includesAll(providerAdapters, [

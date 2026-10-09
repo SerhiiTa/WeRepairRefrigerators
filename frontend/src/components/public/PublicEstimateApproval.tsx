@@ -113,7 +113,11 @@ function buildCustomerPreviewData(
     estimateStatus: estimate.estimate.estimate_status,
     customerName: estimate.service_request.customer_name,
     serviceAddress: buildServiceLocation(estimate),
-    estimateDate: estimate.estimate.sent_at ?? new Date().toISOString(),
+    estimateDate:
+      estimate.estimate.sent_at ??
+      estimate.estimate.customer_responded_at ??
+      estimate.estimate.token_expires_at ??
+      "1970-01-01T00:00:00.000Z",
     whatWeFound: estimate.service_request.issue_description,
     repairSolution: proposalDescription,
     items: estimate.estimate.items.map((item, index) => ({
@@ -230,7 +234,10 @@ export function PublicEstimateApproval({
     }
 
     const respondedAt =
-      payload.result?.customer_responded_at ?? new Date().toISOString();
+      payload.result?.customer_responded_at ??
+      estimate.estimate.customer_responded_at ??
+      estimate.estimate.sent_at ??
+      "1970-01-01T00:00:00.000Z";
     setEstimate((current) => ({
       ...current,
       estimate: {
@@ -257,40 +264,41 @@ export function PublicEstimateApproval({
   }
 
   return (
-    <main className="min-h-screen bg-[#F3F6FA] pb-6">
+    <main className="min-h-screen bg-[#F3F6FA] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
       <CustomerEstimatePreview data={customerPreviewData} fillViewport={false} />
 
-      <section className="mx-auto mt-4 max-w-4xl px-3 sm:mt-6 sm:px-6">
-        <div className="rounded-2xl border border-blue-100 bg-white p-4 shadow-[0_12px_32px_rgba(15,23,42,0.06)]">
+      <section className="mx-auto mt-2 max-w-4xl px-3 sm:mt-4 sm:px-6">
+        <div className="rounded-2xl border border-blue-100 bg-white p-3 shadow-[0_12px_32px_rgba(15,23,42,0.06)] sm:p-5">
           {isOpenForResponse ? (
             <>
-              <p className="text-sm font-black text-[#0F172A]">
-                Ready for your response
-              </p>
-              <p className="mt-1 text-sm leading-6 text-[#475569]">
-                Approving lets the technician know you want to move forward.
-                Declining closes this proposal for now.
-              </p>
-              <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+              <div className="flex flex-col gap-2.5 sm:flex-row sm:gap-3">
                 <button
-                  className="rounded-xl bg-emerald-500 px-4 py-3 text-sm font-black text-white transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="min-h-12 rounded-xl bg-emerald-500 px-4 py-3 text-sm font-black text-white transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
                   disabled={responseState.status === "saving"}
                   onClick={() => void submitResponse("approved")}
                   type="button"
                 >
                   {pendingResponse === "approved"
                     ? "Approving..."
-                    : "Approve Proposal"}
+                    : "Approve Estimate"}
                 </button>
                 <button
-                  className="rounded-xl border border-amber-200 bg-white px-4 py-3 text-sm font-black text-amber-700 transition hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="min-h-12 rounded-xl border border-amber-200 bg-white px-4 py-3 text-sm font-black text-amber-700 transition hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-60"
                   disabled={responseState.status === "saving"}
                   onClick={() => void submitResponse("declined")}
                   type="button"
                 >
-                  {pendingResponse === "declined" ? "Declining..." : "Decline"}
+                  {pendingResponse === "declined"
+                    ? "Declining..."
+                    : "Decline Estimate"}
                 </button>
               </div>
+              <p className="mt-3 text-sm font-black text-[#0F172A]">
+                Ready for your response
+              </p>
+              <p className="mt-1 text-sm leading-5 text-[#475569] sm:leading-6">
+                Review the repair estimate above, then approve to move forward or decline this proposal for now.
+              </p>
             </>
           ) : (
             <>

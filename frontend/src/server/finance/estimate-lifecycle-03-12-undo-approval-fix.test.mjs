@@ -67,17 +67,50 @@ assert.ok(
 
 includesAll(undoRoute, [
   "undo_service_request_estimate_approval_rpc",
+  "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
   "Choose a valid estimate to undo approval.",
+  "p_estimate_id: id",
   "Cannot undo approval: payment history is already recorded.",
   "Cannot undo approval: this estimate is linked to an invoice.",
   "Cannot undo approval: this account does not have permission.",
 ]);
 
 includesAll(editor, [
+  'import { createPortal } from "react-dom";',
   "sticky top-0 z-[70]",
   "lg:relative",
   "absolute right-0 z-[90]",
+  "document.body",
+  'document.body.style.overflow = "hidden"',
+  "createPortal(children, document.body)",
+  "<EstimateWorkspacePortal>",
+  "fixed inset-0 z-[120] flex items-center justify-center overflow-y-auto",
+  "pb-[max(1rem,env(safe-area-inset-bottom))]",
+  "max-h-[calc(100svh-2rem)]",
   "Undo Approval",
 ]);
+
+const topLayerOverlayCount = (
+  editor.match(/fixed inset-0 z-\[120\]/g) ?? []
+).length;
+
+assert.ok(
+  topLayerOverlayCount >= 6,
+  "Estimate workspace dialogs should render above the sticky workspace header.",
+);
+
+assert.ok(
+  !editor.includes("fixed inset-0 z-50"),
+  "Estimate workspace dialogs must not use z-50 because the sticky header is z-[70].",
+);
+
+const portalWrapperCount = (
+  editor.match(/<EstimateWorkspacePortal>/g) ?? []
+).length;
+
+assert.ok(
+  portalWrapperCount >= 6,
+  "Estimate workspace dialogs should render through the body portal, outside the sticky workspace stacking context.",
+);
 
 console.log("estimate-lifecycle-03.12 undo approval/menu static checks passed");
