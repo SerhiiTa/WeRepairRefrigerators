@@ -129,7 +129,8 @@ includesAll(deliveryBridge, [
   "service_request_estimate_revision_deliveries",
   "idempotency_key",
   "request_fingerprint",
-  "estimate_sent",
+  "source_account_id: readiness.sourceAccountId",
+  "Awaiting customer estimate response.",
 ]);
 assert.match(
   deliveryBridge,
@@ -144,6 +145,17 @@ assert.match(
 assert.ok(
   !deliveryBridge.includes("fetch(\"https://api.telnyx.com"),
   "Estimate delivery bridge must reuse the existing Telnyx transport instead of duplicating provider calls.",
+);
+assert.ok(
+  !/communicationTimelineTable\(supabase\)\.insert\(\{[\s\S]*event_type:\s*"estimate_sent"/.test(
+    deliveryBridge,
+  ),
+  "Estimate delivery bridge must not create a second estimate_sent timeline event after the RPC already records one.",
+);
+assert.match(
+  deliveryBridge,
+  /source_account_id:\s*readiness\.sourceAccountId[\s\S]*provider_name:\s*"telnyx"/,
+  "Estimate SMS delivery should persist the resolved Telnyx source account onto the conversation.",
 );
 includesAll(telnyxTransport, [
   "export async function checkConversationSmsReadiness",

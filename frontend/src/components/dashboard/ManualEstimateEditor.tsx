@@ -948,11 +948,9 @@ export function ManualEstimateEditor({
     canAttemptSend &&
     deliveryRecipientIsValid &&
     (!customerEmailReplacementRequired || allowCustomerEmailReplacement);
-  const estimateDeliveryMessagePreview = `Please review estimate ${
-    savedEstimateNumber ?? "Estimate"
-  } from ${
-    request.selectedTechnicianBusinessName ?? "WeRepairRefrigerators"
-  }. Your secure approval link will be included when delivery is sent.`;
+  const estimateDeliveryMessagePreview = `${
+    request.selectedTechnicianBusinessName ?? "HomeFix Appliance Repair"
+  }: Your estimate ${savedEstimateNumber ?? "Estimate"} is ready for review. Please approve or decline using this secure link:`;
   const canEditFinancialFields =
     estimateStatus === "unsaved" || estimateStatus === "draft";
   const canApproveForCustomer =

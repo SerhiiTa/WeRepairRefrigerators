@@ -2300,6 +2300,44 @@ export function ServiceRequestDetail({
   }, [refreshServiceRequest, requestId]);
 
   useEffect(() => {
+    const financeContextActive =
+      activeJobTab === "estimate" ||
+      financeEstimateMode === "saved" ||
+      manualEstimateId !== null ||
+      viewingEstimateId !== null;
+
+    if (!financeContextActive) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      if (
+        typeof document !== "undefined" &&
+        document.visibilityState !== "visible"
+      ) {
+        return;
+      }
+
+      void refreshServiceRequest();
+      void loadEstimates();
+      void loadInvoices();
+      void loadPayments();
+    }, 15000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    activeJobTab,
+    financeEstimateMode,
+    manualEstimateId,
+    refreshServiceRequest,
+    requestId,
+    viewingEstimateId,
+  ]);
+
+  useEffect(() => {
     let isActive = true;
 
     async function searchAddresses() {

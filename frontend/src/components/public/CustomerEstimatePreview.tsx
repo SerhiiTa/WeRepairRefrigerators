@@ -39,6 +39,7 @@ export type CustomerEstimatePreviewData = {
 
 type CustomerEstimatePreviewProps = {
   data: CustomerEstimatePreviewData;
+  fillViewport?: boolean;
   mode?: "technician-preview" | "customer";
   onBack?: () => void;
 };
@@ -68,6 +69,7 @@ function DetailBlock({
 
 export function CustomerEstimatePreview({
   data,
+  fillViewport = true,
   mode = "customer",
   onBack,
 }: CustomerEstimatePreviewProps) {
@@ -75,7 +77,11 @@ export function CustomerEstimatePreview({
   const statusLabel = formatServiceRequestSource(data.estimateStatus);
 
   return (
-    <main className="min-h-screen bg-[#F3F6FA] px-3 py-3 text-[#0F172A] sm:px-6 sm:py-6">
+    <main
+      className={`bg-[#F3F6FA] px-3 py-3 text-[#0F172A] sm:px-6 sm:py-6 ${
+        fillViewport ? "min-h-screen" : ""
+      }`}
+    >
       {isTechnicianPreview ? (
         <div className="mx-auto mb-2 flex max-w-4xl items-center justify-between gap-3 px-1 text-sm">
           <span className="font-black text-[#0F6BFF]">Customer Preview</span>

@@ -379,6 +379,8 @@ function mergeCustomerThread(conversations: HubConversation[]): HubConversation 
   const latestPreviewCarrier =
     sorted.find((conversation) => getConversationPreview(conversation) !== "No message preview yet.") ??
     latest;
+  const sourceAccountCarrier =
+    sorted.find((conversation) => conversation.sourceAccountId) ?? latest;
   const threadSourceTypes = Array.from(
     new Set(sorted.map((conversation) => conversation.sourceType)),
   );
@@ -406,7 +408,7 @@ function mergeCustomerThread(conversations: HubConversation[]): HubConversation 
       customerCarrier.linkedIntakeRequestId ?? latest.linkedIntakeRequestId,
     linkedServiceRequestId:
       customerCarrier.linkedServiceRequestId ?? latest.linkedServiceRequestId,
-    sourceAccountId: latest.sourceAccountId,
+    sourceAccountId: sourceAccountCarrier.sourceAccountId,
     inboundSourceId: latest.inboundSourceId,
     attribution: latest.attribution,
     authoritativeEventType: latest.authoritativeEventType,
@@ -1083,12 +1085,59 @@ function getEventIdentity(event: CommunicationTimelineEvent): {
       title: "Website Request",
     };
   }
+  if (event.type === "estimate_sent") {
+    return {
+      accent: "bg-blue-50 text-[#0F6BFF]",
+      icon: "note",
+      route: "HomeFix → Customer",
+      title: "Estimate sent",
+    };
+  }
+  if (event.type === "estimate_approved") {
+    return {
+      accent: "bg-emerald-50 text-emerald-700",
+      icon: "note",
+      route: "Customer → HomeFix",
+      title: "Estimate approved",
+    };
+  }
+  if (event.type === "estimate_declined") {
+    return {
+      accent: "bg-amber-50 text-amber-700",
+      icon: "note",
+      route: "Customer → HomeFix",
+      title: "Estimate declined",
+    };
+  }
 
   return {
     accent: "bg-[#F8FAFC] text-[#64748B]",
     icon: "note",
     route: "Customer → HomeFix",
     title,
+  };
+}
+
+function getCanonicalConversationSummary(
+  conversation: HubConversation | null,
+): { nextAction: string | null; summary: string | null } {
+  if (!conversation) {
+    return { summary: null, nextAction: null };
+  }
+
+  const summary = conversation.summary?.trim() || null;
+  const nextAction = conversation.nextAction?.trim() || null;
+  const staleApprovalPending =
+    summary?.toLowerCase().includes("estimate approval pending") ||
+    nextAction?.toLowerCase().includes("estimate approval pending");
+
+  if (!staleApprovalPending) {
+    return { summary, nextAction };
+  }
+
+  return {
+    summary,
+    nextAction: "Review the latest Estimate status in Job Finance.",
   };
 }
 
@@ -2015,6 +2064,8 @@ export function CommunicationsHub() {
     detail.intake?.linked_service_request_id ??
     selectedConversation?.linkedServiceRequestId ??
     null;
+  const canonicalConversationSummary =
+    getCanonicalConversationSummary(selectedConversation);
   const createJobBlockedReason = getCreateJobBlockedReason(detail, selectedConversation);
   const canCreateJobFromConversation = Boolean(
     selectedConversation &&
@@ -3250,11 +3301,13 @@ export function CommunicationsHub() {
                 </Panel>
 
                 <Panel title="AI Summary">
-                  {selectedConversation.summary || selectedConversation.nextAction ? (
+                  {canonicalConversationSummary.summary || canonicalConversationSummary.nextAction ? (
                     <div className="space-y-3 text-sm font-medium leading-6 text-[#334155]">
-                      {selectedConversation.summary ? <p>{selectedConversation.summary}</p> : null}
-                      {selectedConversation.nextAction ? (
-                        <ContextRow label="Next" value={selectedConversation.nextAction} />
+                      {canonicalConversationSummary.summary ? (
+                        <p>{canonicalConversationSummary.summary}</p>
+                      ) : null}
+                      {canonicalConversationSummary.nextAction ? (
+                        <ContextRow label="Next" value={canonicalConversationSummary.nextAction} />
                       ) : null}
                     </div>
                   ) : (

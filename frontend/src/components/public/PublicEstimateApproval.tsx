@@ -258,9 +258,9 @@ export function PublicEstimateApproval({
 
   return (
     <main className="min-h-screen bg-[#F3F6FA] pb-6">
-      <CustomerEstimatePreview data={customerPreviewData} />
+      <CustomerEstimatePreview data={customerPreviewData} fillViewport={false} />
 
-      <section className="mx-auto mt-3 max-w-4xl px-3 sm:px-6">
+      <section className="mx-auto mt-4 max-w-4xl px-3 sm:mt-6 sm:px-6">
         <div className="rounded-2xl border border-blue-100 bg-white p-4 shadow-[0_12px_32px_rgba(15,23,42,0.06)]">
           {isOpenForResponse ? (
             <>

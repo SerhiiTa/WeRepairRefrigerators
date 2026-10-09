@@ -58,33 +58,11 @@ type RevisionDeliveryTable = {
   select(columns: string): RevisionDeliverySelectQuery;
 };
 
-type TimelineInsert = {
-  body: string;
-  conversation_id: string;
-  estimate_id: string;
-  event_time: string;
-  event_type: "estimate_sent";
-  service_request_id: string;
-  title: string;
-};
-
-type TimelineTable = {
-  insert(row: TimelineInsert): Promise<{ error: { message: string } | null }>;
-};
-
 function revisionDeliveryTable(
   supabase: NonNullable<ReturnType<typeof getSupabaseServiceRoleClient>>,
 ): RevisionDeliveryTable {
   return (supabase as unknown as { from(table: string): RevisionDeliveryTable }).from(
     "service_request_estimate_revision_deliveries",
-  );
-}
-
-function communicationTimelineTable(
-  supabase: NonNullable<ReturnType<typeof getSupabaseServiceRoleClient>>,
-): TimelineTable {
-  return (supabase as unknown as { from(table: string): TimelineTable }).from(
-    "communication_timeline_events",
   );
 }
 
@@ -144,6 +122,7 @@ async function resolveEstimateContext(input: {
 }): Promise<
   | {
       ok: true;
+      companyId: string;
       estimate: EstimateRow;
       serviceRequest: ServiceRequestRow;
       recipientPhone: string;
@@ -186,11 +165,12 @@ async function resolveEstimateContext(input: {
   if (!serviceRequest.company_id) {
     return { ok: false, status: 400, message: "Job is missing company context." };
   }
+  const companyId = serviceRequest.company_id;
 
   const { data: conversations, error: conversationsError } = await supabase
     .from("communication_conversations")
     .select("*")
-    .eq("company_id", serviceRequest.company_id)
+    .eq("company_id", companyId)
     .eq("service_request_id", serviceRequest.id)
     .order("updated_at", { ascending: false })
     .limit(20);
@@ -208,6 +188,7 @@ async function resolveEstimateContext(input: {
   if (existingConversation) {
     return {
       ok: true,
+      companyId,
       estimate,
       serviceRequest,
       recipientPhone,
@@ -219,7 +200,7 @@ async function resolveEstimateContext(input: {
   const { data: createdConversation, error: createError } = await supabase
     .from("communication_conversations")
     .insert({
-      company_id: serviceRequest.company_id,
+      company_id: companyId,
       primary_source_type: "sms",
       status: "linked",
       customer_id: serviceRequest.customer_id,
@@ -242,6 +223,7 @@ async function resolveEstimateContext(input: {
 
   return {
     ok: true,
+    companyId,
     estimate,
     serviceRequest,
     recipientPhone,
@@ -329,6 +311,17 @@ export async function sendEstimateRevisionSms(input: {
     return { ok: false, status: readiness.status, message: readiness.message };
   }
 
+  await supabase
+    .from("communication_conversations")
+    .update({
+      source_account_id: readiness.sourceAccountId,
+      provider_name: "telnyx",
+      primary_source_type: "sms",
+      status: "linked",
+    })
+    .eq("id", context.conversationId)
+    .eq("company_id", context.companyId);
+
   const revision = await input.sendRevision();
   if (!revision.approval_token || !revision.revision_id) {
     return { ok: false, status: 503, message: "Estimate revision could not be prepared for SMS." };
@@ -373,17 +366,22 @@ export async function sendEstimateRevisionSms(input: {
     return { ok: false, status: sendResult.status, message: sendResult.message };
   }
 
-  await communicationTimelineTable(supabase).insert({
-    conversation_id: context.conversationId,
-    event_type: "estimate_sent",
-    title: "Estimate sent",
-    body: `Estimate ${revision.estimate_number ?? context.estimate.estimate_number ?? ""} revision ${
-      revision.revision_number ?? ""
-    } was sent by SMS.`.trim(),
-    event_time: now,
-    service_request_id: context.serviceRequest.id,
-    estimate_id: input.estimateId,
-  });
+  await supabase
+    .from("communication_conversations")
+    .update({
+      source_account_id: readiness.sourceAccountId,
+      provider_name: "telnyx",
+      primary_source_type: "sms",
+      status: "linked",
+      summary: `Estimate ${
+        revision.estimate_number ?? context.estimate.estimate_number ?? ""
+      } sent by SMS.`.trim(),
+      next_action: "Awaiting customer estimate response.",
+      last_event_at: now,
+      last_outbound_at: now,
+    })
+    .eq("id", context.conversationId)
+    .eq("company_id", context.companyId);
 
   return {
     ok: true,

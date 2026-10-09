@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { getSupabaseServiceRoleClient } from "@/lib/supabase/service-role";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 type EstimateRespondRouteProps = {
@@ -52,6 +53,54 @@ function formatRespondError(message: string): string {
   return "We could not record this estimate response yet.";
 }
 
+async function refreshCommunicationSummaryAfterResponse(input: {
+  estimateId: string;
+  response: "approved" | "declined";
+}) {
+  const serviceRole = getSupabaseServiceRoleClient();
+
+  if (!serviceRole) {
+    return;
+  }
+
+  const { data: estimate } = await serviceRole
+    .from("service_request_estimates")
+    .select("id,service_request_id,estimate_number")
+    .eq("id", input.estimateId)
+    .maybeSingle();
+
+  if (!estimate?.service_request_id) {
+    return;
+  }
+
+  const { data: serviceRequest } = await serviceRole
+    .from("service_requests")
+    .select("id,company_id")
+    .eq("id", estimate.service_request_id)
+    .maybeSingle();
+
+  if (!serviceRequest?.company_id) {
+    return;
+  }
+
+  const approved = input.response === "approved";
+
+  await serviceRole
+    .from("communication_conversations")
+    .update({
+      summary: `Estimate ${estimate.estimate_number ?? "Estimate"} ${
+        approved ? "approved" : "declined"
+      } by customer.`,
+      next_action: approved
+        ? "Estimate approved. Review scheduling, invoice, or deposit next steps."
+        : "Estimate declined. Follow up with the customer if a revision is needed.",
+      status: "needs_action",
+      last_event_at: new Date().toISOString(),
+    })
+    .eq("company_id", serviceRequest.company_id)
+    .eq("service_request_id", estimate.service_request_id);
+}
+
 export async function POST(
   request: Request,
   { params }: EstimateRespondRouteProps,
@@ -100,6 +149,15 @@ export async function POST(
       p_token: token,
     },
   );
+
+  const estimateId =
+    data && typeof data === "object" && "id" in data && typeof data.id === "string"
+      ? data.id
+      : null;
+
+  if (estimateId) {
+    await refreshCommunicationSummaryAfterResponse({ estimateId, response });
+  }
 
   return NextResponse.json({
     ok: true,
