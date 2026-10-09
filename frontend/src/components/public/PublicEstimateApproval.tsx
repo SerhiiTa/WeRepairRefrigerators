@@ -25,6 +25,9 @@ export type PublicEstimatePayload = {
   estimate: {
     estimate_number: string;
     estimate_status: string;
+    revision_id?: string | null;
+    revision_number?: number | null;
+    link_state?: string | null;
     subtotal: number;
     discount_type?: "flat" | "percent" | null;
     discount_value?: number | null;
@@ -38,7 +41,19 @@ export type PublicEstimatePayload = {
     disclaimer_text: string | null;
     sent_at: string | null;
     customer_responded_at: string | null;
+    token_expires_at?: string | null;
     items: PublicEstimateItem[];
+    deliveries?: Array<{
+      delivery_channel: string;
+      delivery_status: string;
+      provider?: string | null;
+      provider_message_id?: string | null;
+      provider_status?: string | null;
+      provider_error?: string | null;
+      sent_at?: string | null;
+      delivered_at?: string | null;
+      failed_at?: string | null;
+    }>;
   };
   service_request: {
     customer_name: string;
@@ -120,6 +135,37 @@ function buildCustomerPreviewData(
   };
 }
 
+function getLinkStateMessage(linkState: string | null | undefined) {
+  if (linkState === "updated" || linkState === "revoked") {
+    return {
+      title: "Updated estimate available",
+      body:
+        "This estimate link points to an older revision. Please ask the technician for the newest approval link.",
+    };
+  }
+
+  if (linkState === "expired") {
+    return {
+      title: "Estimate link expired",
+      body:
+        "This approval link has expired. Please ask the technician to resend the estimate.",
+    };
+  }
+
+  if (linkState === "unavailable") {
+    return {
+      title: "Estimate unavailable",
+      body:
+        "This estimate is no longer open for customer approval. Please contact the technician for the current status.",
+    };
+  }
+
+  return {
+    title: "Response recorded",
+    body: null,
+  };
+}
+
 export function PublicEstimateApproval({
   token,
   initialEstimate,
@@ -135,8 +181,11 @@ export function PublicEstimateApproval({
     "approved" | "declined" | null
   >(null);
 
-  const isOpenForResponse = estimate.estimate.estimate_status === "sent";
+  const linkState = estimate.estimate.link_state ?? "active";
+  const isOpenForResponse =
+    linkState === "active" && estimate.estimate.estimate_status === "sent";
   const customerPreviewData = buildCustomerPreviewData(estimate);
+  const unavailableMessage = getLinkStateMessage(linkState);
 
   async function submitResponse(response: "approved" | "declined") {
     setResponseState({ status: "saving", message: null });
@@ -246,17 +295,19 @@ export function PublicEstimateApproval({
           ) : (
             <>
               <p className="text-sm font-black text-[#0F172A]">
-                Response recorded
+                {unavailableMessage.title}
               </p>
               <p className="mt-1 text-sm leading-6 text-[#475569]">
-                This proposal is marked{" "}
-                {formatServiceRequestSource(estimate.estimate.estimate_status)}
-                {estimate.estimate.customer_responded_at
-                  ? ` as of ${formatServiceRequestDate(
-                      estimate.estimate.customer_responded_at,
-                    )}`
-                  : ""}
-                .
+                {unavailableMessage.body ??
+                  `This proposal is marked ${formatServiceRequestSource(
+                    estimate.estimate.estimate_status,
+                  )}${
+                    estimate.estimate.customer_responded_at
+                      ? ` as of ${formatServiceRequestDate(
+                          estimate.estimate.customer_responded_at,
+                        )}`
+                      : ""
+                  }.`}
               </p>
             </>
           )}

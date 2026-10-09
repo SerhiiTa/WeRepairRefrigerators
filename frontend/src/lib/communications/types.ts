@@ -88,4 +88,22 @@ export type CommunicationProviderAdapter = {
   providerName: string;
   isConfigured: boolean;
   normalizeInbound(payload: unknown): CommunicationProviderEnvelope | null;
+  sendEstimateMessage?: (input: {
+    channel: "sms" | "email";
+    recipient: string;
+    body: string;
+    approvalUrl: string;
+    idempotencyKey: string;
+  }) => Promise<
+    | {
+        ok: true;
+        providerMessageId: string;
+        providerStatus: "pending" | "sent" | "delivered";
+      }
+    | {
+        ok: false;
+        reason: "provider_unavailable" | "provider_failed";
+        message: string;
+      }
+  >;
 };

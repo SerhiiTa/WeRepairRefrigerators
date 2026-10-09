@@ -44,6 +44,16 @@ type ManualEstimateMetadata = {
   estimatedCompletion: string;
 };
 
+type EstimateDeliveryChannel = "sms" | "email";
+
+type EstimateDeliveryRequest = {
+  channel: EstimateDeliveryChannel;
+  recipient: string;
+  messagePreview: string;
+  idempotencyKey: string;
+  allowCustomerEmailReplacement?: boolean;
+};
+
 type PriceBookItemType = "labor" | "part" | "service" | "fee" | "bundle";
 
 type PriceBookSearchItem = {
@@ -94,11 +104,26 @@ type ManualEstimateEditorProps = {
   onSendEstimate: (estimate: {
     id: string;
     estimateNumber: string;
+    delivery: EstimateDeliveryRequest;
   }) => Promise<boolean> | boolean;
+  onReviseEstimate?: (estimate: {
+    id: string;
+    estimateNumber: string;
+  }) =>
+    | Promise<{ ok: true } | { ok: false; message: string }>
+    | { ok: true }
+    | { ok: false; message: string };
   onDeleteEstimate?: (estimate: {
     id: string;
     estimateNumber: string;
   }) => Promise<boolean> | boolean;
+  onUndoApproval?: (estimate: {
+    id: string;
+    estimateNumber: string;
+  }) =>
+    | Promise<{ ok: true } | { ok: false; message: string }>
+    | { ok: true }
+    | { ok: false; message: string };
   onCreateInvoice?: (estimate: DashboardServiceRequestEstimate) => Promise<void> | void;
   onCollectPayment?: (estimate: DashboardServiceRequestEstimate) => void;
   customerHref?: string | null;
@@ -530,6 +555,34 @@ function limitMetadataText(value: string, maxLength: number) {
   return value.trim().slice(0, maxLength);
 }
 
+function normalizePhoneDigits(value: string) {
+  return value.replace(/\D/g, "");
+}
+
+function isValidEstimateSmsRecipient(value: string) {
+  const digits = normalizePhoneDigits(value);
+
+  return digits.length === 10 || (digits.length === 11 && digits.startsWith("1"));
+}
+
+function isValidEstimateEmailRecipient(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
+function createEstimateDeliveryIdempotencyKey(
+  estimateId: string,
+  channel: EstimateDeliveryChannel,
+  recipient: string,
+) {
+  return [
+    "estimate-delivery",
+    estimateId,
+    channel,
+    recipient.trim().toLowerCase(),
+    Date.now().toString(36),
+  ].join(":");
+}
+
 function getLineTotal(line: ManualEstimateLine) {
   return Math.round(line.quantity * line.customerUnitPrice * 100) / 100;
 }
@@ -585,7 +638,9 @@ export function ManualEstimateEditor({
   onSwitchEstimate,
   onApproveForCustomer,
   onSendEstimate,
+  onReviseEstimate,
   onDeleteEstimate,
+  onUndoApproval,
   onCreateInvoice,
   onCollectPayment,
   customerHref,
@@ -635,13 +690,24 @@ export function ManualEstimateEditor({
     message: null,
   });
   const [pendingAction, setPendingAction] = useState<
-    "save" | "send" | "approve" | null
+    "save" | "send" | "approve" | "revise" | null
   >(null);
   const [validationAttempted, setValidationAttempted] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isEstimateMenuOpen, setIsEstimateMenuOpen] = useState(false);
   const [isAddItemMenuOpen, setIsAddItemMenuOpen] = useState(false);
+  const [isSendEstimateOpen, setIsSendEstimateOpen] = useState(false);
+  const [deliveryChannel, setDeliveryChannel] =
+    useState<EstimateDeliveryChannel>("sms");
+  const [deliveryRecipient, setDeliveryRecipient] = useState(
+    request.customerPhone ?? "",
+  );
+  const [deliveryRecipientTouched, setDeliveryRecipientTouched] =
+    useState(false);
+  const [allowCustomerEmailReplacement, setAllowCustomerEmailReplacement] =
+    useState(false);
   const [isApproveConfirmOpen, setIsApproveConfirmOpen] = useState(false);
+  const [isUndoApprovalConfirmOpen, setIsUndoApprovalConfirmOpen] = useState(false);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
   const [activeWorkspaceTab, setActiveWorkspaceTab] =
     useState<EstimateWorkspaceTab>("items");
@@ -868,6 +934,25 @@ export function ManualEstimateEditor({
     saveState.status !== "saving" &&
     sendingEstimateId === null &&
     !["declined", "void"].includes(estimateStatus);
+  const normalizedDeliveryRecipient = deliveryRecipient.trim();
+  const deliveryRecipientIsValid =
+    deliveryChannel === "sms"
+      ? isValidEstimateSmsRecipient(normalizedDeliveryRecipient)
+      : isValidEstimateEmailRecipient(normalizedDeliveryRecipient);
+  const customerEmailReplacementRequired =
+    deliveryChannel === "email" &&
+    Boolean(request.customerEmail?.trim()) &&
+    normalizedDeliveryRecipient.toLowerCase() !==
+      request.customerEmail?.trim().toLowerCase();
+  const canConfirmEstimateDelivery =
+    canAttemptSend &&
+    deliveryRecipientIsValid &&
+    (!customerEmailReplacementRequired || allowCustomerEmailReplacement);
+  const estimateDeliveryMessagePreview = `Please review estimate ${
+    savedEstimateNumber ?? "Estimate"
+  } from ${
+    request.selectedTechnicianBusinessName ?? "WeRepairRefrigerators"
+  }. Your secure approval link will be included when delivery is sent.`;
   const canEditFinancialFields =
     estimateStatus === "unsaved" || estimateStatus === "draft";
   const canApproveForCustomer =
@@ -876,11 +961,21 @@ export function ManualEstimateEditor({
     !["approved", "converted_to_invoice", "declined", "void"].includes(estimateStatus);
   const canShowDraftActions =
     canEditFinancialFields || estimateStatus === "sent" || estimateStatus === "presented";
+  const canReviseEstimate =
+    savedEstimateId !== null &&
+    (estimateStatus === "sent" || estimateStatus === "declined") &&
+    saveState.status !== "saving" &&
+    Boolean(onReviseEstimate);
   const canDeleteEstimate =
     savedEstimateId !== null &&
     estimateStatus === "draft" &&
     deleteState.status !== "deleting" &&
     Boolean(onDeleteEstimate);
+  const canUndoApproval =
+    savedEstimateId !== null &&
+    estimateStatus === "approved" &&
+    saveState.status !== "saving" &&
+    Boolean(onUndoApproval);
   const createdDate = initialEstimate?.createdAt ?? new Date().toISOString();
   const address = getRequestAddress(request);
   const customerPreviewData: CustomerEstimatePreviewData = {
@@ -1401,6 +1496,24 @@ export function ManualEstimateEditor({
     };
   }, [saveState.status]);
 
+  function openSendEstimateModal() {
+    setValidationAttempted(true);
+
+    if (sendReadinessErrors.length > 0 || sendingEstimateId !== null) {
+      setSaveState({
+        status: "error",
+        message: sendReadinessErrors[0] ?? "Estimate is already being sent.",
+      });
+      return;
+    }
+
+    setDeliveryChannel("sms");
+    setDeliveryRecipient(request.customerPhone ?? "");
+    setDeliveryRecipientTouched(false);
+    setAllowCustomerEmailReplacement(false);
+    setIsSendEstimateOpen(true);
+  }
+
   async function sendToClient() {
     setValidationAttempted(true);
 
@@ -1432,6 +1545,26 @@ export function ManualEstimateEditor({
       return;
     }
 
+    if (!deliveryRecipientIsValid) {
+      setSaveState({
+        status: "error",
+        message:
+          deliveryChannel === "sms"
+            ? "Enter a valid customer phone number before sending."
+            : "Enter a valid customer email before sending.",
+      });
+      return;
+    }
+
+    if (customerEmailReplacementRequired && !allowCustomerEmailReplacement) {
+      setSaveState({
+        status: "error",
+        message:
+          "Confirm that this successful send should replace the Customer email.",
+      });
+      return;
+    }
+
     setSaveState({ status: "saving", message: null });
     setPendingAction("send");
 
@@ -1439,6 +1572,17 @@ export function ManualEstimateEditor({
       const sent = await onSendEstimate({
         id: savedEstimate.id,
         estimateNumber: savedEstimate.estimateNumber,
+        delivery: {
+          channel: deliveryChannel,
+          recipient: normalizedDeliveryRecipient,
+          messagePreview: estimateDeliveryMessagePreview,
+          idempotencyKey: createEstimateDeliveryIdempotencyKey(
+            savedEstimate.id,
+            deliveryChannel,
+            normalizedDeliveryRecipient,
+          ),
+          allowCustomerEmailReplacement,
+        },
       });
       if (!sent) {
         setPendingAction(null);
@@ -1451,6 +1595,7 @@ export function ManualEstimateEditor({
       if (estimateStatus !== "approved") {
         setEstimateStatus("sent");
       }
+      setIsSendEstimateOpen(false);
       setPendingAction(null);
       setSaveState({ status: "success", message: "Estimate sent to customer." });
       await onSaved();
@@ -1518,6 +1663,50 @@ export function ManualEstimateEditor({
     }
   }
 
+  async function reviseEstimate() {
+    if (!savedEstimateId || !savedEstimateNumber || !onReviseEstimate) {
+      setSaveState({
+        status: "error",
+        message: "Choose a sent or declined estimate to revise.",
+      });
+      return;
+    }
+
+    setSaveState({ status: "saving", message: null });
+    setPendingAction("revise");
+
+    try {
+      const result = await onReviseEstimate({
+        id: savedEstimateId,
+        estimateNumber: savedEstimateNumber,
+      });
+
+      if (!result.ok) {
+        setPendingAction(null);
+        setSaveState({
+          status: "error",
+          message: result.message,
+        });
+        return;
+      }
+
+      setEstimateStatus("draft");
+      setPendingAction(null);
+      setSaveState({
+        status: "success",
+        message:
+          "Estimate reopened as a draft revision. Previously sent links were revoked.",
+      });
+      await onSaved();
+    } catch {
+      setPendingAction(null);
+      setSaveState({
+        status: "error",
+        message: "Estimate could not be reopened for revision.",
+      });
+    }
+  }
+
   async function deleteEstimate() {
     if (!savedEstimateId || !canDeleteEstimate) {
       return;
@@ -1545,6 +1734,51 @@ export function ManualEstimateEditor({
       setDeleteState({
         status: "error",
         message: "Estimate could not be deleted.",
+      });
+    }
+  }
+
+  async function undoApproval() {
+    if (!savedEstimateId || !savedEstimateNumber || !canUndoApproval) {
+      setSaveState({
+        status: "error",
+        message: "Approval cannot be undone for this estimate.",
+      });
+      setIsUndoApprovalConfirmOpen(false);
+      return;
+    }
+
+    setSaveState({ status: "saving", message: null });
+    setPendingAction("approve");
+    setIsUndoApprovalConfirmOpen(false);
+
+    try {
+      const result = await onUndoApproval?.({
+        id: savedEstimateId,
+        estimateNumber: savedEstimateNumber,
+      });
+
+      if (!result?.ok) {
+        setPendingAction(null);
+        setSaveState({
+          status: "error",
+          message: result?.message ?? "Approval could not be undone.",
+        });
+        return;
+      }
+
+      setEstimateStatus("draft");
+      setPendingAction(null);
+      setSaveState({
+        status: "success",
+        message: "Approval undone. This estimate is back in Draft.",
+      });
+      await onSaved();
+    } catch {
+      setPendingAction(null);
+      setSaveState({
+        status: "error",
+        message: "Approval could not be undone.",
       });
     }
   }
@@ -1596,18 +1830,33 @@ export function ManualEstimateEditor({
                 >
                   Preview Proposal
                 </button>
-                <button
-                  className="block w-full px-4 py-2.5 text-left text-[#0F172A] hover:bg-[#F8FAFC]"
-                  onClick={() => {
-                    setIsEstimateMenuOpen(false);
-                    if (lines[0]) {
-                      openEditItem(lines[0]);
-                    }
-                  }}
-                  type="button"
-                >
-                  Edit Estimate
-                </button>
+                {canEditFinancialFields ? (
+                  <button
+                    className="block w-full px-4 py-2.5 text-left text-[#0F172A] hover:bg-[#F8FAFC]"
+                    onClick={() => {
+                      setIsEstimateMenuOpen(false);
+                      if (lines[0]) {
+                        openEditItem(lines[0]);
+                      }
+                    }}
+                    type="button"
+                  >
+                    Edit Estimate
+                  </button>
+                ) : null}
+                {canReviseEstimate ? (
+                  <button
+                    className="block w-full px-4 py-2.5 text-left text-amber-700 hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={pendingAction === "revise"}
+                    onClick={() => {
+                      setIsEstimateMenuOpen(false);
+                      void reviseEstimate();
+                    }}
+                    type="button"
+                  >
+                    {pendingAction === "revise" ? "Reopening..." : "Revise Estimate"}
+                  </button>
+                ) : null}
                 <button
                   className="block w-full px-4 py-2.5 text-left text-[#0F172A] hover:bg-[#F8FAFC]"
                   onClick={duplicateEstimate}
@@ -1620,7 +1869,7 @@ export function ManualEstimateEditor({
                   disabled={!canAttemptSend}
                   onClick={() => {
                     setIsEstimateMenuOpen(false);
-                    void sendToClient();
+                    openSendEstimateModal();
                   }}
                   type="button"
                 >
@@ -1657,6 +1906,19 @@ export function ManualEstimateEditor({
                   <div className="px-4 py-2.5 text-left text-xs font-black text-emerald-700">
                     Invoice {linkedInvoiceNumber}
                   </div>
+                ) : null}
+                {savedEstimateId && estimateStatus === "approved" ? (
+                  <button
+                    className="block w-full px-4 py-2.5 text-left text-amber-700 hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={!canUndoApproval}
+                    onClick={() => {
+                      setIsEstimateMenuOpen(false);
+                      setIsUndoApprovalConfirmOpen(true);
+                    }}
+                    type="button"
+                  >
+                    Undo Approval
+                  </button>
                 ) : null}
                 {savedEstimateId && estimateStatus === "draft" ? (
                   <button
@@ -2299,12 +2561,54 @@ export function ManualEstimateEditor({
               Collect Payment
             </button>
           </div>
+        ) : estimateStatus === "sent" ? (
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              className="rounded-xl border border-[#D7E4FF] bg-white px-2 py-3 text-xs font-black text-[#0F6BFF] disabled:cursor-not-allowed disabled:opacity-50 sm:text-sm"
+              disabled={!canAttemptSend}
+              onClick={openSendEstimateModal}
+              type="button"
+            >
+              {pendingAction === "send" || sendingEstimateId === savedEstimateId
+                ? "Sending..."
+                : "Resend"}
+            </button>
+            <button
+              className="rounded-xl border border-amber-200 bg-white px-2 py-3 text-xs font-black text-amber-700 disabled:cursor-not-allowed disabled:opacity-50 sm:text-sm"
+              disabled={!canReviseEstimate || pendingAction === "revise"}
+              onClick={() => void reviseEstimate()}
+              type="button"
+            >
+              {pendingAction === "revise" ? "Opening..." : "Revise"}
+            </button>
+            <button
+              className="rounded-xl bg-[#0F6BFF] px-2 py-3 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-45 sm:text-sm"
+              disabled={!canApproveForCustomer}
+              onClick={() => setIsApproveConfirmOpen(true)}
+              type="button"
+            >
+              Mark Approved
+            </button>
+          </div>
+        ) : estimateStatus === "declined" ? (
+          <div className="grid grid-cols-1 gap-2">
+            <button
+              className="rounded-xl bg-[#0F6BFF] px-2 py-3 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-45 sm:text-sm"
+              disabled={!canReviseEstimate || pendingAction === "revise"}
+              onClick={() => void reviseEstimate()}
+              type="button"
+            >
+              {pendingAction === "revise"
+                ? "Reopening..."
+                : "Create Draft Revision"}
+            </button>
+          </div>
         ) : canShowDraftActions ? (
           <div className="grid grid-cols-2 gap-2">
             <button
               className="rounded-xl border border-[#D7E4FF] bg-white px-2 py-3 text-xs font-black text-[#0F6BFF] disabled:cursor-not-allowed disabled:opacity-50 sm:text-sm"
               disabled={!canAttemptSend}
-              onClick={() => void sendToClient()}
+              onClick={openSendEstimateModal}
               type="button"
             >
               {pendingAction === "send" || sendingEstimateId === savedEstimateId
@@ -2336,6 +2640,140 @@ export function ManualEstimateEditor({
           }
           onSave={saveItemDraft}
         />
+      ) : null}
+
+      {isSendEstimateOpen ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/55 px-3 py-4 backdrop-blur-sm sm:items-center">
+          <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.16em] text-[#0F6BFF]">
+                  Send estimate
+                </p>
+                <h3 className="mt-1 text-lg font-black text-[#0F172A]">
+                  {savedEstimateNumber ?? "Estimate"}
+                </h3>
+                <p className="mt-1 text-xs font-bold text-[#64748B]">
+                  Current revision link will be tied to this send attempt.
+                </p>
+              </div>
+              <button
+                className="rounded-full border border-[#E5E7EB] px-3 py-2 text-sm font-black text-[#64748B]"
+                onClick={() => setIsSendEstimateOpen(false)}
+                type="button"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl bg-[#F8FAFC] p-1">
+              {(["sms", "email"] as const).map((channel) => (
+                <button
+                  className={`rounded-xl px-3 py-2 text-sm font-black ${
+                    deliveryChannel === channel
+                      ? "bg-white text-[#0F6BFF] shadow-sm"
+                      : "text-[#64748B]"
+                  }`}
+                  key={channel}
+                  onClick={() => {
+                    setDeliveryChannel(channel);
+                    setAllowCustomerEmailReplacement(false);
+                    if (!deliveryRecipientTouched) {
+                      setDeliveryRecipient(
+                        channel === "sms"
+                          ? request.customerPhone ?? ""
+                          : request.customerEmail ?? "",
+                      );
+                    }
+                  }}
+                  type="button"
+                >
+                  {channel === "sms" ? "SMS" : "Email"}
+                </button>
+              ))}
+            </div>
+
+            <label className="mt-4 block text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
+              Recipient {deliveryChannel === "sms" ? "phone" : "email"}
+            </label>
+            <input
+              className="mt-2 w-full rounded-2xl border border-[#D7E4FF] px-3 py-3 text-sm font-bold text-[#0F172A] outline-none focus:border-[#0F6BFF]"
+              inputMode={deliveryChannel === "sms" ? "tel" : "email"}
+              onChange={(event) => {
+                setDeliveryRecipient(event.currentTarget.value);
+                setDeliveryRecipientTouched(true);
+                setAllowCustomerEmailReplacement(false);
+              }}
+              placeholder={
+                deliveryChannel === "sms"
+                  ? "(555) 123-4567"
+                  : "customer@example.com"
+              }
+              type={deliveryChannel === "sms" ? "tel" : "email"}
+              value={deliveryRecipient}
+            />
+            {!deliveryRecipientIsValid && normalizedDeliveryRecipient ? (
+              <p className="mt-2 text-xs font-bold text-amber-700">
+                {deliveryChannel === "sms"
+                  ? "Enter a valid 10-digit US phone number."
+                  : "Enter a valid email address."}
+              </p>
+            ) : null}
+            {deliveryChannel === "email" && !request.customerEmail ? (
+              <p className="mt-2 text-xs font-semibold leading-5 text-[#64748B]">
+                This Customer does not have an email yet. After a successful provider send,
+                HomeFixOS will save this email to the existing Customer record.
+              </p>
+            ) : null}
+            {customerEmailReplacementRequired ? (
+              <label className="mt-3 flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs font-bold leading-5 text-amber-800">
+                <input
+                  checked={allowCustomerEmailReplacement}
+                  className="mt-1"
+                  onChange={(event) =>
+                    setAllowCustomerEmailReplacement(event.currentTarget.checked)
+                  }
+                  type="checkbox"
+                />
+                Replace the existing Customer email after this send is accepted by
+                the provider.
+              </label>
+            ) : null}
+
+            <div className="mt-4 rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] p-3">
+              <p className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
+                Message preview
+              </p>
+              <p className="mt-2 text-sm font-semibold leading-6 text-[#334155]">
+                {estimateDeliveryMessagePreview}
+              </p>
+            </div>
+
+            {saveState.status === "error" && saveState.message ? (
+              <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-800">
+                {saveState.message}
+              </p>
+            ) : null}
+
+            <div className="mt-5 grid grid-cols-2 gap-2">
+              <button
+                className="rounded-xl border border-[#E5E7EB] px-4 py-3 text-sm font-black text-[#0F172A]"
+                onClick={() => setIsSendEstimateOpen(false)}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded-xl bg-[#0F6BFF] px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-45"
+                disabled={!canConfirmEstimateDelivery || pendingAction === "send"}
+                onClick={() => void sendToClient()}
+                type="button"
+              >
+                {pendingAction === "send" ? "Sending..." : "Send Estimate"}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
 
       {isApproveConfirmOpen ? (
@@ -2380,6 +2818,41 @@ export function ManualEstimateEditor({
                 type="button"
               >
                 Confirm Approval
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isUndoApprovalConfirmOpen ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/55 px-3 py-4 backdrop-blur-sm sm:items-center">
+          <div className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl">
+            <h3 className="text-lg font-black text-[#0F172A]">
+              Undo estimate approval?
+            </h3>
+            <p className="mt-2 text-sm font-semibold leading-6 text-[#475569]">
+              This returns the Estimate to Draft so it can be edited or deleted.
+              Approval history is preserved for audit.
+            </p>
+            {saveState.status === "error" && saveState.message ? (
+              <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-800">
+                {saveState.message}
+              </p>
+            ) : null}
+            <div className="mt-5 grid grid-cols-2 gap-2">
+              <button
+                className="rounded-xl border border-[#E5E7EB] px-4 py-3 text-sm font-black text-[#0F172A]"
+                onClick={() => setIsUndoApprovalConfirmOpen(false)}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded-xl bg-amber-600 px-4 py-3 text-sm font-black text-white"
+                onClick={() => void undoApproval()}
+                type="button"
+              >
+                Undo Approval
               </button>
             </div>
           </div>

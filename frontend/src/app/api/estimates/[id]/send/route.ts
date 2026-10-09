@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import type { PostgrestError } from "@supabase/supabase-js";
 
+import { sendEstimateRevisionSms } from "@/server/finance/estimate-communications-delivery";
 import { createUserScopedServerClient } from "@/server/onboarding/supabase";
 
 type EstimateSendRouteProps = {
@@ -15,6 +15,14 @@ type FailureDebug = {
   details?: string;
   hint?: string;
   estimateId?: string;
+};
+
+type SendEstimatePayload = {
+  channel?: unknown;
+  recipient?: unknown;
+  messagePreview?: unknown;
+  idempotencyKey?: unknown;
+  allowCustomerEmailReplacement?: unknown;
 };
 
 function fail(message: string, status = 400, debug?: FailureDebug) {
@@ -49,6 +57,20 @@ function isUuid(value: string): boolean {
   );
 }
 
+function isValidEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
+function isValidSmsRecipient(value: string): boolean {
+  const digits = value.replace(/\D/g, "");
+
+  return digits.length === 10 || (digits.length === 11 && digits.startsWith("1"));
+}
+
+function normalizeChannel(value: unknown): "sms" | "email" | null {
+  return value === "sms" || value === "email" ? value : null;
+}
+
 function logSendError(context: string, debug: FailureDebug) {
   if (process.env.NODE_ENV === "production") {
     return;
@@ -60,126 +82,26 @@ function logSendError(context: string, debug: FailureDebug) {
   });
 }
 
-function classifySendError(error: PostgrestError): {
-  message: string;
-  status: number;
-  debug: FailureDebug;
-} {
-  const message = error.message;
-  const details = error.details ?? undefined;
-  const hint = error.hint ?? undefined;
-  const code = error.code ?? undefined;
-  const combined = `${message} ${details ?? ""} ${hint ?? ""}`.toLowerCase();
-
+function formatEstimateSendFailure(message: string): string {
   if (
     message.includes("send_service_request_estimate_to_customer_rpc") ||
+    message.includes("service_request_estimate_revisions") ||
+    message.includes("service_request_estimate_revision_deliveries") ||
     message.includes("Could not find the function") ||
     message.includes("schema cache")
   ) {
-    return {
-      message:
-        "RPC missing: send_service_request_estimate_to_customer_rpc is not available. Apply migration 0026 in Supabase, then try again.",
-      status: 503,
-      debug: {
-        category: "rpc_missing",
-        code,
-        details,
-        hint,
-      },
-    };
+    return "Estimate revision delivery is not ready yet. Apply migration 0119 before sending.";
   }
 
-  if (message.includes("draft")) {
-    return {
-      message: "Estimate validation failed: only draft estimates can be sent.",
-      status: 409,
-      debug: {
-        category: "estimate_not_draft",
-        code,
-        details,
-        hint,
-      },
-    };
+  if (message.includes("not accessible") || message.includes("permission denied")) {
+    return "This account is not allowed to send that estimate.";
   }
 
-  if (message.includes("not found")) {
-    return {
-      message: "Estimate not found: choose an existing draft estimate.",
-      status: 404,
-      debug: {
-        category: "estimate_not_found",
-        code,
-        details,
-        hint,
-      },
-    };
+  if (message.includes("line item") || message.includes("greater than zero")) {
+    return message;
   }
 
-  if (
-    message.includes("not accessible") ||
-    message.includes("permission denied") ||
-    message.includes("row-level security")
-  ) {
-    return {
-      message:
-        "RPC permission denied: this account is not allowed to send that estimate.",
-      status: 403,
-      debug: {
-        category: "rpc_permission_denied",
-        code,
-        details,
-        hint,
-      },
-    };
-  }
-
-  if (
-    code === "23514" ||
-    combined.includes("check constraint") ||
-    combined.includes("violates check")
-  ) {
-    return {
-      message:
-        "Database validation failed while sending the estimate. In development, check the response debug payload and server console for the exact constraint.",
-      status: 422,
-      debug: {
-        category: combined.includes("service_request_notes")
-          ? "timeline_note_constraint"
-          : "database_validation_failed",
-        code,
-        details,
-        hint,
-      },
-    };
-  }
-
-  if (code?.startsWith("22") || code?.startsWith("23")) {
-    return {
-      message:
-        "Database error while sending the estimate. In development, check the response debug payload and server console.",
-      status: 422,
-      debug: {
-        category: "database_error",
-        code,
-        details,
-        hint,
-      },
-    };
-  }
-
-  return {
-    message:
-      process.env.NODE_ENV === "production"
-        ? "We could not send this estimate yet."
-        : `Database error while sending estimate: ${message}`,
-    status: 500,
-    debug: {
-      category: "database_error",
-      code,
-      details,
-      hint,
-    },
-  };
+  return "Estimate could not be sent. Please try again.";
 }
 
 export async function POST(
@@ -225,61 +147,133 @@ export async function POST(
     });
   }
 
-  const { data, error } = await supabase.rpc(
-    "send_service_request_estimate_to_customer_rpc",
-    {
-      p_estimate_id: id,
-    },
-  );
-
-  if (error) {
-    const classified = classifySendError(error);
-    const debug = {
-      ...classified.debug,
-      estimateId: id,
-    };
-
-    logSendError("send_service_request_estimate_to_customer_rpc", debug);
-
-    return fail(classified.message, classified.status, debug);
-  }
-
-  const token =
-    data && typeof data === "object" && "approval_token" in data
-      ? String(data.approval_token ?? "")
-      : "";
-
-  if (!/^[0-9a-f]{64}$/i.test(token)) {
-    const debug = {
-      category: "rpc_validation_failed",
-      estimateId: id,
-      details: "RPC returned without a valid 64-character approval token.",
-    };
-
-    logSendError("rpc_result", debug);
-
-    return fail("RPC validation failed: approval token was not returned.", 500, debug);
-  }
-
-  const approvalUrl = new URL(`/estimates/${token}`, request.url).toString();
+  let payload: SendEstimatePayload;
 
   try {
-    await supabase.rpc("record_estimate_learning_event_rpc", {
-      p_request_id: null,
-      p_estimate_id: id,
-      p_event_type: "draft_sent",
-      p_decision_context: {
-        eventSource: "estimate_send_api",
-        sentAt: new Date().toISOString(),
-      },
-    });
+    payload = (await request.json()) as SendEstimatePayload;
   } catch {
-    // Learning events are best-effort and must never block estimate sending.
+    return fail("Send Estimate requires a valid JSON body.", 400, {
+      category: "invalid_json",
+      estimateId: id,
+    });
+  }
+
+  const channel = normalizeChannel(payload.channel);
+  const recipient =
+    typeof payload.recipient === "string" ? payload.recipient.trim() : "";
+  const idempotencyKey =
+    typeof payload.idempotencyKey === "string"
+      ? payload.idempotencyKey.trim().slice(0, 220)
+      : "";
+
+  if (!channel) {
+    return fail("Choose SMS or Email before sending this estimate.", 400, {
+      category: "invalid_delivery_channel",
+      estimateId: id,
+    });
+  }
+
+  if (
+    (channel === "sms" && !isValidSmsRecipient(recipient)) ||
+    (channel === "email" && !isValidEmail(recipient))
+  ) {
+    return fail(
+      channel === "sms"
+        ? "Enter a valid customer phone number before sending."
+        : "Enter a valid customer email before sending.",
+      400,
+      {
+        category: "invalid_recipient",
+        estimateId: id,
+      },
+    );
+  }
+
+  if (!idempotencyKey) {
+    return fail("Send Estimate requires an idempotency key.", 400, {
+      category: "missing_idempotency_key",
+      estimateId: id,
+    });
+  }
+
+  if (channel === "email") {
+    return fail("Email estimate delivery is not configured yet. Choose SMS for this send.", 503, {
+      category: "provider_unavailable",
+      estimateId: id,
+      details: "Outbound estimate email has no configured provider.",
+    });
+  }
+
+  const deliveryResult = await sendEstimateRevisionSms({
+    estimateId: id,
+    idempotencyKey,
+    messagePreview:
+      typeof payload.messagePreview === "string" && payload.messagePreview.trim()
+        ? payload.messagePreview.trim()
+        : "Please review your estimate:",
+    recipient,
+    request,
+    sendRevision: async () => {
+      const { data, error } = await supabase.rpc(
+        "send_service_request_estimate_to_customer_rpc",
+        { p_estimate_id: id },
+      );
+
+      if (error) {
+        throw error;
+      }
+
+      return (data ?? {}) as {
+        approval_token?: string;
+        estimate_number?: string | null;
+        estimate_status?: string;
+        id?: string;
+        revision_id?: string;
+        revision_number?: number;
+        service_request_status?: string;
+      };
+    },
+  }).catch((error: unknown) => {
+    const rawMessage = error instanceof Error ? error.message : "Estimate could not be sent.";
+    const message = formatEstimateSendFailure(rawMessage);
+    logSendError("sendEstimateRevisionSms", {
+      category: "send_failed",
+      estimateId: id,
+      details: rawMessage,
+    });
+    return { ok: false as const, status: 503, message };
+  });
+
+  if (!deliveryResult.ok) {
+    return fail(deliveryResult.message, deliveryResult.status, {
+      category:
+        deliveryResult.status === 409
+          ? "idempotency_conflict"
+          : deliveryResult.status === 503
+            ? "provider_unavailable"
+            : "send_failed",
+      estimateId: id,
+      details: deliveryResult.message,
+    });
   }
 
   return NextResponse.json({
     ok: true,
-    estimate: data,
-    approvalUrl,
+    message: deliveryResult.approvalUrl
+      ? "Estimate sent by SMS."
+      : "Estimate send request already completed.",
+    approvalUrl: deliveryResult.approvalUrl,
+    delivery: {
+      channel,
+      conversationId: deliveryResult.conversationId,
+      communicationMessageId: deliveryResult.messageId,
+      providerMessageId: deliveryResult.providerMessageId,
+      revisionId: deliveryResult.revisionId,
+      revisionNumber: deliveryResult.revisionNumber,
+    },
+    estimate: {
+      id,
+      estimate_status: "sent",
+    },
   });
 }

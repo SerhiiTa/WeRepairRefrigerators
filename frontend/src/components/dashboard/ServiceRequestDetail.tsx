@@ -4730,7 +4730,12 @@ export function ServiceRequestDetail({
         setSelectedStatus("contacted");
       }
 
-      await sendEstimateById(savedEstimate.id, savedEstimate.estimateNumber);
+      setEstimateSaveState({
+        status: "success",
+        message:
+          "Draft saved. Open the saved Estimate and use Send Estimate to choose SMS or Email.",
+      });
+      void loadEstimates();
       return savedEstimate;
     }
 
@@ -4773,7 +4778,17 @@ export function ServiceRequestDetail({
     return savedEstimate;
   }
 
-  async function sendEstimateById(estimateId: string, estimateNumber: string) {
+  async function sendEstimateById(
+    estimateId: string,
+    estimateNumber: string,
+    delivery: {
+      channel: "sms" | "email";
+      recipient: string;
+      messagePreview: string;
+      idempotencyKey: string;
+      allowCustomerEmailReplacement?: boolean;
+    },
+  ) {
     if (process.env.NODE_ENV === "development") {
       console.debug("[Estimate Approval] Send To Customer clicked", {
         estimateId,
@@ -4844,7 +4859,9 @@ export function ServiceRequestDetail({
         method: "POST",
         headers: {
           Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
         },
+        body: JSON.stringify(delivery),
       });
       payload = (await response.json().catch(() => null)) as {
         ok?: boolean;
@@ -4938,6 +4955,112 @@ export function ServiceRequestDetail({
     void loadEstimates();
     void loadNotes();
     return true;
+  }
+
+  async function reviseEstimateById(
+    estimateId: string,
+    estimateNumber: string,
+  ) {
+    setEstimateSaveState({
+      status: "saving",
+      message: `Reopening ${estimateNumber} as a draft revision...`,
+    });
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      const message = "Estimate revision actions are not available for this workspace.";
+      setEstimateSaveState({ status: "error", message });
+      return { ok: false as const, message };
+    }
+
+    const sessionResult = await getDashboardActionSession(supabase);
+
+    if (!sessionResult.ok) {
+      setEstimateSaveState({
+        status: "error",
+        message: sessionResult.message,
+      });
+      return { ok: false as const, message: sessionResult.message };
+    }
+
+    const { data: sessionData, error: sessionError } = sessionResult.response;
+    const accessToken = sessionData.session?.access_token;
+
+    if (sessionError || !accessToken) {
+      const message = "Log in again before revising this Repair Proposal.";
+      setEstimateSaveState({ status: "error", message });
+      return { ok: false as const, message };
+    }
+
+    let response: Response;
+    let payload: {
+      ok?: boolean;
+      message?: string;
+      estimate?: {
+        estimate_status?: DashboardServiceRequestEstimate["estimateStatus"];
+      };
+    } | null;
+
+    try {
+      response = await fetch(`/api/estimates/${estimateId}/revise`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+      payload = (await response.json().catch(() => null)) as {
+        ok?: boolean;
+        message?: string;
+        estimate?: {
+          estimate_status?: DashboardServiceRequestEstimate["estimateStatus"];
+        };
+      } | null;
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "The estimate revision request did not reach the server.";
+      setEstimateSaveState({ status: "error", message });
+      return { ok: false as const, message };
+    }
+
+    if (!response.ok || !payload?.ok) {
+      const message =
+        payload?.message ?? "Estimate could not be reopened for revision.";
+      setEstimateSaveState({ status: "error", message });
+      return { ok: false as const, message };
+    }
+
+    setEstimatesState((current) => {
+      if (current.status !== "ready") {
+        return current;
+      }
+
+      return {
+        status: "ready",
+        estimates: current.estimates.map((currentEstimate) =>
+          currentEstimate.id === estimateId
+            ? {
+                ...currentEstimate,
+                estimateStatus: "draft",
+                updatedAt: new Date().toISOString(),
+              }
+            : currentEstimate,
+        ),
+        error: null,
+      };
+    });
+
+    setEstimateSaveState({
+      status: "success",
+      message:
+        "Estimate reopened as a draft revision. Previously sent customer links were revoked.",
+    });
+    void loadEstimates();
+    void loadNotes();
+
+    return { ok: true as const };
   }
 
   async function approveEstimateForCustomer(
@@ -5173,6 +5296,140 @@ export function ServiceRequestDetail({
     });
     await loadEstimates();
     return true;
+  }
+
+  async function undoEstimateApprovalById(
+    estimateId: string,
+    estimateNumber: string,
+  ) {
+    if (!isPersistedEstimateUuid(estimateId)) {
+      const message =
+        "This estimate needs a saved database record before approval can be undone.";
+
+      setEstimateSaveState({
+        status: "error",
+        message,
+      });
+      return {
+        ok: false as const,
+        message,
+      };
+    }
+
+    setEstimateSaveState({
+      status: "saving",
+      message: `Undoing approval for ${estimateNumber}...`,
+    });
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setEstimateSaveState({
+        status: "error",
+        message: "Undo Approval is not available for this workspace.",
+      });
+      return {
+        ok: false as const,
+        message: "Undo Approval is not available for this workspace.",
+      };
+    }
+
+    const sessionResult = await getDashboardActionSession(supabase);
+
+    if (!sessionResult.ok) {
+      setEstimateSaveState({
+        status: "error",
+        message: sessionResult.message,
+      });
+      return { ok: false as const, message: sessionResult.message };
+    }
+
+    const { data: sessionData, error: sessionError } = sessionResult.response;
+    const accessToken = sessionData.session?.access_token;
+
+    if (sessionError || !accessToken) {
+      setEstimateSaveState({
+        status: "error",
+        message: "Log in again before undoing approval.",
+      });
+      return {
+        ok: false as const,
+        message: "Log in again before undoing approval.",
+      };
+    }
+
+    let response: Response;
+    let payload: {
+      ok?: boolean;
+      message?: string;
+      estimate?: {
+        estimate_status?: DashboardServiceRequestEstimate["estimateStatus"];
+        approval_source?: "customer" | "technician_manual";
+        approved_by_profile_id?: string | null;
+        customer_responded_at?: string | null;
+      };
+    } | null;
+
+    try {
+      response = await fetch(`/api/estimates/${estimateId}/undo-approval`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+      payload = (await response.json().catch(() => null)) as typeof payload;
+    } catch {
+      setEstimateSaveState({
+        status: "error",
+        message: "Approval could not be undone.",
+      });
+      return {
+        ok: false as const,
+        message: "Approval could not be undone.",
+      };
+    }
+
+    if (!response.ok || !payload?.ok) {
+      setEstimateSaveState({
+        status: "error",
+        message: payload?.message ?? "Approval could not be undone.",
+      });
+      return {
+        ok: false as const,
+        message: payload?.message ?? "Approval could not be undone.",
+      };
+    }
+
+    setViewingEstimateId(estimateId);
+    setViewingInvoiceId(null);
+    setEstimatesState((current) => {
+      if (current.status !== "ready") {
+        return current;
+      }
+
+      return {
+        status: "ready",
+        estimates: current.estimates.map((currentEstimate) =>
+          currentEstimate.id === estimateId
+            ? {
+                ...currentEstimate,
+                estimateStatus: "draft",
+                approvalSource: payload?.estimate?.approval_source ?? "customer",
+                customerRespondedAt: null,
+                updatedAt: new Date().toISOString(),
+              }
+            : currentEstimate,
+        ),
+        error: null,
+      };
+    });
+    setEstimateSaveState({
+      status: "success",
+      message: "Approval undone. This estimate is back in Draft.",
+    });
+    void loadEstimates();
+    void loadNotes();
+    return { ok: true as const };
   }
 
   async function createInvoiceFromEstimate(
@@ -12349,10 +12606,20 @@ export function ServiceRequestDetail({
               approveEstimateForCustomer(estimate.id, estimate.estimateNumber)
             }
             onSendEstimate={(estimate) =>
-              sendEstimateById(estimate.id, estimate.estimateNumber)
+              sendEstimateById(
+                estimate.id,
+                estimate.estimateNumber,
+                estimate.delivery,
+              )
+            }
+            onReviseEstimate={(estimate) =>
+              reviseEstimateById(estimate.id, estimate.estimateNumber)
             }
             onDeleteEstimate={(estimate) =>
               deleteDraftEstimateById(estimate.id, estimate.estimateNumber)
+            }
+            onUndoApproval={(estimate) =>
+              undoEstimateApprovalById(estimate.id, estimate.estimateNumber)
             }
             request={state.request}
             sendingEstimateId={sendingEstimateId}
@@ -13268,8 +13535,8 @@ export function ServiceRequestDetail({
                     type="button"
                   >
                     {estimateSaveState.status === "saving" || sendingEstimateId
-                      ? "Sending..."
-                      : "Send"}
+                      ? "Saving..."
+                      : "Save Draft"}
                   </button>
                 </div>
               </div>
@@ -14432,10 +14699,10 @@ export function ServiceRequestDetail({
                 type="button"
               >
                 {estimateSaveState.status === "saving" || sendingEstimateId
-                  ? "Sending..."
+                  ? "Saving..."
                   : editingEstimateId
-                    ? "Update & Send"
-                    : "Send"}
+                    ? "Update Draft"
+                    : "Save Draft"}
               </button>
             </div>
           </div>

@@ -59,6 +59,10 @@ type SendSmsResult =
   | { ok: true; messageId: string; providerMessageId: string | null }
   | { ok: false; status: number; message: string; messageId?: string | null };
 
+export type ConversationSmsReadinessResult =
+  | { ok: true; sourceAccountId: string; fromPhone: string; toPhone: string }
+  | { ok: false; status: number; message: string };
+
 export type OutboundMmsAttachment = {
   bytes: Buffer;
   mimeType: string;
@@ -2347,4 +2351,50 @@ export async function sendConversationSms({
   });
 
   return { ok: true, messageId, providerMessageId };
+}
+
+export async function checkConversationSmsReadiness(
+  conversationId: string,
+): Promise<ConversationSmsReadinessResult> {
+  const supabase = getSupabaseServiceRoleClient();
+  const apiKey = getTelnyxApiKey();
+  if (!supabase) {
+    return { ok: false, status: 503, message: "Supabase service role is not configured." };
+  }
+  if (!apiKey) {
+    return { ok: false, status: 503, message: "Telnyx SMS API credentials are not configured." };
+  }
+
+  const { data: conversationData, error: conversationError } = await supabase
+    .from("communication_conversations")
+    .select("*")
+    .eq("id", conversationId)
+    .maybeSingle();
+
+  if (conversationError || !conversationData) {
+    return { ok: false, status: 404, message: "Conversation is not available for SMS." };
+  }
+
+  const conversation = conversationData as ConversationRow;
+  if (!conversation.company_id) {
+    return { ok: false, status: 400, message: "Conversation is missing company context." };
+  }
+
+  const toPhone = normalizeSmsPhone(conversation.customer_phone);
+  if (!toPhone) {
+    return { ok: false, status: 400, message: "Conversation does not have a valid recipient phone." };
+  }
+
+  const sourceAccount = await findOutboundSmsSourceAccount(conversation);
+  const fromPhone = normalizeSmsPhone(sourceAccount?.source_identifier ?? null);
+  if (!sourceAccount || !fromPhone) {
+    return { ok: false, status: 400, message: "No active outbound SMS source is configured for this company." };
+  }
+
+  return {
+    ok: true,
+    sourceAccountId: sourceAccount.id,
+    fromPhone,
+    toPhone,
+  };
 }

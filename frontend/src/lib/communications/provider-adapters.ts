@@ -7,6 +7,13 @@ function createDisabledProvider(providerName: string): CommunicationProviderAdap
     normalizeInbound() {
       return null;
     },
+    async sendEstimateMessage() {
+      return {
+        ok: false,
+        reason: "provider_unavailable",
+        message: `${providerName} outbound delivery is not configured.`,
+      };
+    },
   };
 }
 

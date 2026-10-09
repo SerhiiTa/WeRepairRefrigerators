@@ -47,7 +47,8 @@ function formatDeleteEstimateError(message: string): string {
     message.includes("customer") ||
     message.includes("financial") ||
     message.includes("invoice") ||
-    message.includes("history")
+    message.includes("history") ||
+    message.includes("supplemental")
   ) {
     return "This estimate can't be deleted because it already contains financial or customer history.";
   }

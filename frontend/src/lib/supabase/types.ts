@@ -114,7 +114,39 @@ export type DatabaseEstimateStatus =
   | "converted_to_invoice"
   | "void";
 
+export type DatabaseEstimateType =
+  | "original"
+  | "supplemental"
+  | "additional_service";
+
 export type DatabaseInvoiceStatus = "draft" | "sent" | "paid" | "void";
+
+export type DatabaseServiceRequestApplianceRole =
+  | "primary"
+  | "affected"
+  | "diagnosed"
+  | "serviced";
+
+export type DatabaseServiceRequestApplianceStatus = "active" | "removed";
+
+export type DatabaseInvoiceEstimateMembershipStatus = "active" | "void";
+
+export type DatabaseInvoiceEstimateSourceType =
+  | "conversion"
+  | "consolidated_conversion"
+  | "legacy_backfill"
+  | "import"
+  | "system";
+
+export type DatabaseEstimateLifecycleEventType =
+  | "manual_approval"
+  | "customer_approval"
+  | "undo_approval"
+  | "draft_delete"
+  | "invoice_inclusion"
+  | "void"
+  | "refund_reallocation"
+  | "system_backfill";
 
 export type DatabaseCustomerStatus = "active" | "inactive" | "blocked";
 
@@ -242,6 +274,7 @@ export type DatabaseCommunicationTimelineEventType =
   | "appointment_changed"
   | "estimate_sent"
   | "estimate_approved"
+  | "estimate_declined"
   | "invoice_sent"
   | "payment_received"
   | "repair_completed"
@@ -941,6 +974,10 @@ export type Database = {
           id: string;
           service_request_id: string;
           created_by_profile_id: string | null;
+          estimate_type: DatabaseEstimateType;
+          estimate_sequence: number;
+          parent_estimate_id: string | null;
+          customer_appliance_id: string | null;
           subtotal: number;
           discount_type: "flat" | "percent" | null;
           discount_value: number | null;
@@ -977,6 +1014,25 @@ export type Database = {
         };
         Insert: Partial<Database["public"]["Tables"]["service_request_estimates"]["Row"]>;
         Update: Partial<Database["public"]["Tables"]["service_request_estimates"]["Row"]>;
+        Relationships: [];
+      };
+      service_request_appliances: {
+        Row: {
+          id: string;
+          company_id: string;
+          service_request_id: string;
+          customer_appliance_id: string;
+          association_role: DatabaseServiceRequestApplianceRole;
+          association_status: DatabaseServiceRequestApplianceStatus;
+          is_primary: boolean;
+          created_by_profile_id: string | null;
+          association_metadata: Json;
+          removed_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Partial<Database["public"]["Tables"]["service_request_appliances"]["Row"]>;
+        Update: Partial<Database["public"]["Tables"]["service_request_appliances"]["Row"]>;
         Relationships: [];
       };
       estimate_learning_events: {
@@ -1018,6 +1074,26 @@ export type Database = {
         };
         Insert: Partial<Database["public"]["Tables"]["service_request_invoice_items"]["Row"]>;
         Update: Partial<Database["public"]["Tables"]["service_request_invoice_items"]["Row"]>;
+        Relationships: [];
+      };
+      service_request_invoice_estimates: {
+        Row: {
+          id: string;
+          company_id: string;
+          service_request_id: string;
+          invoice_id: string;
+          estimate_id: string;
+          membership_status: DatabaseInvoiceEstimateMembershipStatus;
+          source_type: DatabaseInvoiceEstimateSourceType;
+          included_by_profile_id: string | null;
+          included_at: string;
+          voided_at: string | null;
+          membership_metadata: Json;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Partial<Database["public"]["Tables"]["service_request_invoice_estimates"]["Row"]>;
+        Update: Partial<Database["public"]["Tables"]["service_request_invoice_estimates"]["Row"]>;
         Relationships: [];
       };
       service_request_invoices: {
@@ -1123,6 +1199,23 @@ export type Database = {
         };
         Insert: Partial<Database["public"]["Tables"]["service_request_payment_allocations"]["Row"]>;
         Update: Partial<Database["public"]["Tables"]["service_request_payment_allocations"]["Row"]>;
+        Relationships: [];
+      };
+      service_request_estimate_lifecycle_events: {
+        Row: {
+          id: string;
+          company_id: string;
+          service_request_id: string;
+          estimate_id: string;
+          event_type: DatabaseEstimateLifecycleEventType;
+          from_status: DatabaseEstimateStatus | null;
+          to_status: DatabaseEstimateStatus | null;
+          created_by_profile_id: string | null;
+          event_metadata: Json;
+          created_at: string;
+        };
+        Insert: Partial<Database["public"]["Tables"]["service_request_estimate_lifecycle_events"]["Row"]>;
+        Update: Partial<Database["public"]["Tables"]["service_request_estimate_lifecycle_events"]["Row"]>;
         Relationships: [];
       };
       service_request_financial_snapshots: {
@@ -1774,7 +1867,19 @@ export type Database = {
         };
         Returns: Json;
       };
+      undo_service_request_estimate_approval_rpc: {
+        Args: {
+          p_estimate_id: string;
+        };
+        Returns: Json;
+      };
       send_service_request_estimate_to_customer_rpc: {
+        Args: {
+          p_estimate_id: string;
+        };
+        Returns: Json;
+      };
+      revise_service_request_estimate_rpc: {
         Args: {
           p_estimate_id: string;
         };
@@ -1979,8 +2084,14 @@ export type ServiceRequestEstimateItemRow =
   PublicSchema["Tables"]["service_request_estimate_items"]["Row"];
 export type ServiceRequestEstimateRow =
   PublicSchema["Tables"]["service_request_estimates"]["Row"];
+export type ServiceRequestApplianceRow =
+  PublicSchema["Tables"]["service_request_appliances"]["Row"];
+export type ServiceRequestEstimateLifecycleEventRow =
+  PublicSchema["Tables"]["service_request_estimate_lifecycle_events"]["Row"];
 export type ServiceRequestInvoiceItemRow =
   PublicSchema["Tables"]["service_request_invoice_items"]["Row"];
+export type ServiceRequestInvoiceEstimateRow =
+  PublicSchema["Tables"]["service_request_invoice_estimates"]["Row"];
 export type ServiceRequestInvoiceRow =
   PublicSchema["Tables"]["service_request_invoices"]["Row"];
 export type ServiceRequestPaymentRow =

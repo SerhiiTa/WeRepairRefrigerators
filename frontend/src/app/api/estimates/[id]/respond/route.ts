@@ -33,6 +33,18 @@ function formatRespondError(message: string): string {
     return "This estimate has already received a response or is no longer available for approval.";
   }
 
+  if (message.includes("has been updated") || message.includes("newest estimate")) {
+    return "This estimate has been updated. Please ask the technician for the newest approval link.";
+  }
+
+  if (message.includes("expired")) {
+    return "This estimate link has expired. Please ask the technician to resend the estimate.";
+  }
+
+  if (message.includes("current sent estimate revision")) {
+    return "This estimate is no longer open for approval.";
+  }
+
   if (message.includes("not found")) {
     return "This estimate link is invalid or expired.";
   }

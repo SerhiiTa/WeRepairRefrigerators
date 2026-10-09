@@ -16,6 +16,7 @@ export const businessTimelineEventLabels: Record<
   appointment_changed: "Appointment changed",
   estimate_sent: "Estimate sent",
   estimate_approved: "Estimate approved",
+  estimate_declined: "Estimate declined",
   invoice_sent: "Invoice sent",
   payment_received: "Payment received",
   repair_completed: "Repair completed",
