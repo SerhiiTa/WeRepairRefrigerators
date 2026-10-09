@@ -1783,7 +1783,7 @@ export function ManualEstimateEditor({
 
   return (
     <section className="fixed inset-0 z-40 overflow-y-auto bg-white pb-[calc(7.5rem+env(safe-area-inset-bottom))] text-[#0B1228] lg:static lg:z-auto lg:overflow-visible lg:rounded-[2rem] lg:border lg:border-[#E5E7EB] lg:bg-white lg:pb-0 lg:shadow-[0_18px_48px_rgba(15,23,42,0.08)]">
-      <div className="sticky top-0 z-10 border-b border-[#E5E7EB] bg-white/95 px-3 py-2 backdrop-blur lg:static lg:rounded-t-[2rem] lg:px-6 lg:py-3">
+      <div className="sticky top-0 z-[70] border-b border-[#E5E7EB] bg-white/95 px-3 py-2 backdrop-blur lg:relative lg:rounded-t-[2rem] lg:px-6 lg:py-3">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3">
           <button
             aria-label="Back to Finance"
@@ -1816,7 +1816,7 @@ export function ManualEstimateEditor({
               <EstimateIcon name="more" />
             </button>
             {isEstimateMenuOpen ? (
-              <div className="absolute right-0 z-30 mt-2 w-52 overflow-hidden rounded-2xl border border-[#E5E7EB] bg-white py-2 text-sm font-bold shadow-[0_18px_44px_rgba(15,23,42,0.18)]">
+              <div className="absolute right-0 z-[90] mt-2 w-52 overflow-hidden rounded-2xl border border-[#E5E7EB] bg-white py-2 text-sm font-bold shadow-[0_18px_44px_rgba(15,23,42,0.18)]">
                 <button
                   className="block w-full px-4 py-2.5 text-left text-[#0F172A] hover:bg-[#F8FAFC] disabled:cursor-not-allowed disabled:opacity-40"
                   disabled={lines.length === 0}
