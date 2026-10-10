@@ -202,6 +202,95 @@ function isStripePaymentEnabled(config = getStripeRuntimeConfig()) {
   );
 }
 
+function getStripePublicEligibilityDiagnosticEnv() {
+  const secretKey = process.env.STRIPE_SECRET_KEY?.trim() ?? "";
+  const publishableKey =
+    process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY?.trim() ?? "";
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET?.trim() ?? "";
+  const pilotCustomerId =
+    process.env.WRA_STRIPE_SANDBOX_PILOT_CUSTOMER_ID?.trim() ?? "";
+
+  return {
+    hasSecretKey: Boolean(secretKey),
+    secretKeyLooksLive: secretKey.startsWith("sk_live_"),
+    secretKeyLooksTest: secretKey.startsWith("sk_test_"),
+    hasPublishableKey: Boolean(publishableKey),
+    publishableKeyLooksLive: publishableKey.startsWith("pk_live_"),
+    publishableKeyLooksTest: publishableKey.startsWith("pk_test_"),
+    hasWebhookSecret: Boolean(webhookSecret),
+    webhookSecretLooksValid: webhookSecret.startsWith("whsec_"),
+    hasPilotCustomerId: Boolean(pilotCustomerId),
+    pilotCustomerIdLooksUuid: UUID_PATTERN.test(pilotCustomerId),
+    mockModeEnabled: process.env.STRIPE_MOCK_MODE === "1",
+    nodeEnv: process.env.NODE_ENV ?? "unknown",
+  };
+}
+
+function categorizeStripePublicEligibilityError(error: unknown) {
+  const message = error instanceof Error ? error.message : "";
+
+  if (message.includes("not configured")) {
+    return "configuration_missing";
+  }
+
+  if (message.includes("valid UUID")) {
+    return "invalid_pilot_customer_id";
+  }
+
+  if (message.includes("mock mode")) {
+    return "invalid_mock_mode";
+  }
+
+  if (message.includes("Live Stripe keys")) {
+    return "live_key_rejected";
+  }
+
+  if (message.includes("sk_test")) {
+    return "secret_key_not_test_mode";
+  }
+
+  if (message.includes("pk_test")) {
+    return "publishable_key_not_test_mode";
+  }
+
+  if (message.includes("webhook secret")) {
+    return "webhook_secret_invalid";
+  }
+
+  if (message.includes("could not be verified")) {
+    return "document_context_unverified";
+  }
+
+  if (message.includes("not available for this customer")) {
+    return "pilot_customer_rejected";
+  }
+
+  return "unknown";
+}
+
+function logStripePublicEligibilityDiagnostic(input: {
+  config?: StripeRuntimeConfig | null;
+  contextLookupPassed: boolean;
+  documentType: "estimate" | "invoice";
+  error?: unknown;
+  paymentsEnabled: boolean;
+  pilotCustomerPassed: boolean;
+  tokenFormatValid: boolean;
+}) {
+  console.warn("[stripe-public-eligibility-diagnostic]", {
+    ...getStripePublicEligibilityDiagnosticEnv(),
+    documentType: input.documentType,
+    mode: input.config?.mode ?? "config_error",
+    paymentsEnabled: input.paymentsEnabled,
+    contextLookupPassed: input.contextLookupPassed,
+    pilotCustomerPassed: input.pilotCustomerPassed,
+    tokenFormatValid: input.tokenFormatValid,
+    caughtErrorCategory: input.error
+      ? categorizeStripePublicEligibilityError(input.error)
+      : null,
+  });
+}
+
 function assertPilotCustomerAllowed(
   config: StripeRuntimeConfig,
   context: PaymentTargetContext,
@@ -710,21 +799,69 @@ export async function isPublicStripeCheckoutEnabledForToken(input: {
   documentType?: "estimate" | "invoice";
   token: string;
 }): Promise<boolean> {
+  const documentType = input.documentType ?? "estimate";
+
   if (!PUBLIC_TOKEN_PATTERN.test(input.token)) {
+    logStripePublicEligibilityDiagnostic({
+      contextLookupPassed: false,
+      documentType,
+      paymentsEnabled: false,
+      pilotCustomerPassed: false,
+      tokenFormatValid: false,
+    });
     return false;
   }
 
-  const config = getStripeRuntimeConfig();
+  let config: StripeRuntimeConfig;
+
+  try {
+    config = getStripeRuntimeConfig();
+  } catch (error) {
+    logStripePublicEligibilityDiagnostic({
+      contextLookupPassed: false,
+      documentType,
+      error,
+      paymentsEnabled: false,
+      pilotCustomerPassed: false,
+      tokenFormatValid: true,
+    });
+    return false;
+  }
 
   if (!isStripePaymentEnabled(config)) {
+    logStripePublicEligibilityDiagnostic({
+      config,
+      contextLookupPassed: false,
+      documentType,
+      paymentsEnabled: false,
+      pilotCustomerPassed: false,
+      tokenFormatValid: true,
+    });
     return false;
   }
 
   try {
     const context = await resolvePublicTargetContext(input);
     assertPilotCustomerAllowed(config, context);
+    logStripePublicEligibilityDiagnostic({
+      config,
+      contextLookupPassed: true,
+      documentType,
+      paymentsEnabled: true,
+      pilotCustomerPassed: true,
+      tokenFormatValid: true,
+    });
     return true;
-  } catch {
+  } catch (error) {
+    logStripePublicEligibilityDiagnostic({
+      config,
+      contextLookupPassed: false,
+      documentType,
+      error,
+      paymentsEnabled: true,
+      pilotCustomerPassed: false,
+      tokenFormatValid: true,
+    });
     return false;
   }
 }
