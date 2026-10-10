@@ -609,14 +609,42 @@ type InvoiceActionState =
   | { status: "success"; message: string }
   | { status: "error"; message: string };
 
+type InvoiceDeliveryChannel = "sms" | "email";
+
+type InvoiceDeliveryDraft = {
+  invoiceId: string;
+  invoiceNumber: string;
+  channel: InvoiceDeliveryChannel;
+  recipient: string;
+  idempotencyKey: string;
+};
+
 type ManualPaymentTargetType = "estimate" | "invoice";
 type ManualPaymentMethod = "cash" | "check" | "zelle" | "venmo" | "cash_app";
+type ManualPaymentVoidReason =
+  | "payment_not_received"
+  | "entered_by_mistake"
+  | "check_returned"
+  | "incorrect_amount"
+  | "other";
 
 type ManualPaymentState =
   | { status: "idle"; message: null }
   | { status: "saving"; message: string | null }
   | { status: "success"; message: string }
   | { status: "error"; message: string };
+
+type ManualPaymentVoidState =
+  | { status: "idle"; message: null }
+  | { status: "saving"; message: string | null }
+  | { status: "success"; message: string }
+  | { status: "error"; message: string };
+
+type ManualPaymentVoidDraft = {
+  paymentId: string;
+  reason: ManualPaymentVoidReason;
+  reasonNote: string;
+};
 
 type ManualPaymentDraft = {
   targetType: ManualPaymentTargetType;
@@ -816,6 +844,17 @@ const technicianPhotoTypes = [
   DatabaseServiceRequestPhotoType,
   "customer_upload"
 >[];
+
+const manualPaymentVoidReasonOptions = [
+  { value: "payment_not_received", label: "Payment not received" },
+  { value: "entered_by_mistake", label: "Entered by mistake" },
+  { value: "check_returned", label: "Check returned" },
+  { value: "incorrect_amount", label: "Incorrect amount" },
+  { value: "other", label: "Other" },
+] as const satisfies readonly {
+  value: ManualPaymentVoidReason;
+  label: string;
+}[];
 
 function readAssetProcessingIdentityField(
   result: unknown,
@@ -1987,6 +2026,8 @@ export function ServiceRequestDetail({
   const [invoiceActionId, setInvoiceActionId] = useState<string | null>(null);
   const [invoiceActionState, setInvoiceActionState] =
     useState<InvoiceActionState>({ status: "idle", message: null });
+  const [invoiceDeliveryDraft, setInvoiceDeliveryDraft] =
+    useState<InvoiceDeliveryDraft | null>(null);
   const [invoiceWorkspaceTab, setInvoiceWorkspaceTab] =
     useState<InvoiceWorkspaceTab>("overview");
   const [isInvoiceMoreActionsOpen, setIsInvoiceMoreActionsOpen] =
@@ -1996,6 +2037,10 @@ export function ServiceRequestDetail({
     useState<ManualPaymentDraft | null>(null);
   const [manualPaymentState, setManualPaymentState] =
     useState<ManualPaymentState>({ status: "idle", message: null });
+  const [manualPaymentVoidDraft, setManualPaymentVoidDraft] =
+    useState<ManualPaymentVoidDraft | null>(null);
+  const [manualPaymentVoidState, setManualPaymentVoidState] =
+    useState<ManualPaymentVoidState>({ status: "idle", message: null });
   const [expandedPaymentHistoryId, setExpandedPaymentHistoryId] =
     useState<string | null>(null);
   const [isManualPaymentDetailsOpen, setIsManualPaymentDetailsOpen] =
@@ -5649,6 +5694,167 @@ export function ServiceRequestDetail({
     void loadNotes();
   }
 
+  function buildInvoiceDeliveryPreview(
+    invoice: DashboardServiceRequestInvoice,
+  ): string {
+    const balanceDue = Math.max(0, getInvoiceBalanceDue(invoice));
+
+    return [
+      `HomeFix Appliance Repair invoice ${invoice.invoiceNumber}`,
+      `Amount due: ${formatServiceRequestMoney(balanceDue)}`,
+      "Review and pay securely:",
+    ].join("\n");
+  }
+
+  function openInvoiceDelivery(invoice: DashboardServiceRequestInvoice) {
+    if (state.status !== "ready") {
+      setInvoiceActionState({
+        status: "error",
+        message: "Choose a valid Job before sending an Invoice.",
+      });
+      return;
+    }
+
+    const defaultChannel: InvoiceDeliveryChannel = state.request.customerPhone
+      ? "sms"
+      : "email";
+    const recipient =
+      defaultChannel === "sms"
+        ? state.request.customerPhone ?? ""
+        : state.request.customerEmail ?? "";
+
+    setInvoiceActionState({ status: "idle", message: null });
+    setInvoiceDeliveryDraft({
+      invoiceId: invoice.id,
+      invoiceNumber: invoice.invoiceNumber,
+      channel: defaultChannel,
+      recipient,
+      idempotencyKey: `invoice-send-${invoice.id}-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2)}`,
+    });
+  }
+
+  async function sendInvoiceDelivery() {
+    if (!invoiceDeliveryDraft) {
+      return;
+    }
+
+    const invoice = invoicesState.invoices.find(
+      (currentInvoice) => currentInvoice.id === invoiceDeliveryDraft.invoiceId,
+    );
+
+    if (!invoice) {
+      setInvoiceActionState({
+        status: "error",
+        message: "Choose a valid Invoice to send.",
+      });
+      return;
+    }
+
+    const recipient = invoiceDeliveryDraft.recipient.trim();
+
+    if (!recipient) {
+      setInvoiceActionState({
+        status: "error",
+        message:
+          invoiceDeliveryDraft.channel === "sms"
+            ? "Enter a customer phone number before sending."
+            : "Enter a customer email before sending.",
+      });
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setInvoiceActionState({
+        status: "error",
+        message: "Invoice delivery is not available for this workspace.",
+      });
+      return;
+    }
+
+    const sessionResult = await getDashboardActionSession(supabase);
+
+    if (!sessionResult.ok) {
+      setInvoiceActionState({
+        status: "error",
+        message: sessionResult.message,
+      });
+      return;
+    }
+
+    const { data: sessionData, error: sessionError } = sessionResult.response;
+    const accessToken = sessionData.session?.access_token;
+
+    if (sessionError || !accessToken) {
+      setInvoiceActionState({
+        status: "error",
+        message: "Log in again before sending this Invoice.",
+      });
+      return;
+    }
+
+    setInvoiceActionId(invoice.id);
+    setInvoiceActionState({
+      status: "saving",
+      message: `Sending ${invoice.invoiceNumber}...`,
+    });
+
+    let response: Response;
+    let payload: {
+      invoiceUrl?: string;
+      message?: string;
+      ok?: boolean;
+    } | null;
+
+    try {
+      response = await fetch(`/api/invoices/${invoice.id}/send`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          channel: invoiceDeliveryDraft.channel,
+          recipient,
+          messagePreview: buildInvoiceDeliveryPreview(invoice),
+          idempotencyKey: invoiceDeliveryDraft.idempotencyKey,
+        }),
+      });
+      payload = (await response.json().catch(() => null)) as typeof payload;
+    } catch (error) {
+      setInvoiceActionId(null);
+      setInvoiceActionState({
+        status: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "The Invoice send request did not reach the server.",
+      });
+      return;
+    }
+
+    setInvoiceActionId(null);
+
+    if (!response.ok || !payload?.ok) {
+      setInvoiceActionState({
+        status: "error",
+        message: payload?.message ?? "Invoice could not be sent. Please try again.",
+      });
+      return;
+    }
+
+    setInvoiceDeliveryDraft(null);
+    setInvoiceActionState({
+      status: "success",
+      message: payload.message ?? `${invoice.invoiceNumber} sent.`,
+    });
+    void Promise.all([loadInvoices(), loadPayments(), loadEstimates()]);
+    void loadNotes();
+  }
+
   async function deleteInvoice(invoice: DashboardServiceRequestInvoice) {
     const confirmed = window.confirm(
       "Delete this test invoice?\n\nThis permanently deletes the invoice and its line items. The Job, Customer, and Estimate will remain.",
@@ -7062,7 +7268,7 @@ export function ServiceRequestDetail({
   const paymentHistory = paymentsState.payments
     .map((payment) => {
       const allocation =
-        activePaymentAllocations.find(
+        paymentsState.allocations.find(
           (currentAllocation) => currentAllocation.paymentId === payment.id,
         ) ?? null;
       const estimateTarget = allocation?.estimateId
@@ -7162,6 +7368,12 @@ export function ServiceRequestDetail({
           (target) =>
             target.id === manualPaymentDraft.targetId &&
             target.type === manualPaymentDraft.targetType,
+        ) ?? null;
+  const selectedManualPaymentVoid =
+    manualPaymentVoidDraft === null
+      ? null
+      : paymentsState.payments.find(
+          (payment) => payment.id === manualPaymentVoidDraft.paymentId,
         ) ?? null;
   const addressAutocomplete = getAddressAutocompleteAdapter();
   const fullAddress = getRequestFullAddress(request);
@@ -8268,6 +8480,101 @@ export function ServiceRequestDetail({
     return "Cash";
   }
 
+  function getPaymentDisplayLabel(payment: DashboardServiceRequestPayment) {
+    const provider = payment.provider?.toLowerCase() ?? null;
+    const paymentMethod = payment.paymentMethod?.toLowerCase() ?? null;
+    const paymentType = payment.paymentType?.toLowerCase() ?? null;
+
+    if (provider === "stripe" || paymentType === "stripe_checkout") {
+      if (
+        paymentMethod === "card" ||
+        paymentMethod === "credit_card" ||
+        paymentMethod === "debit_card"
+      ) {
+        return "Card Payment";
+      }
+
+      return "Stripe Payment";
+    }
+
+    if (
+      paymentMethod === "card" ||
+      paymentMethod === "credit_card" ||
+      paymentMethod === "debit_card"
+    ) {
+      return "Card Payment";
+    }
+
+    return `${getManualPaymentMethodLabel(payment.paymentMethod)} Payment`;
+  }
+
+  function getPaymentDisplayIcon(payment: DashboardServiceRequestPayment) {
+    const provider = payment.provider?.toLowerCase() ?? null;
+    const paymentMethod = payment.paymentMethod?.toLowerCase() ?? null;
+    const paymentType = payment.paymentType?.toLowerCase() ?? null;
+
+    if (
+      provider === "stripe" ||
+      paymentType === "stripe_checkout" ||
+      paymentMethod === "card" ||
+      paymentMethod === "credit_card" ||
+      paymentMethod === "debit_card"
+    ) {
+      return "Card";
+    }
+
+    if (paymentMethod === "check") {
+      return "Ck";
+    }
+
+    if (paymentMethod === "zelle") {
+      return "Z";
+    }
+
+    if (paymentMethod === "venmo") {
+      return "V";
+    }
+
+    return "$";
+  }
+
+  function getManualPaymentVoidReasonLabel(reason: string | null) {
+    return (
+      manualPaymentVoidReasonOptions.find((option) => option.value === reason)
+        ?.label ?? "Voided"
+    );
+  }
+
+  function canVoidPayment(payment: DashboardServiceRequestPayment) {
+    const provider = payment.provider?.toLowerCase() ?? null;
+    const paymentType = payment.paymentType?.toLowerCase() ?? null;
+    const paymentMethod = payment.paymentMethod?.toLowerCase() ?? null;
+
+    return (
+      payment.paymentStatus !== "void" &&
+      payment.sourceSystem === "native" &&
+      paymentType === "manual" &&
+      provider === "manual" &&
+      payment.providerPaymentId?.startsWith("manual:") === true &&
+      paymentMethod !== null &&
+      ["cash", "check", "zelle", "venmo", "cash_app"].includes(paymentMethod)
+    );
+  }
+
+  function getPaymentAppliedToLabel(entry: (typeof paymentHistory)[number]) {
+    if (entry.invoiceTarget) {
+      return "Invoice";
+    }
+
+    if (entry.estimateTarget) {
+      return entry.allocation?.allocationSource === "estimate_deposit"
+        ? "Estimate Deposit"
+        : "Estimate";
+    }
+
+    return "Job";
+  }
+
   function openManualPayment(target?: ManualPaymentTarget) {
     const nextTarget = target ?? manualPaymentTargets[0] ?? null;
 
@@ -8424,6 +8731,140 @@ export function ServiceRequestDetail({
       setIsManualPaymentOpen(false);
       setManualPaymentDraft(null);
       setManualPaymentState({ status: "idle", message: null });
+    }, 700);
+  }
+
+  async function voidManualPayment() {
+    if (state.status !== "ready" || !manualPaymentVoidDraft) {
+      setManualPaymentVoidState({
+        status: "error",
+        message: "Choose a valid payment to void.",
+      });
+      return;
+    }
+
+    const payment = paymentsState.payments.find(
+      (currentPayment) => currentPayment.id === manualPaymentVoidDraft.paymentId,
+    );
+
+    if (!payment || !canVoidPayment(payment)) {
+      setManualPaymentVoidState({
+        status: "error",
+        message: "Only eligible manual payments can be voided here.",
+      });
+      return;
+    }
+
+    if (
+      isPersistedEstimateUuid(state.request.id) &&
+      payment.serviceRequestId !== state.request.id
+    ) {
+      setManualPaymentVoidState({
+        status: "error",
+        message: "This payment does not belong to the current job.",
+      });
+      return;
+    }
+
+    if (!isPersistedEstimateUuid(payment.serviceRequestId)) {
+      setManualPaymentVoidState({
+        status: "error",
+        message: "Payment is missing a valid job context.",
+      });
+      return;
+    }
+
+    if (
+      manualPaymentVoidDraft.reason === "other" &&
+      manualPaymentVoidDraft.reasonNote.trim().length < 3
+    ) {
+      setManualPaymentVoidState({
+        status: "error",
+        message: "Add an explanation when using Other as the void reason.",
+      });
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setManualPaymentVoidState({
+        status: "error",
+        message: "Payment voids are not available for this workspace.",
+      });
+      return;
+    }
+
+    const sessionResult = await getDashboardActionSession(supabase);
+
+    if (!sessionResult.ok) {
+      setManualPaymentVoidState({
+        status: "error",
+        message: sessionResult.message,
+      });
+      return;
+    }
+
+    const { data: sessionData, error: sessionError } = sessionResult.response;
+    const accessToken = sessionData.session?.access_token;
+
+    if (sessionError || !accessToken) {
+      setManualPaymentVoidState({
+        status: "error",
+        message: "Log in again before voiding payment.",
+      });
+      return;
+    }
+
+    setManualPaymentVoidState({
+      status: "saving",
+      message: "Voiding payment...",
+    });
+
+    let response: Response;
+    let payload: { ok?: boolean; message?: string } | null;
+
+    try {
+      response = await fetch(
+        `/api/service-requests/${payment.serviceRequestId}/payments/${payment.id}/void`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({
+            reason: manualPaymentVoidDraft.reason,
+            reasonNote: manualPaymentVoidDraft.reasonNote,
+          }),
+        },
+      );
+      payload = (await response.json().catch(() => null)) as typeof payload;
+    } catch {
+      setManualPaymentVoidState({
+        status: "error",
+        message: "Payment void request could not reach the server. Try again.",
+      });
+      return;
+    }
+
+    if (!response.ok || !payload?.ok) {
+      setManualPaymentVoidState({
+        status: "error",
+        message: payload?.message ?? "Payment could not be voided.",
+      });
+      return;
+    }
+
+    setManualPaymentVoidState({
+      status: "success",
+      message: "Payment voided.",
+    });
+    await Promise.all([loadPayments(), loadEstimates(), loadInvoices()]);
+    setIsFinancePaymentsOpen(true);
+    setTimeout(() => {
+      setManualPaymentVoidDraft(null);
+      setManualPaymentVoidState({ status: "idle", message: null });
     }, 700);
   }
 
@@ -8658,7 +9099,7 @@ export function ServiceRequestDetail({
                 <button
                   className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-[#0F6BFF] transition hover:bg-[#0F6BFF]/20 disabled:cursor-not-allowed disabled:opacity-60"
                   disabled={invoiceActionState.status === "saving"}
-                  onClick={() => void updateInvoice(invoice, "send")}
+                  onClick={() => openInvoiceDelivery(invoice)}
                   type="button"
                 >
                   {invoiceActionId === invoice.id ? "Sending..." : "Send Invoice"}
@@ -8941,7 +9382,7 @@ export function ServiceRequestDetail({
                   </span>
                   <div className="min-w-0">
                     <p className="truncate text-sm font-black text-[#0B1228]">
-                      {getManualPaymentMethodLabel(entry.payment.paymentMethod)} Payment
+                      {getPaymentDisplayLabel(entry.payment)}
                     </p>
                     <p className="mt-1 truncate text-sm font-semibold text-[#52627A]">
                       {formatServiceRequestDate(paidAt)}
@@ -9187,7 +9628,7 @@ export function ServiceRequestDetail({
             <button
               className="inline-flex h-11 min-w-0 items-center justify-center rounded-xl border border-[#D7DEE8] px-2 text-xs font-bold text-[#0B1228] transition hover:bg-[#F8FAFC] disabled:cursor-not-allowed disabled:opacity-50 sm:h-12 sm:text-sm"
               disabled={!canSendInvoice || invoiceActionState.status === "saving"}
-              onClick={() => void updateInvoice(invoice, "send")}
+              onClick={() => openInvoiceDelivery(invoice)}
               type="button"
             >
               <span className="hidden sm:inline">Send Invoice</span>
@@ -9218,18 +9659,10 @@ export function ServiceRequestDetail({
       entry.estimateTarget?.estimateNumber ??
       entry.allocation?.allocationSource ??
       "Payment";
-    const targetType = entry.invoiceTarget ? "Invoice" : entry.estimateTarget ? "Estimate" : "Job";
-    const reference =
-      entry.payment.referenceCode ??
-      entry.payment.confirmationCode ??
-      entry.payment.providerPaymentId ??
-      null;
+    const targetType = getPaymentAppliedToLabel(entry);
     const paidAt = entry.payment.paidAt ?? entry.payment.paymentDate ?? entry.payment.createdAt;
-    const providerIdentifier =
-      entry.payment.providerPaymentId ??
-      entry.payment.confirmationCode ??
-      entry.payment.referenceCode ??
-      null;
+    const paymentIsVoid = entry.payment.paymentStatus === "void";
+    const paymentCanBeVoided = canVoidPayment(entry.payment);
 
     return (
       <article
@@ -9246,17 +9679,11 @@ export function ServiceRequestDetail({
           type="button"
         >
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-xs font-black text-emerald-700 sm:h-9 sm:w-9">
-            {entry.payment.paymentMethod === "check"
-              ? "Ck"
-              : entry.payment.paymentMethod === "zelle"
-                ? "Z"
-                : entry.payment.paymentMethod === "venmo"
-                  ? "V"
-                  : "$"}
+            {getPaymentDisplayIcon(entry.payment)}
           </span>
           <span className="min-w-0">
             <span className="block truncate text-sm font-black leading-5 text-[#0F172A]">
-              {getManualPaymentMethodLabel(entry.payment.paymentMethod)} Payment
+              {getPaymentDisplayLabel(entry.payment)}
             </span>
             <span className="mt-0.5 block truncate text-xs font-bold text-[#64748B]">
               {formatServiceRequestDate(paidAt)}
@@ -9278,45 +9705,47 @@ export function ServiceRequestDetail({
           <div className="border-t border-[#EEF2F7] bg-transparent pb-3 pl-10 pr-1 text-xs leading-5 text-[#475569] sm:pl-11">
             <div className="grid gap-2 sm:grid-cols-2">
               <p>
-                <span className="font-black text-[#0F172A]">Linked to: </span>
+                <span className="font-black text-[#0F172A]">Applied to: </span>
                 {targetType} {targetLabel}
               </p>
               <p>
-                <span className="font-black text-[#0F172A]">Full time: </span>
+                <span className="font-black text-[#0F172A]">Method: </span>
+                {getPaymentDisplayLabel(entry.payment)}
+              </p>
+              <p>
+                <span className="font-black text-[#0F172A]">Date: </span>
                 {formatServiceRequestDate(paidAt)}
               </p>
               <p>
                 <span className="font-black text-[#0F172A]">Status: </span>
                 {formatServiceRequestSource(entry.payment.paymentStatus)}
               </p>
-              <p>
-                <span className="font-black text-[#0F172A]">Recorded by: </span>
-                {entry.payment.recordedByProfileId ?? "Not recorded"}
-              </p>
-              {reference ? (
-                <p>
-                  <span className="font-black text-[#0F172A]">Reference: </span>
-                  {reference}
-                </p>
-              ) : null}
-              {providerIdentifier ? (
-                <p className="break-all">
-                  <span className="font-black text-[#0F172A]">Provider ID: </span>
-                  {providerIdentifier}
-                </p>
-              ) : null}
-              {entry.payment.description ? (
+              {paymentIsVoid ? (
                 <p className="sm:col-span-2">
-                  <span className="font-black text-[#0F172A]">Internal note: </span>
-                  {entry.payment.description}
+                  <span className="font-black text-[#0F172A]">Void reason: </span>
+                  {getManualPaymentVoidReasonLabel(entry.payment.voidReason)}
+                  {entry.payment.voidReasonNote
+                    ? ` · ${entry.payment.voidReasonNote}`
+                    : ""}
                 </p>
               ) : null}
-              {entry.allocation ? (
-                <p className="sm:col-span-2">
-                  <span className="font-black text-[#0F172A]">Allocation: </span>
-                  {formatServiceRequestMoney(entry.allocation.allocationAmount)} ·{" "}
-                  {formatServiceRequestSource(entry.allocation.allocationSource)}
-                </p>
+              {paymentCanBeVoided ? (
+                <div className="sm:col-span-2">
+                  <button
+                    className="rounded-full border border-red-200 px-3 py-1.5 text-xs font-black text-red-700 transition hover:bg-red-50"
+                    onClick={() => {
+                      setManualPaymentVoidDraft({
+                        paymentId: entry.payment.id,
+                        reason: "entered_by_mistake",
+                        reasonNote: "",
+                      });
+                      setManualPaymentVoidState({ status: "idle", message: null });
+                    }}
+                    type="button"
+                  >
+                    Void Payment
+                  </button>
+                </div>
               ) : null}
             </div>
           </div>
@@ -15499,6 +15928,264 @@ export function ServiceRequestDetail({
               ) : null}
             </div>
           )}
+        </div>
+      ) : null}
+
+      {invoiceDeliveryDraft ? (() => {
+        const invoice = invoicesState.invoices.find(
+          (currentInvoice) => currentInvoice.id === invoiceDeliveryDraft.invoiceId,
+        );
+        const messagePreview = invoice
+          ? buildInvoiceDeliveryPreview(invoice)
+          : "Please review and pay your invoice:";
+
+        return (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/55 px-3 py-4 backdrop-blur-sm sm:items-center">
+          <div className="w-full max-w-lg rounded-3xl bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.16em] text-[#0F6BFF]">
+                  Send Invoice
+                </p>
+                <h3 className="mt-1 text-xl font-black text-[#0F172A]">
+                  {invoiceDeliveryDraft.invoiceNumber}
+                </h3>
+              </div>
+              <button
+                aria-label="Close Send Invoice"
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-[#E5E7EB] text-xl font-black text-[#64748B]"
+                disabled={invoiceActionState.status === "saving"}
+                onClick={() => setInvoiceDeliveryDraft(null)}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              {(["sms", "email"] as const).map((channel) => (
+                <button
+                  className={`rounded-xl border px-3 py-2 text-sm font-black transition ${
+                    invoiceDeliveryDraft.channel === channel
+                      ? "border-[#0F6BFF] bg-blue-50 text-[#0F6BFF]"
+                      : "border-[#D7DEE8] text-[#334155] hover:border-[#0F6BFF]"
+                  }`}
+                  disabled={invoiceActionState.status === "saving"}
+                  key={channel}
+                  onClick={() =>
+                    setInvoiceDeliveryDraft((current) =>
+                      current
+                        ? {
+                            ...current,
+                            channel,
+                            recipient:
+                              channel === "sms"
+                                ? state.status === "ready"
+                                  ? state.request.customerPhone ?? ""
+                                  : ""
+                                : state.status === "ready"
+                                  ? state.request.customerEmail ?? ""
+                                  : "",
+                            idempotencyKey: `invoice-send-${current.invoiceId}-${Date.now()}-${Math.random()
+                              .toString(36)
+                              .slice(2)}`,
+                          }
+                        : current,
+                    )
+                  }
+                  type="button"
+                >
+                  {channel === "sms" ? "SMS" : "Email"}
+                </button>
+              ))}
+            </div>
+
+            <label className="mt-4 block">
+              <span className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
+                Recipient {invoiceDeliveryDraft.channel === "sms" ? "phone" : "email"}
+              </span>
+              <input
+                className="mt-2 w-full rounded-xl border border-[#D7DEE8] bg-white px-3 py-3 text-sm font-bold text-[#0F172A] outline-none transition focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
+                disabled={invoiceActionState.status === "saving"}
+                inputMode={invoiceDeliveryDraft.channel === "sms" ? "tel" : "email"}
+                onChange={(event) => {
+                  const nextRecipient = event.currentTarget.value;
+                  setInvoiceDeliveryDraft((current) =>
+                    current ? { ...current, recipient: nextRecipient } : current,
+                  );
+                  setInvoiceActionState({ status: "idle", message: null });
+                }}
+                placeholder={
+                  invoiceDeliveryDraft.channel === "sms"
+                    ? "(832) 555-0198"
+                    : "customer@example.com"
+                }
+                type={invoiceDeliveryDraft.channel === "sms" ? "tel" : "email"}
+                value={invoiceDeliveryDraft.recipient}
+              />
+            </label>
+
+            <div className="mt-4 rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] p-3">
+              <p className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
+                Message Preview
+              </p>
+              <p className="mt-2 whitespace-pre-line text-sm font-semibold leading-6 text-[#334155]">
+                {messagePreview}
+              </p>
+              <p className="mt-2 text-xs font-bold text-[#64748B]">
+                The secure invoice link is generated by the server and appended after provider acceptance.
+              </p>
+            </div>
+
+            {invoiceActionState.message ? (
+              <p
+                className={`mt-4 rounded-xl border px-3 py-2 text-sm font-bold ${
+                  invoiceActionState.status === "error"
+                    ? "border-red-200 bg-red-50 text-red-700"
+                    : invoiceActionState.status === "success"
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                      : "border-blue-200 bg-blue-50 text-[#0F6BFF]"
+                }`}
+              >
+                {invoiceActionState.message}
+              </p>
+            ) : null}
+
+            <div className="mt-5 grid grid-cols-2 gap-2">
+              <button
+                className="rounded-xl border border-[#E5E7EB] px-4 py-3 text-sm font-black text-[#0F172A] disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={invoiceActionState.status === "saving"}
+                onClick={() => setInvoiceDeliveryDraft(null)}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded-xl bg-[#0F6BFF] px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={invoiceActionState.status === "saving" || !invoice}
+                onClick={() => void sendInvoiceDelivery()}
+                type="button"
+              >
+                {invoiceActionState.status === "saving" ? "Sending..." : "Send Invoice"}
+              </button>
+            </div>
+          </div>
+        </div>
+        );
+      })() : null}
+
+      {manualPaymentVoidDraft && selectedManualPaymentVoid ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/55 px-3 py-4 backdrop-blur-sm sm:items-center">
+          <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-2xl">
+            <h3 className="text-lg font-black text-[#0F172A]">
+              Void this payment?
+            </h3>
+            <p className="mt-2 text-sm font-semibold leading-6 text-[#475569]">
+              This will reverse the recorded payment and restore the outstanding
+              balance. The original payment will remain in the financial history.
+            </p>
+            <div className="mt-4 rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] p-3">
+              <p className="text-sm font-black text-[#0F172A]">
+                {getPaymentDisplayLabel(selectedManualPaymentVoid)}
+              </p>
+              <p className="mt-1 text-sm font-semibold text-[#475569]">
+                {formatServiceRequestMoney(selectedManualPaymentVoid.amount)} ·{" "}
+                {formatServiceRequestDate(
+                  selectedManualPaymentVoid.paidAt ??
+                    selectedManualPaymentVoid.paymentDate ??
+                    selectedManualPaymentVoid.createdAt,
+                )}
+              </p>
+            </div>
+            <div className="mt-4">
+              <label
+                className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]"
+                htmlFor="manual-payment-void-reason"
+              >
+                Reason
+              </label>
+              <select
+                className="mt-2 w-full rounded-xl border border-[#D7DEE8] bg-white px-3 py-3 text-sm font-bold text-[#0F172A] outline-none transition focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
+                disabled={manualPaymentVoidState.status === "saving"}
+                id="manual-payment-void-reason"
+                onChange={(event) => {
+                  const nextReason = event.currentTarget
+                    .value as ManualPaymentVoidReason;
+                  setManualPaymentVoidDraft((current) =>
+                    current ? { ...current, reason: nextReason } : current,
+                  );
+                  setManualPaymentVoidState({ status: "idle", message: null });
+                }}
+                value={manualPaymentVoidDraft.reason}
+              >
+                {manualPaymentVoidReasonOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {manualPaymentVoidDraft.reason === "other" ? (
+              <div className="mt-4">
+                <label
+                  className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]"
+                  htmlFor="manual-payment-void-note"
+                >
+                  Explanation
+                </label>
+                <textarea
+                  className="mt-2 min-h-24 w-full rounded-xl border border-[#D7DEE8] bg-white px-3 py-3 text-sm font-semibold leading-6 text-[#0F172A] outline-none transition focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
+                  disabled={manualPaymentVoidState.status === "saving"}
+                  id="manual-payment-void-note"
+                  onChange={(event) => {
+                    const nextReasonNote = event.currentTarget.value;
+                    setManualPaymentVoidDraft((current) =>
+                      current ? { ...current, reasonNote: nextReasonNote } : current,
+                    );
+                    setManualPaymentVoidState({ status: "idle", message: null });
+                  }}
+                  placeholder="Add a short explanation"
+                  value={manualPaymentVoidDraft.reasonNote}
+                />
+              </div>
+            ) : null}
+            {manualPaymentVoidState.message ? (
+              <p
+                className={`mt-4 rounded-xl border px-3 py-2 text-sm font-bold ${
+                  manualPaymentVoidState.status === "error"
+                    ? "border-red-200 bg-red-50 text-red-700"
+                    : manualPaymentVoidState.status === "success"
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                      : "border-blue-200 bg-blue-50 text-[#0F6BFF]"
+                }`}
+              >
+                {manualPaymentVoidState.message}
+              </p>
+            ) : null}
+            <div className="mt-5 grid grid-cols-2 gap-2">
+              <button
+                className="rounded-xl border border-[#E5E7EB] px-4 py-3 text-sm font-black text-[#0F172A] disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={manualPaymentVoidState.status === "saving"}
+                onClick={() => {
+                  setManualPaymentVoidDraft(null);
+                  setManualPaymentVoidState({ status: "idle", message: null });
+                }}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded-xl bg-red-600 px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={manualPaymentVoidState.status === "saving"}
+                onClick={() => void voidManualPayment()}
+                type="button"
+              >
+                {manualPaymentVoidState.status === "saving"
+                  ? "Voiding..."
+                  : "Void Payment"}
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
 

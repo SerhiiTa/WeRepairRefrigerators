@@ -7,6 +7,7 @@ import {
 } from "@/components/public/PublicEstimateApproval";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import type { Json } from "@/lib/supabase/types";
+import { isPublicStripeCheckoutEnabledForToken } from "@/server/finance/stripe-checkout";
 
 type PublicEstimatePageProps = {
   params: Promise<{
@@ -63,7 +64,27 @@ async function loadEstimate(
     return null;
   }
 
-  return parsePublicEstimatePayload(data);
+  const estimate = parsePublicEstimatePayload(data);
+
+  if (!estimate) {
+    return null;
+  }
+
+  const { data: paymentData } = await supabase.rpc(
+    "get_public_estimate_payment_options_rpc" as never,
+    {
+      p_token: token,
+    } as never,
+  );
+
+  if (paymentData && typeof paymentData === "object" && !Array.isArray(paymentData)) {
+    return {
+      ...estimate,
+      payment: paymentData as PublicEstimatePayload["payment"],
+    };
+  }
+
+  return estimate;
 }
 
 export async function generateMetadata({
@@ -102,5 +123,16 @@ export default async function PublicEstimatePage({
     notFound();
   }
 
-  return <PublicEstimateApproval initialEstimate={estimate} token={token} />;
+  const stripePaymentsEnabled = await isPublicStripeCheckoutEnabledForToken({
+    documentType: "estimate",
+    token,
+  });
+
+  return (
+    <PublicEstimateApproval
+      initialEstimate={estimate}
+      stripePaymentsEnabled={stripePaymentsEnabled}
+      token={token}
+    />
+  );
 }

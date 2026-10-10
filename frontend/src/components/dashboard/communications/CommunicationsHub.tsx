@@ -4530,9 +4530,9 @@ function PreviewBlock({
       <p className="text-[11px] font-black uppercase tracking-[0.14em] text-[#64748B]">
         {label}
       </p>
-      <p className="mt-2 line-clamp-6 text-sm font-semibold leading-6 text-[#334155]">
-        {value}
-      </p>
+      <div className="mt-2 text-[#334155]">
+        <MessageBodyWithLinks body={value} />
+      </div>
       <p className="mt-2 text-xs font-bold text-[#64748B]">
         {formatServiceRequestDate(timestamp)}
       </p>
@@ -4560,9 +4560,9 @@ function TimelineEventCard({ event }: { event: CommunicationTimelineEvent }) {
               </p>
             </div>
           </div>
-          <p className="mt-2 line-clamp-4 text-sm font-medium leading-5 text-[#334155]">
-            {event.body ?? "No details captured."}
-          </p>
+          <div className="mt-2 text-[#334155]">
+            <MessageBodyWithLinks body={event.body ?? "No details captured."} />
+          </div>
         </div>
       </div>
     </div>

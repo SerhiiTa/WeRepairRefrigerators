@@ -170,6 +170,16 @@ assert.ok(
     communicationsHub.includes("Copy Link"),
   "Communications SMS links should render with a Copy Link action for the URL only.",
 );
+assert.match(
+  communicationsHub,
+  /function TimelineEventCard[\s\S]*<MessageBodyWithLinks body=\{event\.body \?\? "No details captured\."\}/,
+  "Communications timeline bodies should reuse link rendering and Copy Link for invoice URLs.",
+);
+assert.match(
+  communicationsHub,
+  /function PreviewBlock[\s\S]*<MessageBodyWithLinks body=\{value\}/,
+  "Mobile Communications activity previews should reuse link rendering and Copy Link for long URLs.",
+);
 assert.ok(
   communicationsHub.includes('className="whitespace-pre-wrap break-words text-sm font-medium leading-5"'),
   "Communications SMS bubbles should wrap long URLs without horizontal overflow.",

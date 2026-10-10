@@ -222,9 +222,22 @@ assert.ok(
   detail.includes("+{formatServiceRequestMoney(entry.payment.amount)}"),
   "Collapsed payment rows should show compact signed amounts.",
 );
-assert.ok(
-  detail.includes("Provider ID:") && detail.includes("Internal note:"),
-  "Expanded payment details should retain provider/reference/note information.",
+includesAll(detail, [
+  "function getPaymentDisplayLabel(payment: DashboardServiceRequestPayment)",
+  "provider === \"stripe\" || paymentType === \"stripe_checkout\"",
+  "return \"Card Payment\";",
+  "return \"Stripe Payment\";",
+  "function getPaymentAppliedToLabel(entry: (typeof paymentHistory)[number])",
+  "? \"Estimate Deposit\"",
+  "Applied to: ",
+  "Method: ",
+  "Date: ",
+  "Status: ",
+]);
+assert.doesNotMatch(
+  detail,
+  /Provider ID:|Internal note:|Recorded by:|Reference:|Allocation:/,
+  "Expanded Payment History details should not expose provider IDs, internal notes, recorded-by fallbacks, or accounting metadata.",
 );
 assert.doesNotMatch(
   detail,

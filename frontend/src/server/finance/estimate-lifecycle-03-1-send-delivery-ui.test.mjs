@@ -163,6 +163,7 @@ includesAll(telnyxTransport, [
   "isLocalQaSmsMockEnabled",
   "WRA_QA_ENVIRONMENT",
   "WRA_DISABLE_PROVIDER_CALLS",
+  "WRA_PRODUCTION_SMS_TEST_RECIPIENT",
   "TELNYX_MOCK_MODE",
   "NEXT_PUBLIC_SUPABASE_URL",
   "getOrCreateLocalQaSmsSourceAccount",
@@ -173,6 +174,26 @@ assert.match(
   telnyxTransport,
   /if \(!apiKey && !isLocalQaSmsMockEnabled\(\)\)[\s\S]*Telnyx SMS API credentials are not configured/,
   "Local QA SMS mock should be the only path that bypasses missing Telnyx API credentials.",
+);
+assert.match(
+  telnyxTransport,
+  /function checkOutboundSmsRecipientAllowed/,
+  "Production controlled testing must centralize outbound SMS recipient allowlisting.",
+);
+includesAll(telnyxTransport, [
+  "WRA_PRODUCTION_SMS_TEST_RECIPIENT",
+  "Outbound SMS blocked by controlled-testing recipient allowlist.",
+  "Outbound SMS blocked because the controlled-testing recipient allowlist is invalid.",
+]);
+assert.match(
+  telnyxTransport,
+  /const recipientGate = checkOutboundSmsRecipientAllowed\(toPhone\);[\s\S]*if \(!recipientGate\.ok\)[\s\S]*return recipientGate;[\s\S]*\.from\("communication_messages"\)[\s\S]*\.insert\(/,
+  "Blocked SMS recipients must be rejected before creating outbound Communications messages.",
+);
+assert.match(
+  telnyxTransport,
+  /const recipientGate = checkOutboundSmsRecipientAllowed\(toPhone\);[\s\S]*if \(!recipientGate\.ok\)[\s\S]*return recipientGate;[\s\S]*fetch\(TELNYX_MESSAGES_URL/,
+  "Blocked SMS recipients must be rejected before Telnyx provider calls.",
 );
 assert.match(
   telnyxTransport,

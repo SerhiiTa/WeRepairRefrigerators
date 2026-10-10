@@ -158,6 +158,57 @@ function isLocalQaSmsMockEnabled(): boolean {
   );
 }
 
+function getProductionSmsTestRecipient(): string | null {
+  const configured =
+    process.env.WRA_PRODUCTION_SMS_TEST_RECIPIENT?.trim() ?? "";
+
+  if (!configured) {
+    return null;
+  }
+
+  const normalized = normalizeSmsPhone(configured);
+
+  if (!normalized) {
+    throw new Error("WRA_PRODUCTION_SMS_TEST_RECIPIENT must be a valid phone number.");
+  }
+
+  return normalized;
+}
+
+function checkOutboundSmsRecipientAllowed(toPhone: string):
+  | { ok: true }
+  | { ok: false; status: number; message: string } {
+  if (isLocalQaSmsMockEnabled()) {
+    return { ok: true };
+  }
+
+  let allowedRecipient: string | null;
+
+  try {
+    allowedRecipient = getProductionSmsTestRecipient();
+  } catch {
+    return {
+      ok: false,
+      status: 503,
+      message: "Outbound SMS blocked because the controlled-testing recipient allowlist is invalid.",
+    };
+  }
+
+  if (!allowedRecipient) {
+    return { ok: true };
+  }
+
+  if (toPhone !== allowedRecipient) {
+    return {
+      ok: false,
+      status: 403,
+      message: "Outbound SMS blocked by controlled-testing recipient allowlist.",
+    };
+  }
+
+  return { ok: true };
+}
+
 async function getOrCreateLocalQaSmsSourceAccount(
   companyId: string,
 ): Promise<SourceAccountRow | null> {
@@ -2364,6 +2415,10 @@ export async function sendConversationSms({
   if (!toPhone) {
     return { ok: false, status: 400, message: "Conversation does not have a valid recipient phone." };
   }
+  const recipientGate = checkOutboundSmsRecipientAllowed(toPhone);
+  if (!recipientGate.ok) {
+    return recipientGate;
+  }
 
   const sourceAccount =
     (await findOutboundSmsSourceAccount(conversation)) ??
@@ -2531,6 +2586,10 @@ export async function checkConversationSmsReadiness(
   const toPhone = normalizeSmsPhone(conversation.customer_phone);
   if (!toPhone) {
     return { ok: false, status: 400, message: "Conversation does not have a valid recipient phone." };
+  }
+  const recipientGate = checkOutboundSmsRecipientAllowed(toPhone);
+  if (!recipientGate.ok) {
+    return recipientGate;
   }
 
   const sourceAccount =

@@ -276,7 +276,9 @@ export type DatabaseCommunicationTimelineEventType =
   | "estimate_approved"
   | "estimate_declined"
   | "invoice_sent"
+  | "invoice_delivery_failed"
   | "payment_received"
+  | "payment_voided"
   | "repair_completed"
   | "customer_canceled"
   | "note_added";
@@ -1162,6 +1164,10 @@ export type Database = {
           provider_payment_id?: string | null;
           provider_event_id?: string | null;
           recorded_by_profile_id?: string | null;
+          voided_at?: string | null;
+          voided_by_profile_id?: string | null;
+          void_reason?: string | null;
+          void_reason_note?: string | null;
           payment_metadata?: Json;
           imported_at: string | null;
           import_metadata: Json;

@@ -278,6 +278,10 @@ export type DashboardServiceRequestPayment = {
   provider: string | null;
   providerPaymentId: string | null;
   recordedByProfileId: string | null;
+  voidedAt: string | null;
+  voidedByProfileId: string | null;
+  voidReason: string | null;
+  voidReasonNote: string | null;
   paymentMetadata: unknown;
   createdAt: string;
   updatedAt: string;
@@ -591,6 +595,10 @@ export const SERVICE_REQUEST_PAYMENT_SELECT_COLUMNS = [
   "provider_payment_id",
   "provider_event_id",
   "recorded_by_profile_id",
+  "voided_at",
+  "voided_by_profile_id",
+  "void_reason",
+  "void_reason_note",
   "description",
   "imported_at",
   "import_metadata",
@@ -950,6 +958,10 @@ export function mapServiceRequestPaymentRow(
     provider: row.provider ?? null,
     providerPaymentId: row.provider_payment_id ?? null,
     recordedByProfileId: row.recorded_by_profile_id ?? null,
+    voidedAt: row.voided_at ?? null,
+    voidedByProfileId: row.voided_by_profile_id ?? null,
+    voidReason: row.void_reason ?? null,
+    voidReasonNote: row.void_reason_note ?? null,
     paymentMetadata: row.payment_metadata ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

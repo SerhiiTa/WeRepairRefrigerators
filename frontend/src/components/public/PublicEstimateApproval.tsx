@@ -21,6 +21,26 @@ export type PublicEstimateItem = {
   warranty_text: string | null;
 };
 
+type PublicPaymentAction = {
+  kind: "deposit" | "pay_in_full" | "balance_due";
+  label: string;
+  amount: number | string;
+  max_amount?: number | string;
+};
+
+type PublicPaymentOptions = {
+  status: "eligible" | "paid" | "blocked" | "direct_to_invoice";
+  target_type: "estimate" | "invoice" | null;
+  estimate_number?: string | null;
+  invoice_number?: string | null;
+  total?: number | string | null;
+  paid?: number | string | null;
+  reserved?: number | string | null;
+  balance_due?: number | string | null;
+  actions?: PublicPaymentAction[];
+  reasons?: string[];
+};
+
 export type PublicEstimatePayload = {
   estimate: {
     estimate_number: string;
@@ -66,6 +86,7 @@ export type PublicEstimatePayload = {
     zip_code: string;
     selected_technician_business_name: string | null;
   };
+  payment?: PublicPaymentOptions | null;
 };
 
 type ResponseState =
@@ -74,10 +95,22 @@ type ResponseState =
   | { status: "success"; message: string }
   | { status: "error"; message: string };
 
+type CheckoutState =
+  | { status: "idle"; message: null }
+  | { status: "starting"; message: string }
+  | { status: "processing"; message: string }
+  | { status: "error"; message: string };
+
 type PublicEstimateApprovalProps = {
   token: string;
   initialEstimate: PublicEstimatePayload;
+  stripePaymentsEnabled?: boolean;
 };
+
+const moneyFormatter = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+});
 
 function buildServiceLocation(estimate: PublicEstimatePayload) {
   return [
@@ -170,9 +203,29 @@ function getLinkStateMessage(linkState: string | null | undefined) {
   };
 }
 
+function formatMoney(value: number | string | null | undefined) {
+  const amount = typeof value === "number" ? value : Number(value ?? 0);
+
+  if (!Number.isFinite(amount)) {
+    return "$0.00";
+  }
+
+  return moneyFormatter.format(amount);
+}
+
+function makeCheckoutIdempotencyKey(kind: string) {
+  const random =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+  return `public-${kind}-${random}`;
+}
+
 export function PublicEstimateApproval({
   token,
   initialEstimate,
+  stripePaymentsEnabled = true,
 }: PublicEstimateApprovalProps) {
   const router = useRouter();
   const [estimate, setEstimate] =
@@ -184,10 +237,28 @@ export function PublicEstimateApproval({
   const [pendingResponse, setPendingResponse] = useState<
     "approved" | "declined" | null
   >(null);
+  const [checkoutState, setCheckoutState] = useState<CheckoutState>({
+    status: "idle",
+    message: null,
+  });
+  const [pendingCheckoutKind, setPendingCheckoutKind] = useState<string | null>(
+    null,
+  );
 
   const linkState = estimate.estimate.link_state ?? "active";
   const isOpenForResponse =
     linkState === "active" && estimate.estimate.estimate_status === "sent";
+  const payment = estimate.payment ?? null;
+  const paymentActions =
+    payment?.status === "eligible" && Array.isArray(payment.actions)
+      ? payment.actions
+      : [];
+  const showPaymentActions =
+    !isOpenForResponse &&
+    stripePaymentsEnabled &&
+    payment?.status === "eligible" &&
+    paymentActions.length > 0 &&
+    (payment.target_type === "estimate" || payment.target_type === "invoice");
   const customerPreviewData = buildCustomerPreviewData(estimate);
   const unavailableMessage = getLinkStateMessage(linkState);
 
@@ -263,6 +334,64 @@ export function PublicEstimateApproval({
     setPendingResponse(null);
   }
 
+  async function startCheckout(action: PublicPaymentAction) {
+    if (payment?.target_type !== "estimate" && payment?.target_type !== "invoice") {
+      return;
+    }
+
+    setCheckoutState({
+      status: "starting",
+      message: "Starting secure checkout...",
+    });
+    setPendingCheckoutKind(action.kind);
+
+    let result: Response;
+
+    try {
+      result = await fetch("/api/public/payments/stripe-checkout", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          token,
+          targetType: payment.target_type,
+          checkoutKind: action.kind,
+          idempotencyKey: makeCheckoutIdempotencyKey(action.kind),
+        }),
+      });
+    } catch {
+      setCheckoutState({
+        status: "error",
+        message: "We could not reach secure checkout.",
+      });
+      setPendingCheckoutKind(null);
+      return;
+    }
+
+    const payload = (await result.json().catch(() => null)) as {
+      ok?: boolean;
+      checkoutUrl?: string | null;
+      message?: string;
+    } | null;
+
+    if (!result.ok || !payload?.ok || !payload.checkoutUrl) {
+      setCheckoutState({
+        status: "error",
+        message: payload?.message ?? "Secure checkout could not be started.",
+      });
+      setPendingCheckoutKind(null);
+      return;
+    }
+
+    setCheckoutState({
+      status: "processing",
+      message:
+        "Opening secure checkout. Your balance will update after Stripe confirms the payment.",
+    });
+    window.location.assign(payload.checkoutUrl);
+  }
+
   return (
     <main className="min-h-screen bg-[#F3F6FA] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
       <CustomerEstimatePreview data={customerPreviewData} fillViewport={false} />
@@ -300,6 +429,61 @@ export function PublicEstimateApproval({
                 Review the repair estimate above, then approve to move forward or decline this proposal for now.
               </p>
             </>
+          ) : showPaymentActions ? (
+            <>
+              <div className="rounded-xl bg-slate-50 p-3">
+                <p className="text-xs font-black uppercase tracking-[0.16em] text-[#64748B]">
+                  Secure Payment
+                </p>
+                <div className="mt-2 grid grid-cols-3 gap-2 text-sm">
+                  <div>
+                    <p className="text-xs font-bold text-[#64748B]">Total</p>
+                    <p className="font-black text-[#0F172A] tabular-nums">
+                      {formatMoney(payment.total)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-[#64748B]">Paid</p>
+                    <p className="font-black text-emerald-700 tabular-nums">
+                      {formatMoney(payment.paid)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-[#64748B]">Balance</p>
+                    <p className="font-black text-blue-700 tabular-nums">
+                      {formatMoney(payment.balance_due)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-3 flex flex-col gap-2.5 sm:flex-row sm:gap-3">
+                {paymentActions.map((action) => (
+                  <button
+                    className="min-h-12 flex-1 rounded-xl bg-blue-600 px-4 py-3 text-sm font-black text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={checkoutState.status === "starting"}
+                    key={action.kind}
+                    onClick={() => void startCheckout(action)}
+                    type="button"
+                  >
+                    {pendingCheckoutKind === action.kind
+                      ? "Opening..."
+                      : `${action.label} ${formatMoney(action.amount)}`}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-3 text-sm leading-5 text-[#475569] sm:leading-6">
+                Card details are entered in Stripe secure checkout. This page will show paid after payment confirmation is posted.
+              </p>
+            </>
+          ) : payment?.status === "paid" ? (
+            <>
+              <p className="text-sm font-black text-emerald-700">
+                Paid
+              </p>
+              <p className="mt-1 text-sm leading-6 text-[#475569]">
+                This {payment.target_type === "invoice" ? "Invoice" : "Estimate"} has no balance due.
+              </p>
+            </>
           ) : (
             <>
               <p className="text-sm font-black text-[#0F172A]">
@@ -319,6 +503,17 @@ export function PublicEstimateApproval({
               </p>
             </>
           )}
+          {checkoutState.message ? (
+            <p
+              className={`mt-3 text-sm font-bold ${
+                checkoutState.status === "error"
+                  ? "text-amber-700"
+                  : "text-blue-700"
+              }`}
+            >
+              {checkoutState.message}
+            </p>
+          ) : null}
           {responseState.message ? (
             <p
               className={`mt-3 text-sm font-bold ${
