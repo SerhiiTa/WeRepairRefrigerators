@@ -1129,6 +1129,39 @@ export function ManualEstimateEditor({
     lastSavedSignatureRef.current = lastSavedSignature;
   }, [lastSavedSignature]);
 
+  useEffect(() => {
+    if (
+      !initialEstimate ||
+      itemDraft ||
+      activeSavePromiseRef.current ||
+      hasUnsavedChanges
+    ) {
+      return;
+    }
+
+    const nextLines = getInitialEstimateLines(initialEstimate);
+    const nextSignature = buildEditableSignature(nextLines);
+
+    if (nextSignature === lastSavedSignatureRef.current) {
+      return;
+    }
+
+    setSavedEstimateId(initialEstimate.id);
+    setSavedEstimateNumber(initialEstimate.estimateNumber);
+    setEstimateStatus(initialEstimate.estimateStatus);
+    setLines(nextLines);
+    setDiscountType(initialEstimate.discountType ?? "flat");
+    setDiscountValue(String(initialEstimate.discountValue ?? 0));
+    setTaxRate(String(initialEstimate.taxRate ?? 8.25));
+    setLastSavedSignature(nextSignature);
+    lastSavedSignatureRef.current = nextSignature;
+  }, [
+    buildEditableSignature,
+    hasUnsavedChanges,
+    initialEstimate,
+    itemDraft,
+  ]);
+
   function resetFeedback() {
     if (saveState.status !== "idle") {
       setSaveState({ status: "idle", message: null });

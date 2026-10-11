@@ -146,6 +146,13 @@ assert.match(
   /return \(\) => onOverlayStateChange\?\.\(false\);/,
   "Estimate editor must clear the active modal signal on unmount.",
 );
+includesAll(editor, [
+  "activeSavePromiseRef.current ||",
+  "hasUnsavedChanges",
+  "const nextLines = getInitialEstimateLines(initialEstimate);",
+  "setLines(nextLines);",
+  "setLastSavedSignature(nextSignature);",
+]);
 assert.match(
   editor,
   /canEditFinancialFields \? \([\s\S]*?Search Price Book[\s\S]*?\) : null/,
@@ -162,7 +169,7 @@ includesAll(detail, [
   "openPaymentWorkflow(target)",
   "depositPaid={",
   "estimateUsesJobLevelPaidCredit(manualEstimate)",
-  "estimateAllocatedCents.get(manualEstimate.id)",
+  "getEstimateLogicalPaidCreditCents(manualEstimate)",
 ]);
 assert.match(
   detail,
@@ -186,9 +193,21 @@ assert.match(
 );
 assert.match(
   detail,
+  /function refreshExternalEstimateChanges\(\) \{[\s\S]*?if \(isManualEstimateOverlayOpen\) \{[\s\S]*?return;[\s\S]*?void refreshServiceRequest\(\);/,
+  "Focus and visibility refreshes must pause while an Estimate item modal is open.",
+);
+assert.match(
+  detail,
   /onOverlayStateChange=\{setIsManualEstimateOverlayOpen\}/,
   "Estimate editor overlay state must be wired to the Job workspace.",
 );
+includesAll(detail, [
+  "const getEstimateLogicalPaidCreditCents = (",
+  "allocatedInvoice?.logicalEstimateId",
+  "allocatedEstimate?.logicalEstimateId",
+  "allocationLogicalId === estimateLogicalId",
+  "getEstimateLogicalPaidCreditCents(manualEstimate)",
+]);
 assert.doesNotMatch(
   detail,
   /key=\{`[^`]*(updatedAt|items\.length)[^`]*`\}/,

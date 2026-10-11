@@ -2328,6 +2328,10 @@ export function ServiceRequestDetail({
 
   useEffect(() => {
     function refreshExternalEstimateChanges() {
+      if (isManualEstimateOverlayOpen) {
+        return;
+      }
+
       if (
         typeof document !== "undefined" &&
         document.visibilityState !== "visible"
@@ -2356,7 +2360,7 @@ export function ServiceRequestDetail({
       );
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshServiceRequest, requestId]);
+  }, [isManualEstimateOverlayOpen, refreshServiceRequest, requestId]);
 
   useEffect(() => {
     const financeContextActive =
@@ -7335,6 +7339,12 @@ export function ServiceRequestDetail({
   );
   const estimateAllocatedCents = new Map<string, number>();
   const invoiceAllocatedCents = new Map<string, number>();
+  const estimatesById = new Map(
+    estimatesState.estimates.map((estimate) => [estimate.id, estimate]),
+  );
+  const invoicesById = new Map(
+    invoicesState.invoices.map((invoice) => [invoice.id, invoice]),
+  );
 
   activePaymentAllocations.forEach((allocation) => {
     const cents = moneyToCents(allocation.allocationAmount);
@@ -7460,6 +7470,38 @@ export function ServiceRequestDetail({
     });
 
     return isCurrentUninvoicedEstimate || isCurrentInvoiceEstimate;
+  };
+  const getEstimateLogicalPaidCreditCents = (
+    estimate: DashboardServiceRequestEstimate | null,
+  ) => {
+    if (!estimate) {
+      return 0;
+    }
+
+    const estimateLogicalId = estimate.logicalEstimateId ?? estimate.id;
+
+    return activePaymentAllocations.reduce((total, allocation) => {
+      if (!validPaidPaymentIds.has(allocation.paymentId)) {
+        return total;
+      }
+
+      const allocatedEstimate = allocation.estimateId
+        ? estimatesById.get(allocation.estimateId) ?? null
+        : null;
+      const allocatedInvoice = allocation.invoiceId
+        ? invoicesById.get(allocation.invoiceId) ?? null
+        : null;
+      const allocationLogicalId =
+        allocatedInvoice?.logicalEstimateId ??
+        allocatedInvoice?.estimateId ??
+        allocatedEstimate?.logicalEstimateId ??
+        allocatedEstimate?.id ??
+        null;
+
+      return allocationLogicalId === estimateLogicalId
+        ? total + moneyToCents(allocation.allocationAmount)
+        : total;
+    }, 0);
   };
   const financePaidTotal = centsToMoney(validPaidCreditCents);
   const financeBalanceDueTotal = Math.max(
@@ -13246,11 +13288,13 @@ export function ServiceRequestDetail({
             isCreatingInvoice={invoiceActionState.status === "saving"}
             key={`${financeEstimateMode}:${manualEstimateId ?? "new"}:${manualEstimate?.estimateStatus ?? "none"}`}
             depositPaid={
-              estimateUsesJobLevelPaidCredit(manualEstimate)
-                ? centsToMoney(validPaidCreditCents)
-                : manualEstimate
-                  ? centsToMoney(estimateAllocatedCents.get(manualEstimate.id) ?? 0)
-                  : 0
+              manualEstimate
+                ? centsToMoney(
+                    estimateUsesJobLevelPaidCredit(manualEstimate)
+                      ? validPaidCreditCents
+                      : getEstimateLogicalPaidCreditCents(manualEstimate),
+                  )
+                : 0
             }
             customerHref={estimateCustomerProfileHref}
             linkedInvoiceNumber={
