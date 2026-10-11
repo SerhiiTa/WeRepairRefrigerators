@@ -2021,6 +2021,8 @@ export function ServiceRequestDetail({
   const [financeEstimateMode, setFinanceEstimateMode] =
     useState<FinanceEstimateMode>("home");
   const [manualEstimateId, setManualEstimateId] = useState<string | null>(null);
+  const [isManualEstimateOverlayOpen, setIsManualEstimateOverlayOpen] =
+    useState(false);
   const [pendingManualEstimateAddItem, setPendingManualEstimateAddItem] =
     useState<{
       estimateId: string;
@@ -2142,6 +2144,10 @@ export function ServiceRequestDetail({
     }
 
     function applyEstimateRouteState() {
+      if (isManualEstimateOverlayOpen) {
+        return;
+      }
+
       const params = new URLSearchParams(window.location.search);
       const estimateId = params.get("estimateId");
       const tab = params.get("tab");
@@ -2196,7 +2202,7 @@ export function ServiceRequestDetail({
     return () => {
       window.removeEventListener("popstate", applyEstimateRouteState);
     };
-  }, [estimatesState.estimates, estimatesState.status]);
+  }, [estimatesState.estimates, estimatesState.status, isManualEstimateOverlayOpen]);
 
   const loadCustomerPrimaryAddress = useCallback(async (customerId: string | null) => {
     if (!customerId) {
@@ -2364,6 +2370,10 @@ export function ServiceRequestDetail({
     }
 
     const timer = window.setInterval(() => {
+      if (isManualEstimateOverlayOpen) {
+        return;
+      }
+
       if (
         typeof document !== "undefined" &&
         document.visibilityState !== "visible"
@@ -2384,6 +2394,7 @@ export function ServiceRequestDetail({
   }, [
     activeJobTab,
     financeEstimateMode,
+    isManualEstimateOverlayOpen,
     manualEstimateId,
     refreshServiceRequest,
     requestId,
@@ -5166,9 +5177,6 @@ export function ServiceRequestDetail({
     }
 
     if (payload.estimate?.id) {
-      setManualEstimateId(payload.estimate.id);
-      setViewingEstimateId(payload.estimate.id);
-      setViewingInvoiceId(null);
       setPendingManualEstimateAddItem(
         options.openAddItemType
           ? {
@@ -5177,6 +5185,12 @@ export function ServiceRequestDetail({
             }
           : null,
       );
+      await loadEstimates();
+      setManualEstimateId(payload.estimate.id);
+      setViewingEstimateId(payload.estimate.id);
+      setViewingInvoiceId(null);
+    } else {
+      void loadEstimates();
     }
 
     setEstimateSaveState({
@@ -5184,7 +5198,6 @@ export function ServiceRequestDetail({
       message:
         "Draft revision created. Previous approvals and payments remain preserved.",
     });
-    void loadEstimates();
     void loadNotes();
 
     return { ok: true as const };
@@ -7422,6 +7435,32 @@ export function ServiceRequestDetail({
       (total, estimate) => total + estimate.total,
       0,
     );
+  const currentBillingScopeCount =
+    financeCurrentInvoices.length + financeUninvoicedApprovedEstimates.length;
+  const estimateUsesJobLevelPaidCredit = (
+    estimate: DashboardServiceRequestEstimate | null,
+  ) => {
+    if (
+      !estimate ||
+      estimate.estimateStatus !== "approved" ||
+      estimate.revisionStatus !== "current" ||
+      currentBillingScopeCount !== 1
+    ) {
+      return false;
+    }
+
+    const estimateLogicalId = estimate.logicalEstimateId ?? estimate.id;
+    const isCurrentUninvoicedEstimate = financeUninvoicedApprovedEstimates.some(
+      (currentEstimate) => currentEstimate.id === estimate.id,
+    );
+    const isCurrentInvoiceEstimate = financeCurrentInvoices.some((invoice) => {
+      const invoiceLogicalId = invoice.logicalEstimateId ?? invoice.estimateId;
+
+      return invoiceLogicalId === estimateLogicalId;
+    });
+
+    return isCurrentUninvoicedEstimate || isCurrentInvoiceEstimate;
+  };
   const financePaidTotal = centsToMoney(validPaidCreditCents);
   const financeBalanceDueTotal = Math.max(
     0,
@@ -13205,12 +13244,9 @@ export function ServiceRequestDetail({
             estimates={financeEstimates}
             initialEstimate={financeEstimateMode === "saved" ? manualEstimate : null}
             isCreatingInvoice={invoiceActionState.status === "saving"}
-            key={`${financeEstimateMode}:${manualEstimateId ?? "new"}:${manualEstimate?.estimateStatus ?? "none"}:${manualEstimate?.updatedAt ?? "none"}:${manualEstimate?.items.length ?? 0}`}
+            key={`${financeEstimateMode}:${manualEstimateId ?? "new"}:${manualEstimate?.estimateStatus ?? "none"}`}
             depositPaid={
-              manualEstimate &&
-              financeUninvoicedApprovedEstimates.some(
-                (estimate) => estimate.id === manualEstimate.id,
-              )
+              estimateUsesJobLevelPaidCredit(manualEstimate)
                 ? centsToMoney(validPaidCreditCents)
                 : manualEstimate
                   ? centsToMoney(estimateAllocatedCents.get(manualEstimate.id) ?? 0)
@@ -13255,6 +13291,7 @@ export function ServiceRequestDetail({
                 : null
             }
             onAutoOpenAddItemConsumed={() => setPendingManualEstimateAddItem(null)}
+            onOverlayStateChange={setIsManualEstimateOverlayOpen}
             onDeleteEstimate={(estimate) =>
               deleteDraftEstimateById(estimate.id, estimate.estimateNumber)
             }

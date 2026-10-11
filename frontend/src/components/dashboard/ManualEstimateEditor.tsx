@@ -135,6 +135,7 @@ type ManualEstimateEditorProps = {
   depositPaid?: number;
   isCreatingInvoice?: boolean;
   sendingEstimateId: string | null;
+  onOverlayStateChange?: (isOpen: boolean) => void;
 };
 
 type EstimateWorkspaceTab =
@@ -662,6 +663,7 @@ export function ManualEstimateEditor({
   depositPaid = 0,
   isCreatingInvoice = false,
   sendingEstimateId,
+  onOverlayStateChange,
 }: ManualEstimateEditorProps) {
   const router = useRouter();
   const initialMetadata = useMemo(
@@ -746,6 +748,14 @@ export function ManualEstimateEditor({
     isUndoApprovalConfirmOpen ||
     isDeleteConfirmOpen ||
     isPreviewOpen;
+
+  useEffect(() => {
+    onOverlayStateChange?.(hasOpenEstimateOverlay);
+  }, [hasOpenEstimateOverlay, onOverlayStateChange]);
+
+  useEffect(() => {
+    return () => onOverlayStateChange?.(false);
+  }, [onOverlayStateChange]);
 
   useEffect(() => {
     if (!hasOpenEstimateOverlay) {
@@ -1265,14 +1275,17 @@ export function ManualEstimateEditor({
     await saveDraft({ source: "manual", linesOverride: nextLines });
   }
 
-  function deleteLine(lineId: string) {
+  async function deleteLine(lineId: string) {
     if (!canEditFinancialFields) {
       return;
     }
 
-    setLines((current) => current.filter((line) => line.id !== lineId));
+    const nextLines = lines.filter((line) => line.id !== lineId);
+
+    setLines(nextLines);
     setOpenLineMenuId(null);
     resetFeedback();
+    await saveDraft({ source: "manual", linesOverride: nextLines });
   }
 
   function copyLine(line: ManualEstimateLine) {
@@ -2411,7 +2424,7 @@ export function ManualEstimateEditor({
                           </button>
                           <button
                             className="block w-full px-3 py-2 text-left text-red-700 hover:bg-red-50"
-                            onClick={() => deleteLine(line.id)}
+                            onClick={() => void deleteLine(line.id)}
                             type="button"
                           >
                             Delete
@@ -2499,7 +2512,7 @@ export function ManualEstimateEditor({
                         </button>
                         <button
                           className="block w-full px-3 py-2 text-left text-red-700 hover:bg-red-50"
-                          onClick={() => deleteLine(line.id)}
+                          onClick={() => void deleteLine(line.id)}
                           type="button"
                         >
                           Delete
@@ -2555,7 +2568,7 @@ export function ManualEstimateEditor({
               </div>
               <div>
                 <p className="text-xs font-black uppercase tracking-[0.12em] text-[#64748B]">
-                  Deposit Paid
+                  Paid
                 </p>
                 <p className="mt-1 text-lg font-black text-emerald-700">
                   {formatServiceRequestMoney(depositPaid)}

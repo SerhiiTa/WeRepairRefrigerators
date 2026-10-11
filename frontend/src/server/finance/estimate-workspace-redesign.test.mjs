@@ -33,7 +33,7 @@ includesAll(editor, [
   "Confirm Approval",
   "Mark as Approved",
   "Estimate Total",
-  "Deposit Paid",
+  "Paid",
   "Remaining",
   "Collect Payment",
   "Convert to Invoice",
@@ -44,7 +44,8 @@ includesAll(editor, [
   "Search Price Book",
   "Add Part",
   "Add Labor",
-  "Add Service / Fee",
+  "Add Service",
+  "Add Fee",
   "Custom Line Item",
   "activeWorkspaceTab",
   "workspaceTabs",
@@ -101,9 +102,14 @@ assert.equal(
   "Estimate editor should expose Add Labor through the compact Add Item menu only.",
 );
 assert.equal(
-  (editor.match(/Add Service \/ Fee/g) ?? []).length,
+  (editor.match(/Add Service/g) ?? []).length,
   1,
-  "Estimate editor should expose Add Service / Fee through the compact Add Item menu only.",
+  "Estimate editor should expose Add Service through the compact Add Item menu only.",
+);
+assert.equal(
+  (editor.match(/Add Fee/g) ?? []).length,
+  1,
+  "Estimate editor should expose Add Fee through the compact Add Item menu only.",
 );
 assert.match(
   editor,
@@ -127,6 +133,21 @@ assert.match(
 );
 assert.match(
   editor,
+  /async function deleteLine\(lineId: string\)[\s\S]*?const nextLines = lines\.filter[\s\S]*?await saveDraft\(\{ source: "manual", linesOverride: nextLines \}\);/,
+  "Deleting an estimate item must persist immediately through the Estimate save path.",
+);
+assert.match(
+  editor,
+  /onOverlayStateChange\?\.\(hasOpenEstimateOverlay\)/,
+  "Estimate editor must report active modals so background refreshes do not interrupt item entry.",
+);
+assert.match(
+  editor,
+  /return \(\) => onOverlayStateChange\?\.\(false\);/,
+  "Estimate editor must clear the active modal signal on unmount.",
+);
+assert.match(
+  editor,
   /canEditFinancialFields \? \([\s\S]*?Search Price Book[\s\S]*?\) : null/,
   "Price Book and Add Item controls should be hidden outside draft editing.",
 );
@@ -140,8 +161,39 @@ includesAll(detail, [
   "onCollectPayment={(estimate) =>",
   "openPaymentWorkflow(target)",
   "depositPaid={",
+  "estimateUsesJobLevelPaidCredit(manualEstimate)",
   "estimateAllocatedCents.get(manualEstimate.id)",
 ]);
+assert.match(
+  detail,
+  /setPendingManualEstimateAddItem\([\s\S]*?await loadEstimates\(\);[\s\S]*?setManualEstimateId\(payload\.estimate\.id\)/,
+  "New draft revisions must refresh into estimate state before opening the editor for Add Item.",
+);
+assert.match(
+  detail,
+  /key=\{`\$\{financeEstimateMode\}:\$\{manualEstimateId \?\? "new"\}:\$\{manualEstimate\?\.estimateStatus \?\? "none"\}`\}/,
+  "Estimate editor must not remount on background item-count or updated-at refreshes.",
+);
+assert.match(
+  detail,
+  /if \(isManualEstimateOverlayOpen\) \{[\s\S]*?return;[\s\S]*?const params = new URLSearchParams/,
+  "Route-state sync must not reset the Estimate editor while an item modal is open.",
+);
+assert.match(
+  detail,
+  /setInterval\(\(\) => \{[\s\S]*?if \(isManualEstimateOverlayOpen\) \{[\s\S]*?return;/,
+  "Finance polling must pause while an Estimate modal is open.",
+);
+assert.match(
+  detail,
+  /onOverlayStateChange=\{setIsManualEstimateOverlayOpen\}/,
+  "Estimate editor overlay state must be wired to the Job workspace.",
+);
+assert.doesNotMatch(
+  detail,
+  /key=\{`[^`]*(updatedAt|items\.length)[^`]*`\}/,
+  "Estimate editor key must not include volatile refresh fields.",
+);
 
 includesAll(manualApprovalRoute, [
   "createUserScopedServerClient",
