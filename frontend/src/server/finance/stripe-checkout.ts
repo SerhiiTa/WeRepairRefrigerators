@@ -489,6 +489,72 @@ async function updateCheckoutAttemptAfterSession(
   }
 }
 
+function categorizeProviderCheckoutError(error: unknown) {
+  const message = error instanceof Error ? error.message : "";
+
+  if (message.includes("not configured")) {
+    return "configuration_missing";
+  }
+
+  if (message.includes("api_key") || message.includes("Invalid API Key")) {
+    return "stripe_api_key_rejected";
+  }
+
+  if (message.includes("Invalid URL") || message.includes("success_url")) {
+    return "stripe_return_url_invalid";
+  }
+
+  if (message.includes("rate limit")) {
+    return "stripe_rate_limited";
+  }
+
+  return "stripe_session_create_failed";
+}
+
+function logStripeCheckoutSessionDiagnostic(input: {
+  attemptId: string;
+  error: unknown;
+  stage: "configuration" | "stripe_session_create" | "session_persist";
+}) {
+  console.warn("[stripe-checkout-session-diagnostic]", {
+    attemptId: input.attemptId,
+    errorCategory: categorizeProviderCheckoutError(input.error),
+    stage: input.stage,
+  });
+}
+
+async function markCheckoutAttemptFailedBeforeProviderSession(input: {
+  attempt: CheckoutAttempt;
+  error: unknown;
+  stage: "configuration" | "stripe_session_create";
+}) {
+  const errorCategory = categorizeProviderCheckoutError(input.error);
+
+  logStripeCheckoutSessionDiagnostic({
+    attemptId: input.attempt.id,
+    error: input.error,
+    stage: input.stage,
+  });
+
+  try {
+    await updateCheckoutAttemptAfterSession(input.attempt.id, {
+      checkout_status: "failed",
+      failure_reason: errorCategory,
+      checkout_metadata: {
+        ...(input.attempt.checkout_metadata ?? {}),
+        stripe_session_failure_category: errorCategory,
+        stripe_session_failure_stage: input.stage,
+      },
+    });
+  } catch (updateError) {
+    logStripeCheckoutSessionDiagnostic({
+      attemptId: input.attempt.id,
+      error: updateError,
+      stage: "session_persist",
+    });
+  }
+}
+
 async function createProviderCheckoutSession(params: {
   amountCents: number;
   attempt: CheckoutAttempt;
@@ -550,71 +616,97 @@ async function createProviderCheckoutSession(params: {
   const stripe = getStripeClient();
 
   if (!stripe) {
-    throw new Error("Stripe Sandbox Checkout is not configured.");
+    const error = new Error("Stripe Sandbox Checkout is not configured.");
+    await markCheckoutAttemptFailedBeforeProviderSession({
+      attempt: params.attempt,
+      error,
+      stage: "configuration",
+    });
+    throw error;
   }
 
-  const session = await stripe.checkout.sessions.create(
-    {
-      mode: "payment",
-      line_items: [
-        {
-          quantity: 1,
-          price_data: {
-            currency: "usd",
-            unit_amount: params.amountCents,
-            product_data: {
-              name:
-                params.attempt.target_type === "estimate"
-                  ? "HomeFixOS Estimate payment"
-                  : "HomeFixOS Invoice payment",
+  let session: Awaited<ReturnType<typeof stripe.checkout.sessions.create>>;
+
+  try {
+    session = await stripe.checkout.sessions.create(
+      {
+        mode: "payment",
+        line_items: [
+          {
+            quantity: 1,
+            price_data: {
+              currency: "usd",
+              unit_amount: params.amountCents,
+              product_data: {
+                name:
+                  params.attempt.target_type === "estimate"
+                    ? "HomeFixOS Estimate payment"
+                    : "HomeFixOS Invoice payment",
+              },
             },
           },
-        },
-      ],
-      metadata: {
-        homefixos_checkout_attempt_id: params.attempt.id,
-        service_request_id: params.attempt.service_request_id,
-        target_type: params.attempt.target_type,
-        target_id:
-          params.attempt.target_type === "estimate"
-            ? params.attempt.estimate_id ?? ""
-            : params.attempt.invoice_id ?? "",
-        checkout_kind: params.attempt.checkout_kind,
-        stripe_mode: config.mode,
-        stripe_livemode: "false",
-        stripe_sandbox_pilot:
-          config.mode === "production_sandbox_pilot" ? "true" : "false",
-      },
-      payment_intent_data: {
+        ],
         metadata: {
           homefixos_checkout_attempt_id: params.attempt.id,
+          service_request_id: params.attempt.service_request_id,
+          target_type: params.attempt.target_type,
+          target_id:
+            params.attempt.target_type === "estimate"
+              ? params.attempt.estimate_id ?? ""
+              : params.attempt.invoice_id ?? "",
+          checkout_kind: params.attempt.checkout_kind,
+          stripe_mode: config.mode,
+          stripe_livemode: "false",
+          stripe_sandbox_pilot:
+            config.mode === "production_sandbox_pilot" ? "true" : "false",
         },
+        payment_intent_data: {
+          metadata: {
+            homefixos_checkout_attempt_id: params.attempt.id,
+          },
+        },
+        success_url: `${params.origin}/payments/stripe/success?${returnQuery.toString()}`,
+        cancel_url: `${params.origin}/payments/stripe/cancel?${returnQuery.toString()}`,
       },
-      success_url: `${params.origin}/payments/stripe/success?${returnQuery.toString()}`,
-      cancel_url: `${params.origin}/payments/stripe/cancel?${returnQuery.toString()}`,
-    },
-    {
-      idempotencyKey: `checkout:${params.attempt.id}`,
-    },
-  );
+      {
+        idempotencyKey: `checkout:${params.attempt.id}`,
+      },
+    );
+  } catch (error) {
+    await markCheckoutAttemptFailedBeforeProviderSession({
+      attempt: params.attempt,
+      error,
+      stage: "stripe_session_create",
+    });
+    throw error;
+  }
 
-  await updateCheckoutAttemptAfterSession(params.attempt.id, {
-    provider_checkout_session_id: session.id,
-    provider_payment_intent_id:
-      typeof session.payment_intent === "string" ? session.payment_intent : null,
-    checkout_status: "processing",
-    checkout_metadata: {
-      ...(params.attempt.checkout_metadata ?? {}),
-      stripe_mode: config.mode,
-      stripe_livemode: false,
-      stripe_sandbox_pilot: config.mode === "production_sandbox_pilot",
-      pilot_customer_id:
-        config.mode === "production_sandbox_pilot"
-          ? config.pilotCustomerId
-          : null,
-      stripe_checkout_url: session.url,
-    },
-  });
+  try {
+    await updateCheckoutAttemptAfterSession(params.attempt.id, {
+      provider_checkout_session_id: session.id,
+      provider_payment_intent_id:
+        typeof session.payment_intent === "string" ? session.payment_intent : null,
+      checkout_status: "processing",
+      checkout_metadata: {
+        ...(params.attempt.checkout_metadata ?? {}),
+        stripe_mode: config.mode,
+        stripe_livemode: false,
+        stripe_sandbox_pilot: config.mode === "production_sandbox_pilot",
+        pilot_customer_id:
+          config.mode === "production_sandbox_pilot"
+            ? config.pilotCustomerId
+            : null,
+        stripe_checkout_url: session.url,
+      },
+    });
+  } catch (error) {
+    logStripeCheckoutSessionDiagnostic({
+      attemptId: params.attempt.id,
+      error,
+      stage: "session_persist",
+    });
+    throw error;
+  }
 
   return {
     ok: true,

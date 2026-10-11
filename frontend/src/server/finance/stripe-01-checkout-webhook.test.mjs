@@ -65,6 +65,12 @@ test("Checkout server calculates eligibility before reserving exact amount", () 
   assert.match(checkoutServer, /idempotencyKey: `checkout:\$\{params\.attempt\.id\}`/);
   assert.match(checkoutServer, /provider_checkout_session_id: session\.id/);
   assert.match(checkoutServer, /checkout_metadata:[\s\S]*stripe_checkout_url: session\.url/);
+  assert.match(checkoutServer, /markCheckoutAttemptFailedBeforeProviderSession/);
+  assert.match(checkoutServer, /checkout_status: "failed"/);
+  assert.match(checkoutServer, /failure_reason: errorCategory/);
+  assert.match(checkoutServer, /stripe_session_failure_stage/);
+  assert.match(checkoutServer, /stage: "stripe_session_create"/);
+  assert.match(checkoutServer, /stage: "session_persist"/);
   assert.match(checkoutServer, /success_url: `\$\{params\.origin\}\/payments\/stripe\/success\?\$\{returnQuery\.toString\(\)\}`/);
   assert.match(checkoutServer, /cancel_url: `\$\{params\.origin\}\/payments\/stripe\/cancel\?\$\{returnQuery\.toString\(\)\}`/);
   assert.doesNotMatch(checkoutServer, /p_amount:\s*0\.01/);
