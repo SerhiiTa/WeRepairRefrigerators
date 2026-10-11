@@ -980,6 +980,14 @@ export type Database = {
           estimate_sequence: number;
           parent_estimate_id: string | null;
           customer_appliance_id: string | null;
+          logical_estimate_id: string | null;
+          revision_number: number | null;
+          revision_status: "draft" | "current" | "superseded" | "declined" | "void";
+          superseded_by_estimate_id: string | null;
+          superseded_at: string | null;
+          approved_revision_total: number | null;
+          approved_revision_at: string | null;
+          approval_method: string | null;
           subtotal: number;
           discount_type: "flat" | "percent" | null;
           discount_value: number | null;
@@ -1103,6 +1111,12 @@ export type Database = {
           id: string;
           service_request_id: string;
           estimate_id: string | null;
+          logical_estimate_id: string | null;
+          invoice_version: number | null;
+          invoice_lifecycle_status: "current" | "superseded" | "void";
+          replaces_invoice_id: string | null;
+          replaced_by_invoice_id: string | null;
+          replaced_at: string | null;
           created_by_profile_id: string | null;
           invoice_number: string;
           subtotal: number;
@@ -1732,6 +1746,12 @@ export type Database = {
       get_service_request_invoice_financial_summary_rpc: {
         Args: {
           p_invoice_id: string;
+        };
+        Returns: Json;
+      };
+      get_service_request_finance_v2_summary_rpc: {
+        Args: {
+          p_service_request_id: string;
         };
         Returns: Json;
       };

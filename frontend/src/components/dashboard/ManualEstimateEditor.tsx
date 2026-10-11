@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 
@@ -110,10 +110,13 @@ type ManualEstimateEditorProps = {
   onReviseEstimate?: (estimate: {
     id: string;
     estimateNumber: string;
+    openAddItemType?: ManualEstimateLineType;
   }) =>
     | Promise<{ ok: true } | { ok: false; message: string }>
     | { ok: true }
     | { ok: false; message: string };
+  autoOpenAddItemType?: ManualEstimateLineType | null;
+  onAutoOpenAddItemConsumed?: () => void;
   onDeleteEstimate?: (estimate: {
     id: string;
     estimateNumber: string;
@@ -648,6 +651,8 @@ export function ManualEstimateEditor({
   onApproveForCustomer,
   onSendEstimate,
   onReviseEstimate,
+  autoOpenAddItemType,
+  onAutoOpenAddItemConsumed,
   onDeleteEstimate,
   onUndoApproval,
   onCreateInvoice,
@@ -928,13 +933,21 @@ export function ManualEstimateEditor({
     }
   }
 
-  const saveErrors = [
-    lines.length === 0 ? "Add at least one item before saving this estimate." : null,
-    lines.some((line) => !line.name.trim()) ? "Every item needs a name." : null,
-    lines.some((line) => line.quantity <= 0)
+  function getSaveErrorsForLines(candidateLines: ManualEstimateLine[]) {
+    return [
+      candidateLines.length === 0
+        ? "Add at least one item before saving this estimate."
+        : null,
+      candidateLines.some((line) => !line.name.trim())
+        ? "Every item needs a name."
+        : null,
+      candidateLines.some((line) => line.quantity <= 0)
       ? "Every item quantity must be greater than zero."
       : null,
-  ].filter((error): error is string => Boolean(error));
+    ].filter((error): error is string => Boolean(error));
+  }
+
+  const saveErrors = getSaveErrorsForLines(lines);
   const sendErrors = [
     ...saveErrors,
     customerVisibleLines.length === 0
@@ -990,9 +1003,13 @@ export function ManualEstimateEditor({
     canEditFinancialFields || estimateStatus === "sent" || estimateStatus === "presented";
   const canReviseEstimate =
     savedEstimateId !== null &&
-    (estimateStatus === "sent" || estimateStatus === "declined") &&
+    (estimateStatus === "approved" ||
+      estimateStatus === "sent" ||
+      estimateStatus === "declined") &&
     saveState.status !== "saving" &&
     Boolean(onReviseEstimate);
+  const canStartAddItem =
+    canEditFinancialFields || (estimateStatus === "approved" && canReviseEstimate);
   const canDeleteEstimate =
     savedEstimateId !== null &&
     estimateStatus === "draft" &&
@@ -1059,27 +1076,32 @@ export function ManualEstimateEditor({
     { id: "attachments", label: "Attachments" },
     { id: "history", label: "History" },
   ];
-  const editableSignature = useMemo(
-    () =>
-      JSON.stringify({
+  const buildEditableSignature = useCallback((candidateLines: ManualEstimateLine[]) => {
+    return JSON.stringify({
       whatWeFound,
       repairSolution,
       estimatedCompletion,
       warrantyText,
-      lines,
+      lines: candidateLines,
       discountType,
       discountValue,
       taxRate,
-      }),
-    [
+    });
+  }, [
     discountType,
     discountValue,
     estimatedCompletion,
-    lines,
     repairSolution,
     taxRate,
     warrantyText,
     whatWeFound,
+  ]);
+
+  const editableSignature = useMemo(
+    () => buildEditableSignature(lines),
+    [
+    buildEditableSignature,
+    lines,
     ],
   );
 
@@ -1115,6 +1137,83 @@ export function ManualEstimateEditor({
     });
   }
 
+  useEffect(() => {
+    if (!autoOpenAddItemType || !canEditFinancialFields || itemDraft) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setActiveWorkspaceTab("items");
+      setIsAddItemMenuOpen(false);
+      setItemDraft({
+        mode: "add",
+        lineId: null,
+        line: createBlankLine(autoOpenAddItemType),
+      });
+      onAutoOpenAddItemConsumed?.();
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    autoOpenAddItemType,
+    canEditFinancialFields,
+    itemDraft,
+    onAutoOpenAddItemConsumed,
+  ]);
+
+  async function startAddItem(type: ManualEstimateLineType = "part") {
+    if (canEditFinancialFields) {
+      openAddItem(type);
+      return;
+    }
+
+    if (!savedEstimateId || !savedEstimateNumber || estimateStatus !== "approved") {
+      return;
+    }
+
+    if (!onReviseEstimate) {
+      setSaveState({
+        status: "error",
+        message: "Estimate revision actions are not available for this workspace.",
+      });
+      return;
+    }
+
+    setIsAddItemMenuOpen(false);
+    setActiveWorkspaceTab("items");
+    setSaveState({ status: "saving", message: null });
+    setPendingAction("revise");
+
+    try {
+      const result = await onReviseEstimate({
+        id: savedEstimateId,
+        estimateNumber: savedEstimateNumber,
+        openAddItemType: type,
+      });
+
+      if (!result.ok) {
+        setPendingAction(null);
+        setSaveState({
+          status: "error",
+          message: result.message,
+        });
+        return;
+      }
+
+      setPendingAction(null);
+      setSaveState({
+        status: "success",
+        message: "Draft revision opened. Add the new Estimate item and save when ready.",
+      });
+    } catch {
+      setPendingAction(null);
+      setSaveState({
+        status: "error",
+        message: "Estimate could not be reopened for revision.",
+      });
+    }
+  }
+
   function addPriceBookItem(item: PriceBookSearchItem) {
     if (!canEditFinancialFields) {
       return;
@@ -1139,7 +1238,7 @@ export function ManualEstimateEditor({
     });
   }
 
-  function saveItemDraft() {
+  async function saveItemDraft() {
     if (!itemDraft || !canEditFinancialFields) {
       return;
     }
@@ -1153,17 +1252,17 @@ export function ManualEstimateEditor({
       internalNote: itemDraft.line.internalNote.trim(),
     };
 
-    if (itemDraft.mode === "edit" && itemDraft.lineId) {
-      setLines((current) =>
-        current.map((line) => (line.id === itemDraft.lineId ? nextLine : line)),
-      );
-    } else {
-      setLines((current) => [...current, nextLine]);
-    }
+    const nextLines =
+      itemDraft.mode === "edit" && itemDraft.lineId
+        ? lines.map((line) => (line.id === itemDraft.lineId ? nextLine : line))
+        : [...lines, nextLine];
+
+    setLines(nextLines);
 
     setValidationAttempted(false);
     resetFeedback();
     setItemDraft(null);
+    await saveDraft({ source: "manual", linesOverride: nextLines });
   }
 
   function deleteLine(lineId: string) {
@@ -1204,11 +1303,30 @@ export function ManualEstimateEditor({
     });
   }
 
-  function buildPayload() {
+  function calculateTotalsForLines(candidateLines: ManualEstimateLine[]) {
+    return calculateRepairProposalTotals({
+      lines: candidateLines
+        .filter((line) => line.customerVisible)
+        .map((line) => ({
+          lineType: lineTypeToApiType(line.type),
+          quantity: line.quantity,
+          unitPrice: line.customerUnitPrice,
+          unitCost: line.internalUnitCost,
+          taxable: line.taxable,
+        })),
+      discountType,
+      discountValue: Number(discountValue),
+      taxRate: Number(taxRate),
+    });
+  }
+
+  function buildPayload(payloadLines: ManualEstimateLine[] = lines) {
+    const payloadTotals = calculateTotalsForLines(payloadLines);
+
     return {
       ...(savedEstimateId ? { estimateId: savedEstimateId } : {}),
       catalogItems: [],
-      customItems: lines.map((line) => ({
+      customItems: payloadLines.map((line) => ({
         itemTitle: line.name.trim() || "Untitled estimate item",
         customerName: line.name.trim() || "Untitled estimate item",
         internalName: line.name.trim() || null,
@@ -1245,9 +1363,9 @@ export function ManualEstimateEditor({
           repairSolution: repairSolution.trim(),
           customerDescription: whatWeFound.trim(),
           estimatedCompletion: estimatedCompletion.trim() || null,
-          source: "manual",
+        source: "manual",
         },
-        lineDecisions: lines.map((line) => ({
+        lineDecisions: payloadLines.map((line) => ({
           lineType: lineTypeToApiType(line.type),
           customerName: line.name.trim(),
           internalName: line.name.trim(),
@@ -1262,28 +1380,33 @@ export function ManualEstimateEditor({
           wasEdited: true,
         })),
         totals: {
-          subtotal: totals.subtotal,
+          subtotal: payloadTotals.subtotal,
           discountType,
-          discountValue: totals.discountValue,
-          discountAmount: totals.discountAmount,
-          taxableSubtotal: totals.taxableAmount,
-          taxRate: totals.taxRate,
-          tax: totals.tax,
-          grandTotal: totals.total,
-          internalCostTotal: totals.internalCostTotal,
-          margin: totals.grossProfit,
-          marginPercent: totals.marginPercent,
+          discountValue: payloadTotals.discountValue,
+          discountAmount: payloadTotals.discountAmount,
+          taxableSubtotal: payloadTotals.taxableAmount,
+          taxRate: payloadTotals.taxRate,
+          tax: payloadTotals.tax,
+          grandTotal: payloadTotals.total,
+          internalCostTotal: payloadTotals.internalCostTotal,
+          margin: payloadTotals.grossProfit,
+          marginPercent: payloadTotals.marginPercent,
           persistedAuthoritatively: true,
         },
-        total: totals.total,
+        total: payloadTotals.total,
       },
     };
   }
 
   async function saveDraft(
-    options: { source?: "autosave" | "navigation" | "manual" } = {},
+    options: {
+      source?: "autosave" | "navigation" | "manual";
+      linesOverride?: ManualEstimateLine[];
+    } = {},
   ): Promise<SaveResult> {
     const source = options.source ?? "manual";
+    const payloadLines = options.linesOverride ?? lines;
+    const payloadSaveErrors = getSaveErrorsForLines(payloadLines);
 
     if (!canEditFinancialFields) {
       if (source !== "autosave") {
@@ -1311,18 +1434,20 @@ export function ManualEstimateEditor({
       return saveDraft(options);
     }
 
-    const signatureAtSaveStart = editableSignature;
+    const signatureAtSaveStart = options.linesOverride
+      ? buildEditableSignature(options.linesOverride)
+      : editableSignature;
 
     if (source !== "autosave") {
       setValidationAttempted(true);
     }
 
-    if (saveErrors.length > 0) {
+    if (payloadSaveErrors.length > 0) {
       if (source === "autosave") {
         return null;
       }
 
-      setSaveState({ status: "error", message: saveErrors[0] });
+      setSaveState({ status: "error", message: payloadSaveErrors[0] });
       return null;
     }
 
@@ -1363,7 +1488,7 @@ export function ManualEstimateEditor({
               "Content-Type": "application/json",
               Authorization: `Bearer ${accessToken}`,
             },
-            body: JSON.stringify(buildPayload()),
+            body: JSON.stringify(buildPayload(payloadLines)),
           },
         );
       } catch {
@@ -1871,7 +1996,7 @@ export function ManualEstimateEditor({
                     Edit Estimate
                   </button>
                 ) : null}
-                {canReviseEstimate ? (
+                {canReviseEstimate && estimateStatus !== "approved" ? (
                   <button
                     className="block w-full px-4 py-2.5 text-left text-amber-700 hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-40"
                     disabled={pendingAction === "revise"}
@@ -1881,7 +2006,7 @@ export function ManualEstimateEditor({
                     }}
                     type="button"
                   >
-                    {pendingAction === "revise" ? "Reopening..." : "Revise Estimate"}
+                    {pendingAction === "revise" ? "Creating Revision..." : "Revise Estimate"}
                   </button>
                 ) : null}
                 <button
@@ -2079,15 +2204,16 @@ export function ManualEstimateEditor({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-3">
                     <h3 className="text-lg font-black">Items ({lines.length})</h3>
-                    {canEditFinancialFields ? (
+                    {canStartAddItem ? (
                     <div className="relative lg:hidden">
                       <button
                         className="inline-flex min-h-11 items-center gap-1.5 rounded-xl bg-[#0F6BFF] px-3 text-sm font-black text-white shadow-sm"
+                        disabled={pendingAction === "revise"}
                         onClick={() => setIsAddItemMenuOpen((current) => !current)}
                         type="button"
                       >
                         <EstimateIcon className="h-4 w-4" name="plus" />
-                        Add Item
+                        {pendingAction === "revise" ? "Opening..." : "Add Item"}
                       </button>
                     </div>
                     ) : null}
@@ -2152,24 +2278,26 @@ export function ManualEstimateEditor({
                   </div>
                   ) : null}
                 </div>
-                {canEditFinancialFields ? (
+                {canStartAddItem ? (
                 <div className="relative hidden lg:block">
                   <button
                     className="inline-flex min-h-11 items-center gap-1.5 rounded-xl bg-[#0F6BFF] px-4 text-sm font-black text-white shadow-sm transition hover:bg-[#0958D9]"
+                    disabled={pendingAction === "revise"}
                     onClick={() => setIsAddItemMenuOpen((current) => !current)}
                     type="button"
                   >
                     <EstimateIcon className="h-4 w-4" name="plus" />
-                    Add Item
+                    {pendingAction === "revise" ? "Opening..." : "Add Item"}
                   </button>
                 </div>
                 ) : null}
-                {canEditFinancialFields && isAddItemMenuOpen ? (
+                {canStartAddItem && isAddItemMenuOpen ? (
                   <div className="absolute right-4 top-24 z-30 w-52 overflow-hidden rounded-2xl border border-[#E5E7EB] bg-white py-2 text-sm font-bold shadow-[0_18px_44px_rgba(15,23,42,0.18)] lg:right-10 lg:top-32">
                     {[
                       { label: "Add Part", type: "part" as const },
                       { label: "Add Labor", type: "labor" as const },
-                      { label: "Add Service / Fee", type: "service" as const },
+                      { label: "Add Service", type: "service" as const },
+                      { label: "Add Fee", type: "fee" as const },
                       { label: "Custom Line Item", type: "other" as const },
                     ].map((item) => (
                       <button
@@ -2177,7 +2305,7 @@ export function ManualEstimateEditor({
                         key={item.label}
                         onClick={() => {
                           setIsAddItemMenuOpen(false);
-                          openAddItem(item.type);
+                          void startAddItem(item.type);
                         }}
                         type="button"
                       >

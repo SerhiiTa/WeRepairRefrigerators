@@ -90,6 +90,8 @@ import type {
 } from "@/lib/supabase/types";
 import { calculateRepairProposalTotals } from "@/server/finance/repair-proposal-calculations";
 
+type EstimateAddItemType = "labor" | "part" | "service" | "fee" | "other";
+
 type ServiceRequestDetailProps = {
   requestId: string;
   returnTo?: string;
@@ -2019,6 +2021,11 @@ export function ServiceRequestDetail({
   const [financeEstimateMode, setFinanceEstimateMode] =
     useState<FinanceEstimateMode>("home");
   const [manualEstimateId, setManualEstimateId] = useState<string | null>(null);
+  const [pendingManualEstimateAddItem, setPendingManualEstimateAddItem] =
+    useState<{
+      estimateId: string;
+      itemType: EstimateAddItemType;
+    } | null>(null);
   const [isFinanceEstimatesOpen, setIsFinanceEstimatesOpen] = useState(false);
   const [isFinanceInvoiceOpen, setIsFinanceInvoiceOpen] = useState(false);
   const [isFinancePaymentsOpen, setIsFinancePaymentsOpen] = useState(false);
@@ -2028,6 +2035,7 @@ export function ServiceRequestDetail({
     useState<InvoiceActionState>({ status: "idle", message: null });
   const [invoiceDeliveryDraft, setInvoiceDeliveryDraft] =
     useState<InvoiceDeliveryDraft | null>(null);
+  const [invoicePreviewId, setInvoicePreviewId] = useState<string | null>(null);
   const [invoiceWorkspaceTab, setInvoiceWorkspaceTab] =
     useState<InvoiceWorkspaceTab>("overview");
   const [isInvoiceMoreActionsOpen, setIsInvoiceMoreActionsOpen] =
@@ -4543,7 +4551,9 @@ export function ServiceRequestDetail({
     estimate: DashboardServiceRequestEstimate,
     options: { history?: "push" | "replace" | "none" } = {},
   ) {
-    setManualEstimateId(estimate.id);
+    const workspaceEstimate = resolveEstimateWorkspaceDocument(estimate);
+
+    setManualEstimateId(workspaceEstimate.id);
     setFinanceEstimateMode("saved");
     setActiveJobTab("estimate");
     setIsFinanceEstimatesOpen(true);
@@ -4557,7 +4567,7 @@ export function ServiceRequestDetail({
     setCreatedEstimateSummary(null);
     setEstimateApprovalLink(null);
     setEstimateSaveState({ status: "idle", message: null });
-    syncEstimateWorkspaceHistory(estimate.id, options.history ?? "push");
+    syncEstimateWorkspaceHistory(workspaceEstimate.id, options.history ?? "push");
   }
 
   function closeManualEstimateEditor() {
@@ -5043,11 +5053,43 @@ export function ServiceRequestDetail({
   async function reviseEstimateById(
     estimateId: string,
     estimateNumber: string,
+    options: { openAddItemType?: EstimateAddItemType } = {},
   ) {
     setEstimateSaveState({
       status: "saving",
       message: `Reopening ${estimateNumber} as a draft revision...`,
     });
+
+    const sourceEstimate = estimatesState.estimates.find(
+      (estimate) => estimate.id === estimateId,
+    );
+    const sourceLogicalEstimateId = sourceEstimate?.logicalEstimateId ?? estimateId;
+    const existingDraftRevision = estimatesState.estimates.find(
+      (estimate) =>
+        estimate.id !== estimateId &&
+        estimate.estimateStatus === "draft" &&
+        estimate.revisionStatus === "draft" &&
+        (estimate.logicalEstimateId ?? estimate.id) === sourceLogicalEstimateId,
+    );
+
+    if (existingDraftRevision) {
+      setManualEstimateId(existingDraftRevision.id);
+      setViewingEstimateId(existingDraftRevision.id);
+      setViewingInvoiceId(null);
+      setPendingManualEstimateAddItem(
+        options.openAddItemType
+          ? {
+              estimateId: existingDraftRevision.id,
+              itemType: options.openAddItemType,
+            }
+          : null,
+      );
+      setEstimateSaveState({
+        status: "success",
+        message: "Draft revision opened. Previous approvals and payments remain preserved.",
+      });
+      return { ok: true as const };
+    }
 
     const supabase = getSupabaseBrowserClient();
 
@@ -5081,7 +5123,11 @@ export function ServiceRequestDetail({
       ok?: boolean;
       message?: string;
       estimate?: {
+        id?: string;
+        estimate_number?: string;
         estimate_status?: DashboardServiceRequestEstimate["estimateStatus"];
+        revision_number?: number;
+        revision_status?: DashboardServiceRequestEstimate["revisionStatus"];
       };
     } | null;
 
@@ -5096,7 +5142,11 @@ export function ServiceRequestDetail({
         ok?: boolean;
         message?: string;
         estimate?: {
+          id?: string;
+          estimate_number?: string;
           estimate_status?: DashboardServiceRequestEstimate["estimateStatus"];
+          revision_number?: number;
+          revision_status?: DashboardServiceRequestEstimate["revisionStatus"];
         };
       } | null;
     } catch (error) {
@@ -5115,30 +5165,24 @@ export function ServiceRequestDetail({
       return { ok: false as const, message };
     }
 
-    setEstimatesState((current) => {
-      if (current.status !== "ready") {
-        return current;
-      }
-
-      return {
-        status: "ready",
-        estimates: current.estimates.map((currentEstimate) =>
-          currentEstimate.id === estimateId
-            ? {
-                ...currentEstimate,
-                estimateStatus: "draft",
-                updatedAt: new Date().toISOString(),
-              }
-            : currentEstimate,
-        ),
-        error: null,
-      };
-    });
+    if (payload.estimate?.id) {
+      setManualEstimateId(payload.estimate.id);
+      setViewingEstimateId(payload.estimate.id);
+      setViewingInvoiceId(null);
+      setPendingManualEstimateAddItem(
+        options.openAddItemType
+          ? {
+              estimateId: payload.estimate.id,
+              itemType: options.openAddItemType,
+            }
+          : null,
+      );
+    }
 
     setEstimateSaveState({
       status: "success",
       message:
-        "Estimate reopened as a draft revision. Previously sent customer links were revoked.",
+        "Draft revision created. Previous approvals and payments remain preserved.",
     });
     void loadEstimates();
     void loadNotes();
@@ -7149,20 +7193,92 @@ export function ServiceRequestDetail({
       ? null
       : estimatesState.estimates.find((estimate) => estimate.id === manualEstimateId) ??
         null;
-  const invoicesByEstimateId = new Map(
-    invoicesState.invoices.map((invoice) => [invoice.estimateId, invoice]),
+  const currentLifecycleInvoices = invoicesState.invoices.filter(
+    (invoice) =>
+      invoice.voidedAt === null &&
+      invoice.invoiceStatus !== "void" &&
+      invoice.invoiceLifecycleStatus === "current",
   );
+  const activeInvoicesByEstimateId = new Map(
+    currentLifecycleInvoices
+      .filter((invoice) => invoice.estimateId)
+      .map((invoice) => [invoice.estimateId, invoice]),
+  );
+  const invoicesByEstimateId = activeInvoicesByEstimateId;
   const viewingInvoice =
     invoicesState.invoices.find((invoice) => invoice.id === viewingInvoiceId) ??
     null;
-  const currentEstimates = estimatesState.estimates.filter(
+  const isVisibleEstimateDocument = (estimate: DashboardServiceRequestEstimate) =>
+    (estimate.logicalEstimateId ?? estimate.id) === estimate.id;
+  const rootEstimateDocuments = estimatesState.estimates.filter(
+    isVisibleEstimateDocument,
+  );
+  const draftEstimateByLogicalEstimateId = new Map<string, DashboardServiceRequestEstimate>();
+  const currentEstimateByLogicalEstimateId = new Map<string, DashboardServiceRequestEstimate>();
+
+  estimatesState.estimates.forEach((estimate) => {
+    const logicalEstimateId = estimate.logicalEstimateId ?? estimate.id;
+
+    if (estimate.revisionStatus === "current") {
+      const currentEstimate =
+        currentEstimateByLogicalEstimateId.get(logicalEstimateId);
+
+      if (
+        !currentEstimate ||
+        (estimate.revisionNumber ?? 0) > (currentEstimate.revisionNumber ?? 0) ||
+        ((estimate.revisionNumber ?? 0) ===
+          (currentEstimate.revisionNumber ?? 0) &&
+          new Date(estimate.updatedAt ?? estimate.createdAt).getTime() >
+            new Date(
+              currentEstimate.updatedAt ?? currentEstimate.createdAt,
+            ).getTime())
+      ) {
+        currentEstimateByLogicalEstimateId.set(logicalEstimateId, estimate);
+      }
+    }
+
+    if (
+      estimate.estimateStatus !== "draft" ||
+      estimate.revisionStatus !== "draft"
+    ) {
+      return;
+    }
+
+    const currentDraft = draftEstimateByLogicalEstimateId.get(logicalEstimateId);
+
+    if (
+      !currentDraft ||
+      (estimate.revisionNumber ?? 0) > (currentDraft.revisionNumber ?? 0) ||
+      ((estimate.revisionNumber ?? 0) === (currentDraft.revisionNumber ?? 0) &&
+        new Date(estimate.updatedAt ?? estimate.createdAt).getTime() >
+          new Date(currentDraft.updatedAt ?? currentDraft.createdAt).getTime())
+    ) {
+      draftEstimateByLogicalEstimateId.set(logicalEstimateId, estimate);
+    }
+  });
+
+  function resolveEstimateWorkspaceDocument(estimate: DashboardServiceRequestEstimate) {
+    const logicalEstimateId = estimate.logicalEstimateId ?? estimate.id;
+
+    return (
+      draftEstimateByLogicalEstimateId.get(logicalEstimateId) ??
+      currentEstimateByLogicalEstimateId.get(logicalEstimateId) ??
+      estimate
+    );
+  }
+
+  const visibleDocumentEstimates = rootEstimateDocuments.map(
+    resolveEstimateWorkspaceDocument,
+  );
+  const currentEstimates = visibleDocumentEstimates.filter(
     (estimate) =>
       estimate.estimateStatus === "draft" ||
       estimate.estimateStatus === "sent" ||
       (estimate.estimateStatus === "approved" &&
-        !invoicesByEstimateId.has(estimate.id)),
+        estimate.revisionStatus === "current" &&
+        !activeInvoicesByEstimateId.has(estimate.id)),
   );
-  const estimateHistory = estimatesState.estimates.filter(
+  const estimateHistory = visibleDocumentEstimates.filter(
     (estimate) => !currentEstimates.some((current) => current.id === estimate.id),
   );
   const visibleEstimateHistory = showEstimateHistory
@@ -7172,7 +7288,8 @@ export function ServiceRequestDetail({
     estimateHistory.length - visibleEstimateHistory.length;
   const currentInvoices = invoicesState.invoices.filter(
     (invoice) =>
-      invoice.invoiceStatus === "draft" || invoice.invoiceStatus === "sent",
+      invoice.invoiceLifecycleStatus === "current" &&
+      (invoice.invoiceStatus === "draft" || invoice.invoiceStatus === "sent"),
   );
   const invoiceHistory = invoicesState.invoices.filter(
     (invoice) => !currentInvoices.some((current) => current.id === invoice.id),
@@ -7184,6 +7301,24 @@ export function ServiceRequestDetail({
     invoiceHistory.length - visibleInvoiceHistory.length;
   const activePaymentAllocations = paymentsState.allocations.filter(
     (allocation) => allocation.allocationStatus === "active",
+  );
+  const validPaidPaymentIds = new Set(
+    paymentsState.payments
+      .filter(
+        (payment) =>
+          payment.voidedAt === null &&
+          ["paid", "succeeded", "imported", "partially_refunded"].includes(
+            String(payment.paymentStatus),
+          ),
+      )
+      .map((payment) => payment.id),
+  );
+  const validPaidCreditCents = activePaymentAllocations.reduce(
+    (total, allocation) =>
+      validPaidPaymentIds.has(allocation.paymentId)
+        ? total + moneyToCents(allocation.allocationAmount)
+        : total,
+    0,
   );
   const estimateAllocatedCents = new Map<string, number>();
   const invoiceAllocatedCents = new Map<string, number>();
@@ -7206,10 +7341,18 @@ export function ServiceRequestDetail({
     }
   });
   const getInvoiceAllocatedCents = (invoice: DashboardServiceRequestInvoice) =>
-    invoice.financialSummary
-      ? moneyToCents(invoice.financialSummary.allocatedPaid)
-      : invoiceAllocatedCents.get(invoice.id) ?? 0;
+    invoice.invoiceLifecycleStatus === "current"
+      ? validPaidCreditCents
+      : invoice.financialSummary
+        ? moneyToCents(invoice.financialSummary.allocatedPaid)
+        : invoiceAllocatedCents.get(invoice.id) ?? 0;
   const getInvoiceBalanceDue = (invoice: DashboardServiceRequestInvoice) => {
+    if (invoice.invoiceLifecycleStatus === "current") {
+      return centsToMoney(
+        Math.max(0, moneyToCents(invoice.total) - validPaidCreditCents),
+      );
+    }
+
     if (invoice.financialSummary) {
       return invoice.financialSummary.balanceDue;
     }
@@ -7219,51 +7362,70 @@ export function ServiceRequestDetail({
     );
   };
 
-  const financeApprovedEstimates = estimatesState.estimates.filter(
+  const financeApprovedEstimates = visibleDocumentEstimates.filter(
     (estimate) =>
-      estimate.estimateStatus === "approved" && estimate.archivedAt === null,
+      estimate.estimateStatus === "approved" &&
+      estimate.revisionStatus === "current" &&
+      estimate.archivedAt === null,
   );
   const financePayableEstimates = financeApprovedEstimates.filter(
-    (estimate) => !invoicesByEstimateId.has(estimate.id),
+    (estimate) => !activeInvoicesByEstimateId.has(estimate.id),
   );
-  const financeOpenInvoices = invoicesState.invoices.filter(
-    (invoice) =>
-      invoice.voidedAt === null &&
-      (invoice.invoiceStatus === "draft" || invoice.invoiceStatus === "sent"),
+  function isEstimateNewerThanInvoiceScope(
+    estimate: DashboardServiceRequestEstimate,
+    invoice: DashboardServiceRequestInvoice,
+  ) {
+    const estimateLogicalId = estimate.logicalEstimateId ?? estimate.id;
+    const invoiceLogicalId = invoice.logicalEstimateId ?? invoice.estimateId;
+
+    return (
+      invoiceLogicalId === estimateLogicalId &&
+      invoice.estimateId !== estimate.id &&
+      estimate.revisionStatus === "current" &&
+      estimate.estimateStatus === "approved"
+    );
+  }
+
+  const staleInvoiceLogicalEstimateIds = new Set(
+    currentLifecycleInvoices
+      .filter((invoice) =>
+        financeApprovedEstimates.some((estimate) =>
+          isEstimateNewerThanInvoiceScope(estimate, invoice),
+        ),
+      )
+      .map((invoice) => invoice.logicalEstimateId ?? invoice.estimateId)
+      .filter((logicalEstimateId): logicalEstimateId is string =>
+        Boolean(logicalEstimateId),
+      ),
   );
-  const financePaidTotal =
-    financePayableEstimates.reduce(
-      (total, estimate) =>
-        total + centsToMoney(estimateAllocatedCents.get(estimate.id) ?? 0),
-      0,
-    ) +
-    invoicesState.invoices
-      .filter((invoice) => invoice.voidedAt === null && invoice.invoiceStatus !== "void")
-      .reduce(
-        (total, invoice) => total + centsToMoney(getInvoiceAllocatedCents(invoice)),
-        0,
+  const financeCurrentInvoices = currentLifecycleInvoices.filter((invoice) => {
+    const logicalEstimateId = invoice.logicalEstimateId ?? invoice.estimateId;
+
+    return !logicalEstimateId || !staleInvoiceLogicalEstimateIds.has(logicalEstimateId);
+  });
+  const financeUninvoicedApprovedEstimates = financeApprovedEstimates.filter(
+    (estimate) => {
+      const logicalEstimateId = estimate.logicalEstimateId ?? estimate.id;
+      const hasCurrentInvoice = currentLifecycleInvoices.some(
+        (invoice) =>
+          (invoice.logicalEstimateId ?? invoice.estimateId) === logicalEstimateId,
       );
+
+      return (
+        !hasCurrentInvoice || staleInvoiceLogicalEstimateIds.has(logicalEstimateId)
+      );
+    },
+  );
   const financeApprovedTotal =
-    financePayableEstimates.reduce((total, estimate) => total + estimate.total, 0) +
-    invoicesState.invoices
-      .filter((invoice) => invoice.voidedAt === null && invoice.invoiceStatus !== "void")
-      .reduce((total, invoice) => total + invoice.total, 0);
+    financeCurrentInvoices.reduce((total, invoice) => total + invoice.total, 0) +
+    financeUninvoicedApprovedEstimates.reduce(
+      (total, estimate) => total + estimate.total,
+      0,
+    );
+  const financePaidTotal = centsToMoney(validPaidCreditCents);
   const financeBalanceDueTotal = Math.max(
     0,
-    financePayableEstimates.reduce(
-      (total, estimate) =>
-        total +
-        Math.max(
-          0,
-          estimate.total - centsToMoney(estimateAllocatedCents.get(estimate.id) ?? 0),
-        ),
-      0,
-    ) +
-    financeOpenInvoices.reduce(
-      (total, invoice) =>
-        total + Math.max(0, getInvoiceBalanceDue(invoice)),
-      0,
-    ),
+    financeApprovedTotal - financePaidTotal,
   );
   const paymentHistory = paymentsState.payments
     .map((payment) => {
@@ -7293,7 +7455,7 @@ export function ServiceRequestDetail({
         new Date(right.payment.paidAt ?? right.payment.createdAt).getTime() -
         new Date(left.payment.paidAt ?? left.payment.createdAt).getTime(),
     );
-  const financeEstimates = [...estimatesState.estimates].sort((left, right) => {
+  const financeEstimates = [...visibleDocumentEstimates].sort((left, right) => {
     const getStatusPriority = (
       status: DashboardServiceRequestEstimate["estimateStatus"],
     ) =>
@@ -7327,7 +7489,7 @@ export function ServiceRequestDetail({
     null;
   const manualPaymentTargets: ManualPaymentTarget[] = [
     ...financeApprovedEstimates
-      .filter((estimate) => !invoicesByEstimateId.has(estimate.id))
+      .filter((estimate) => !activeInvoicesByEstimateId.has(estimate.id))
       .map((estimate) => {
         const paidCents = estimateAllocatedCents.get(estimate.id) ?? 0;
         const totalCents = moneyToCents(estimate.total);
@@ -7342,8 +7504,7 @@ export function ServiceRequestDetail({
           remaining: centsToMoney(Math.max(0, totalCents - paidCents)),
         };
       }),
-    ...invoicesState.invoices
-      .filter((invoice) => invoice.voidedAt === null && invoice.invoiceStatus !== "void")
+    ...currentLifecycleInvoices
       .map((invoice) => {
         const paidCents = getInvoiceAllocatedCents(invoice);
         const totalCents = moneyToCents(invoice.total);
@@ -8441,6 +8602,7 @@ export function ServiceRequestDetail({
 
   function closeInvoiceWorkspace() {
     setViewingInvoiceId(null);
+    setInvoicePreviewId(null);
     setInvoiceWorkspaceTab("overview");
     setIsInvoiceMoreActionsOpen(false);
   }
@@ -9614,12 +9776,10 @@ export function ServiceRequestDetail({
           <div className="mx-auto grid max-w-5xl grid-cols-[0.82fr_0.9fr_1.28fr] gap-2 sm:grid-cols-3 sm:gap-3">
             <button
               className="inline-flex h-11 min-w-0 items-center justify-center rounded-xl border border-[#D7DEE8] px-2 text-xs font-bold text-[#0B1228] transition hover:bg-[#F8FAFC] sm:h-12 sm:text-sm"
-              onClick={() =>
-                setInvoiceActionState({
-                  status: "error",
-                  message: "Invoice preview is not available yet.",
-                })
-              }
+              onClick={() => {
+                setInvoiceActionState({ status: "idle", message: null });
+                setInvoicePreviewId(invoice.id);
+              }}
               type="button"
             >
               <span className="hidden sm:inline">Preview Invoice</span>
@@ -13045,11 +13205,16 @@ export function ServiceRequestDetail({
             estimates={financeEstimates}
             initialEstimate={financeEstimateMode === "saved" ? manualEstimate : null}
             isCreatingInvoice={invoiceActionState.status === "saving"}
-            key={`${financeEstimateMode}:${manualEstimateId ?? "new"}:${manualEstimate?.estimateStatus ?? "none"}:${manualEstimate?.customerRespondedAt ?? "none"}`}
+            key={`${financeEstimateMode}:${manualEstimateId ?? "new"}:${manualEstimate?.estimateStatus ?? "none"}:${manualEstimate?.updatedAt ?? "none"}:${manualEstimate?.items.length ?? 0}`}
             depositPaid={
-              manualEstimate
-                ? centsToMoney(estimateAllocatedCents.get(manualEstimate.id) ?? 0)
-                : 0
+              manualEstimate &&
+              financeUninvoicedApprovedEstimates.some(
+                (estimate) => estimate.id === manualEstimate.id,
+              )
+                ? centsToMoney(validPaidCreditCents)
+                : manualEstimate
+                  ? centsToMoney(estimateAllocatedCents.get(manualEstimate.id) ?? 0)
+                  : 0
             }
             customerHref={estimateCustomerProfileHref}
             linkedInvoiceNumber={
@@ -13080,8 +13245,16 @@ export function ServiceRequestDetail({
               )
             }
             onReviseEstimate={(estimate) =>
-              reviseEstimateById(estimate.id, estimate.estimateNumber)
+              reviseEstimateById(estimate.id, estimate.estimateNumber, {
+                openAddItemType: estimate.openAddItemType,
+              })
             }
+            autoOpenAddItemType={
+              pendingManualEstimateAddItem?.estimateId === manualEstimateId
+                ? pendingManualEstimateAddItem.itemType
+                : null
+            }
+            onAutoOpenAddItemConsumed={() => setPendingManualEstimateAddItem(null)}
             onDeleteEstimate={(estimate) =>
               deleteDraftEstimateById(estimate.id, estimate.estimateNumber)
             }
@@ -13162,8 +13335,8 @@ export function ServiceRequestDetail({
                     Estimates
                   </span>
                   <span className="mt-0.5 block truncate text-[0.82rem] font-semibold text-[#657089]">
-                    {estimatesState.estimates.length > 0
-                      ? `${estimatesState.estimates.length} total · Approved first`
+                    {financeEstimates.length > 0
+                      ? `${financeEstimates.length} total · Approved first`
                       : "No estimates yet"}
                   </span>
                 </span>
@@ -15301,7 +15474,7 @@ export function ServiceRequestDetail({
               </p>
             ) : null}
             {estimatesState.status === "ready" &&
-            estimatesState.estimates.length === 0 ? (
+            visibleDocumentEstimates.length === 0 ? (
               <p className="mt-3 rounded-md border border-dashed border-[#E5E7EB] bg-[#F8FAFC] p-4 text-sm leading-6 text-[#64748B]">
                 No estimates yet.
               </p>
@@ -15311,7 +15484,7 @@ export function ServiceRequestDetail({
                 {currentEstimates.map(renderEstimateCard)}
               </div>
             ) : estimatesState.status === "ready" &&
-              estimatesState.estimates.length > 0 ? (
+              visibleDocumentEstimates.length > 0 ? (
               <p className="mt-3 rounded-md border border-dashed border-[#E5E7EB] bg-[#F8FAFC] p-4 text-sm leading-6 text-[#64748B]">
                 No active estimates. Review history for prior estimate documents.
               </p>
@@ -15930,6 +16103,127 @@ export function ServiceRequestDetail({
           )}
         </div>
       ) : null}
+
+      {invoicePreviewId ? (() => {
+        const invoice = invoicesState.invoices.find(
+          (currentInvoice) => currentInvoice.id === invoicePreviewId,
+        );
+
+        if (!invoice) {
+          return null;
+        }
+
+        const allocatedPaid = centsToMoney(getInvoiceAllocatedCents(invoice));
+        const balanceDue = Math.max(0, getInvoiceBalanceDue(invoice));
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/55 px-3 py-4 backdrop-blur-sm sm:items-center">
+            <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.16em] text-[#0F6BFF]">
+                    Invoice Preview
+                  </p>
+                  <h3 className="mt-1 text-xl font-black text-[#0F172A]">
+                    {invoice.invoiceNumber}
+                  </h3>
+                  <p className="mt-1 text-sm font-bold text-[#64748B]">
+                    {formatServiceRequestSource(invoice.invoiceStatus)}
+                  </p>
+                </div>
+                <button
+                  aria-label="Close Invoice Preview"
+                  className="flex h-9 w-9 items-center justify-center rounded-full border border-[#E5E7EB] text-xl font-black text-[#64748B]"
+                  onClick={() => setInvoicePreviewId(null)}
+                  type="button"
+                >
+                  ×
+                </button>
+              </div>
+
+              <div className="mt-5 grid grid-cols-3 divide-x divide-[#D7DEE8] rounded-2xl border border-[#E1E7F0] bg-[#F8FAFC] py-3">
+                <div className="min-w-0 px-3">
+                  <p className="text-xs font-black uppercase tracking-[0.12em] text-[#657089]">
+                    Total
+                  </p>
+                  <p className="mt-1 whitespace-nowrap text-lg font-black text-[#0B1228] tabular-nums">
+                    {formatServiceRequestMoney(invoice.total)}
+                  </p>
+                </div>
+                <div className="min-w-0 px-3">
+                  <p className="text-xs font-black uppercase tracking-[0.12em] text-[#657089]">
+                    Paid
+                  </p>
+                  <p className="mt-1 whitespace-nowrap text-lg font-black text-emerald-700 tabular-nums">
+                    {formatServiceRequestMoney(allocatedPaid)}
+                  </p>
+                </div>
+                <div className="min-w-0 px-3">
+                  <p className="text-xs font-black uppercase tracking-[0.12em] text-[#657089]">
+                    Balance Due
+                  </p>
+                  <p className="mt-1 whitespace-nowrap text-lg font-black text-[#0F6BFF] tabular-nums">
+                    {formatServiceRequestMoney(balanceDue)}
+                  </p>
+                </div>
+              </div>
+
+              <section className="mt-5">
+                <h4 className="text-base font-black text-[#0F172A]">
+                  Invoice Items ({invoice.items.length})
+                </h4>
+                <div className="mt-3 divide-y divide-[#E1E7F0] border-y border-[#E1E7F0]">
+                  {invoice.items.map((item) => (
+                    <div
+                      className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 py-3 text-sm"
+                      key={item.id}
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate font-black text-[#0F172A]">
+                          {item.itemTitle}
+                        </p>
+                        <p className="mt-1 font-semibold text-[#52627A]">
+                          {item.quantity} × {formatServiceRequestMoney(item.unitPrice)}
+                        </p>
+                      </div>
+                      <p className="whitespace-nowrap font-black text-[#0F172A]">
+                        {formatServiceRequestMoney(item.lineTotal)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <div className="mt-5 space-y-2 text-sm">
+                <div className="flex justify-between gap-4 text-[#52627A]">
+                  <span>Subtotal</span>
+                  <span className="font-bold text-[#0F172A]">
+                    {formatServiceRequestMoney(invoice.subtotal)}
+                  </span>
+                </div>
+                {invoice.discountAmount && invoice.discountAmount > 0 ? (
+                  <div className="flex justify-between gap-4 text-[#52627A]">
+                    <span>Discount</span>
+                    <span className="font-bold text-[#0F172A]">
+                      -{formatServiceRequestMoney(invoice.discountAmount)}
+                    </span>
+                  </div>
+                ) : null}
+                <div className="flex justify-between gap-4 text-[#52627A]">
+                  <span>Tax</span>
+                  <span className="font-bold text-[#0F172A]">
+                    {formatServiceRequestMoney(invoice.tax ?? 0)}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-4 border-t border-[#E1E7F0] pt-3 text-base font-black text-[#0F172A]">
+                  <span>Invoice Total</span>
+                  <span>{formatServiceRequestMoney(invoice.total)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })() : null}
 
       {invoiceDeliveryDraft ? (() => {
         const invoice = invoicesState.invoices.find(

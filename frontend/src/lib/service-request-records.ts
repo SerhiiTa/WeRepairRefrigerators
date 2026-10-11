@@ -4,6 +4,7 @@ import type {
   DatabaseAppointmentStatus,
   DatabaseCalendarSyncStatus,
   DatabaseEstimateStatus,
+  DatabaseEstimateType,
   DatabaseInvoiceStatus,
   DatabaseServiceRequestNoteType,
   DatabaseServiceRequestPhotoType,
@@ -186,6 +187,17 @@ export type DashboardServiceRequestEstimate = {
   id: string;
   serviceRequestId: string;
   createdByProfileId: string | null;
+  estimateType: DatabaseEstimateType;
+  estimateSequence: number | null;
+  parentEstimateId: string | null;
+  logicalEstimateId: string | null;
+  revisionNumber: number | null;
+  revisionStatus: "draft" | "current" | "superseded" | "declined" | "void";
+  supersededByEstimateId: string | null;
+  supersededAt: string | null;
+  approvedRevisionTotal: number | null;
+  approvedRevisionAt: string | null;
+  approvalMethod: string | null;
   subtotal: number;
   discountType: "flat" | "percent";
   discountValue: number;
@@ -236,6 +248,12 @@ export type DashboardServiceRequestInvoice = {
   id: string;
   serviceRequestId: string;
   estimateId: string | null;
+  logicalEstimateId: string | null;
+  invoiceVersion: number | null;
+  invoiceLifecycleStatus: "current" | "superseded" | "void";
+  replacesInvoiceId: string | null;
+  replacedByInvoiceId: string | null;
+  replacedAt: string | null;
   createdByProfileId: string | null;
   invoiceNumber: string;
   subtotal: number;
@@ -516,6 +534,17 @@ export const SERVICE_REQUEST_ESTIMATE_SELECT_COLUMNS = [
   "id",
   "service_request_id",
   "created_by_profile_id",
+  "estimate_type",
+  "estimate_sequence",
+  "parent_estimate_id",
+  "logical_estimate_id",
+  "revision_number",
+  "revision_status",
+  "superseded_by_estimate_id",
+  "superseded_at",
+  "approved_revision_total",
+  "approved_revision_at",
+  "approval_method",
   "subtotal",
   "discount_type",
   "discount_value",
@@ -551,6 +580,12 @@ export const SERVICE_REQUEST_INVOICE_SELECT_COLUMNS = [
   "id",
   "service_request_id",
   "estimate_id",
+  "logical_estimate_id",
+  "invoice_version",
+  "invoice_lifecycle_status",
+  "replaces_invoice_id",
+  "replaced_by_invoice_id",
+  "replaced_at",
   "created_by_profile_id",
   "invoice_number",
   "subtotal",
@@ -840,6 +875,26 @@ export function mapServiceRequestEstimateRow(
     id: row.id,
     serviceRequestId: row.service_request_id,
     createdByProfileId: row.created_by_profile_id,
+    estimateType: row.estimate_type ?? "original",
+    estimateSequence: row.estimate_sequence ?? null,
+    parentEstimateId: row.parent_estimate_id ?? null,
+    logicalEstimateId: row.logical_estimate_id ?? row.id,
+    revisionNumber: row.revision_number ?? row.estimate_sequence ?? null,
+    revisionStatus:
+      row.revision_status === "draft" ||
+      row.revision_status === "superseded" ||
+      row.revision_status === "declined" ||
+      row.revision_status === "void"
+        ? row.revision_status
+        : "current",
+    supersededByEstimateId: row.superseded_by_estimate_id ?? null,
+    supersededAt: row.superseded_at ?? null,
+    approvedRevisionTotal:
+      row.approved_revision_total === null || row.approved_revision_total === undefined
+        ? null
+        : Number(row.approved_revision_total),
+    approvedRevisionAt: row.approved_revision_at ?? null,
+    approvalMethod: row.approval_method ?? null,
     subtotal: Number(row.subtotal),
     discountType: row.discount_type === "percent" ? "percent" : "flat",
     discountValue: Number(row.discount_value ?? 0),
@@ -910,6 +965,16 @@ export function mapServiceRequestInvoiceRow(
     id: row.id,
     serviceRequestId: row.service_request_id,
     estimateId: row.estimate_id,
+    logicalEstimateId: row.logical_estimate_id ?? row.estimate_id ?? null,
+    invoiceVersion: row.invoice_version ?? null,
+    invoiceLifecycleStatus:
+      row.invoice_lifecycle_status === "superseded" ||
+      row.invoice_lifecycle_status === "void"
+        ? row.invoice_lifecycle_status
+        : "current",
+    replacesInvoiceId: row.replaces_invoice_id ?? null,
+    replacedByInvoiceId: row.replaced_by_invoice_id ?? null,
+    replacedAt: row.replaced_at ?? null,
     createdByProfileId: row.created_by_profile_id,
     invoiceNumber: row.invoice_number,
     subtotal: Number(row.subtotal),
