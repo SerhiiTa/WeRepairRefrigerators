@@ -7235,11 +7235,28 @@ export function ServiceRequestDetail({
       invoice.invoiceStatus !== "void" &&
       invoice.invoiceLifecycleStatus === "current",
   );
+  const estimateIdByItemId = new Map<string, string>();
+  estimatesState.estimates.forEach((estimate) => {
+    estimate.items.forEach((item) => {
+      estimateIdByItemId.set(item.id, estimate.id);
+    });
+  });
   const activeInvoicesByEstimateId = new Map(
     currentLifecycleInvoices
       .filter((invoice) => invoice.estimateId)
       .map((invoice) => [invoice.estimateId, invoice]),
   );
+  currentLifecycleInvoices.forEach((invoice) => {
+    invoice.items.forEach((item) => {
+      const estimateId = item.sourceEstimateItemId
+        ? estimateIdByItemId.get(item.sourceEstimateItemId)
+        : null;
+
+      if (estimateId) {
+        activeInvoicesByEstimateId.set(estimateId, invoice);
+      }
+    });
+  });
   const invoicesByEstimateId = activeInvoicesByEstimateId;
   const viewingInvoice =
     invoicesState.invoices.find((invoice) => invoice.id === viewingInvoiceId) ??
@@ -7482,6 +7499,14 @@ export function ServiceRequestDetail({
     0,
     financeApprovedTotal - financePaidTotal,
   );
+  const financeOverpaymentTotal = Math.max(
+    0,
+    financePaidTotal - financeApprovedTotal,
+  );
+  const financeBalanceDueCents = Math.max(
+    0,
+    moneyToCents(financeApprovedTotal) - validPaidCreditCents,
+  );
   const paymentHistory = paymentsState.payments
     .map((payment) => {
       const allocation =
@@ -7559,8 +7584,9 @@ export function ServiceRequestDetail({
     ...financeApprovedEstimates
       .filter((estimate) => !activeInvoicesByEstimateId.has(estimate.id))
       .map((estimate) => {
-        const paidCents = estimateAllocatedCents.get(estimate.id) ?? 0;
         const totalCents = moneyToCents(estimate.total);
+        const remainingCents = Math.min(totalCents, financeBalanceDueCents);
+        const paidCents = Math.max(0, totalCents - remainingCents);
 
         return {
           id: estimate.id,
@@ -7569,24 +7595,21 @@ export function ServiceRequestDetail({
           detail: "Approved Estimate",
           total: estimate.total,
           paid: centsToMoney(paidCents),
-          remaining: centsToMoney(Math.max(0, totalCents - paidCents)),
+          remaining: centsToMoney(remainingCents),
         };
       }),
     ...currentLifecycleInvoices
       .map((invoice) => {
-        const paidCents = getInvoiceAllocatedCents(invoice);
-        const totalCents = moneyToCents(invoice.total);
+        const totalCents = moneyToCents(financeApprovedTotal);
 
         return {
           id: invoice.id,
           type: "invoice" as const,
           label: `Payment toward ${invoice.invoiceNumber}`,
           detail: "Invoice",
-          total: invoice.total,
-          paid: centsToMoney(paidCents),
-          remaining: invoice.financialSummary
-            ? invoice.financialSummary.balanceDue
-            : centsToMoney(Math.max(0, totalCents - paidCents)),
+          total: centsToMoney(totalCents),
+          paid: centsToMoney(validPaidCreditCents),
+          remaining: centsToMoney(financeBalanceDueCents),
         };
       }),
   ].filter((target) => moneyToCents(target.remaining) > 0);
@@ -9457,9 +9480,16 @@ export function ServiceRequestDetail({
     const paymentTarget = manualPaymentTargets.find(
       (target) => target.type === "invoice" && target.id === invoice.id,
     );
-    const invoicePayments = paymentHistory.filter(
-      (entry) => entry.invoiceTarget?.id === invoice.id,
-    );
+    const invoicePayments =
+      invoice.invoiceLifecycleStatus === "current"
+        ? paymentHistory.filter(
+            (entry) =>
+              validPaidPaymentIds.has(entry.payment.id) &&
+              activePaymentAllocations.some(
+                (allocation) => allocation.paymentId === entry.payment.id,
+              ),
+          )
+        : paymentHistory.filter((entry) => entry.invoiceTarget?.id === invoice.id);
     const tabs: { id: InvoiceWorkspaceTab; label: string }[] = [
       { id: "overview", label: "Overview" },
       { id: "items", label: "Items" },
@@ -9617,6 +9647,11 @@ export function ServiceRequestDetail({
                     <p className="mt-1 truncate text-sm font-semibold text-[#52627A]">
                       {formatServiceRequestDate(paidAt)}
                     </p>
+                    {entry.invoiceTarget && entry.invoiceTarget.id !== invoice.id ? (
+                      <p className="mt-1 truncate text-xs font-bold text-[#64748B]">
+                        Credited from {entry.invoiceTarget.invoiceNumber}
+                      </p>
+                    ) : null}
                   </div>
                   <div className="text-right">
                     <p className="whitespace-nowrap text-base font-black text-emerald-700">
@@ -13336,7 +13371,11 @@ export function ServiceRequestDetail({
           renderInvoiceWorkspace(viewingInvoice)
         ) : (
       <section className="mt-4 bg-transparent px-0 pb-5 pt-2">
-        <div className="grid grid-cols-3 border-y border-[#E3E8F0]">
+        <div
+          className={`grid border-y border-[#E3E8F0] ${
+            financeOverpaymentTotal > 0 ? "grid-cols-4" : "grid-cols-3"
+          }`}
+        >
           {[
             {
               label: "Approved",
@@ -13367,6 +13406,16 @@ export function ServiceRequestDetail({
                   : "No open invoices",
               valueTone: "text-orange-700",
             },
+            ...(financeOverpaymentTotal > 0
+              ? [
+                  {
+                    label: "Overpayment",
+                    value: formatServiceRequestMoney(financeOverpaymentTotal),
+                    detail: "Credit on job",
+                    valueTone: "text-purple-700",
+                  },
+                ]
+              : []),
           ].map((card) => (
             <div
               className="flex min-h-[70px] min-w-0 flex-col justify-start gap-1.5 border-r border-[#E3E8F0] px-2.5 py-2.5 last:border-r-0 sm:min-h-[76px] sm:px-3.5"
