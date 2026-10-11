@@ -198,6 +198,8 @@ export type DashboardServiceRequestEstimate = {
   approvedRevisionTotal: number | null;
   approvedRevisionAt: string | null;
   approvalMethod: string | null;
+  depositType: "fixed" | "percent" | null;
+  depositValue: number | null;
   subtotal: number;
   discountType: "flat" | "percent";
   discountValue: number;
@@ -545,6 +547,8 @@ export const SERVICE_REQUEST_ESTIMATE_SELECT_COLUMNS = [
   "approved_revision_total",
   "approved_revision_at",
   "approval_method",
+  "deposit_type",
+  "deposit_value",
   "subtotal",
   "discount_type",
   "discount_value",
@@ -895,6 +899,14 @@ export function mapServiceRequestEstimateRow(
         : Number(row.approved_revision_total),
     approvedRevisionAt: row.approved_revision_at ?? null,
     approvalMethod: row.approval_method ?? null,
+    depositType:
+      row.deposit_type === "fixed" || row.deposit_type === "percent"
+        ? row.deposit_type
+        : null,
+    depositValue:
+      row.deposit_value === null || row.deposit_value === undefined
+        ? null
+        : Number(row.deposit_value),
     subtotal: Number(row.subtotal),
     discountType: row.discount_type === "percent" ? "percent" : "flat",
     discountValue: Number(row.discount_value ?? 0),

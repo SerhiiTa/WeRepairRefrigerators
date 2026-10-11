@@ -988,6 +988,8 @@ export type Database = {
           approved_revision_total: number | null;
           approved_revision_at: string | null;
           approval_method: string | null;
+          deposit_type?: "fixed" | "percent" | null;
+          deposit_value?: number | null;
           subtotal: number;
           discount_type: "flat" | "percent" | null;
           discount_value: number | null;

@@ -16,6 +16,20 @@ function getString(value: unknown): string | null {
     : null;
 }
 
+function getSafeDashboardReturnPath(value: unknown): string | null {
+  const path = getString(value);
+
+  if (!path || !path.startsWith("/dashboard")) {
+    return null;
+  }
+
+  if (path.startsWith("//") || path.includes("\\") || path.includes("\n")) {
+    return null;
+  }
+
+  return path.slice(0, 300);
+}
+
 function formatCheckoutError(message: string) {
   if (
     message.includes("not accessible") ||
@@ -60,6 +74,7 @@ export async function POST(request: Request) {
   const checkoutKind = getString(payload.checkoutKind) as CheckoutKind | null;
   const idempotencyKey = getString(payload.idempotencyKey);
   const revisionId = getString(payload.revisionId);
+  const returnPath = getSafeDashboardReturnPath(payload.returnPath);
 
   if (targetType !== "estimate" && targetType !== "invoice") {
     return fail("Choose an Estimate or Invoice payment target.");
@@ -89,6 +104,7 @@ export async function POST(request: Request) {
       idempotencyKey,
       revisionId,
       origin: new URL(request.url).origin,
+      returnPath,
     });
 
     return NextResponse.json(result);

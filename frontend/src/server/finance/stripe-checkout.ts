@@ -69,6 +69,7 @@ export type CreateStripeCheckoutInput = {
   idempotencyKey: string;
   revisionId?: string | null;
   origin: string;
+  returnPath?: string | null;
 };
 
 export type CreatePublicStripeCheckoutInput = {
@@ -180,6 +181,12 @@ function getEligibleAction(eligibility: EligibilityPayload, kind: CheckoutKind) 
   return Array.isArray(eligibility.actions)
     ? eligibility.actions.find((action) => action.kind === kind)
     : undefined;
+}
+
+function getEligibilityReasons(eligibility: EligibilityPayload) {
+  return Array.isArray(eligibility.reasons)
+    ? eligibility.reasons.filter((reason): reason is string => typeof reason === "string")
+    : [];
 }
 
 function extractAttempt(payload: unknown): CheckoutAttempt {
@@ -740,6 +747,7 @@ async function createProviderCheckoutSession(params: {
   attempt: CheckoutAttempt;
   idempotent: boolean;
   origin: string;
+  returnPath?: string | null;
   returnToken?: string | null;
 }): Promise<StripeCheckoutResult> {
   const amount = centsToDollars(params.amountCents);
@@ -765,6 +773,9 @@ async function createProviderCheckoutSession(params: {
 
   if (params.returnToken) {
     returnQuery.set("token", params.returnToken);
+  }
+  if (params.returnPath?.startsWith("/dashboard")) {
+    returnQuery.set("returnPath", params.returnPath);
   }
 
   if (config.mode === "mock") {
@@ -872,6 +883,7 @@ async function createProviderCheckoutSession(params: {
         stripe_mode: config.mode,
         stripe_livemode: false,
         stripe_sandbox_pilot: config.mode === "production_sandbox_pilot",
+        dashboard_return_path: params.returnPath ?? null,
         pilot_customer_id:
           config.mode === "production_sandbox_pilot"
             ? config.pilotCustomerId
@@ -902,6 +914,123 @@ async function createProviderCheckoutSession(params: {
   };
 }
 
+async function reconcileDashboardActiveStripeCheckout(input: {
+  checkoutKind: CheckoutKind;
+  origin: string;
+  returnPath?: string | null;
+  targetId: string;
+  targetType: CheckoutTargetType;
+}): Promise<StripeCheckoutResult | null> {
+  const config = getStripeRuntimeConfig();
+
+  if (config.mode !== "test" && config.mode !== "production_sandbox_pilot") {
+    return null;
+  }
+
+  const serviceRole = getSupabaseServiceRoleClient();
+  const stripe = getStripeClient();
+
+  if (!serviceRole || !stripe) {
+    return null;
+  }
+
+  const targetColumn = input.targetType === "estimate" ? "estimate_id" : "invoice_id";
+  const { data, error } = await (serviceRole as any)
+    .from("service_request_payment_checkout_attempts")
+    .select(
+      "id,amount,checkout_kind,checkout_metadata,checkout_status,company_id,currency,estimate_id,invoice_id,provider_checkout_session_id,provider_payment_intent_id,reserved_until,service_request_id,target_type,succeeded_payment_id",
+    )
+    .eq("provider", "stripe")
+    .eq("target_type", input.targetType)
+    .eq(targetColumn, input.targetId)
+    .eq("checkout_kind", input.checkoutKind)
+    .in("checkout_status", ["initiated", "processing"])
+    .is("succeeded_payment_id", null)
+    .not("provider_checkout_session_id", "is", null)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error || !data?.provider_checkout_session_id) {
+    return null;
+  }
+
+  const checkoutSessionId = data.provider_checkout_session_id;
+  const attempt = data as CheckoutAttempt;
+  const session = await stripe.checkout.sessions.retrieve(checkoutSessionId);
+  const sessionMetadata = session.metadata ?? {};
+  const sessionAmountCents =
+    typeof session.amount_total === "number" ? session.amount_total : null;
+  const attemptAmountCents = parseMoneyToCents(attempt.amount);
+  const sessionMatchesAttempt =
+    !session.livemode &&
+    getSessionMetadataValue(sessionMetadata, "homefixos_checkout_attempt_id") ===
+      attempt.id &&
+    getSessionMetadataValue(sessionMetadata, "service_request_id") ===
+      attempt.service_request_id &&
+    getSessionMetadataValue(sessionMetadata, "target_type") === input.targetType &&
+    getSessionMetadataValue(sessionMetadata, "target_id") === input.targetId &&
+    sessionAmountCents === attemptAmountCents;
+
+  if (!sessionMatchesAttempt) {
+    return null;
+  }
+
+  if (session.status === "open" && session.payment_status === "unpaid" && session.url) {
+    const expiresAt = session.expires_at
+      ? new Date(session.expires_at * 1000).toISOString()
+      : null;
+
+    await updateCheckoutAttemptAfterSession(attempt.id, {
+      checkout_status: "processing",
+      reserved_until: expiresAt ?? attempt.reserved_until,
+      checkout_metadata: {
+        ...(attempt.checkout_metadata ?? {}),
+        dashboard_return_path: input.returnPath ?? null,
+        stripe_checkout_url: session.url,
+        stripe_livemode: false,
+        stripe_mode: config.mode,
+        stripe_resume_verified: true,
+        stripe_sandbox_pilot: config.mode === "production_sandbox_pilot",
+      },
+    });
+
+    return {
+      ok: true,
+      mode:
+        config.mode === "production_sandbox_pilot"
+          ? "production_sandbox_pilot"
+      : "test",
+      checkoutAttemptId: attempt.id,
+      checkoutSessionId,
+      checkoutUrl: session.url,
+      amount: centsToDollars(attemptAmountCents),
+      currency: "usd",
+      idempotent: true,
+    };
+  }
+
+  if (
+    (session.status === "expired" || session.status === "complete") &&
+    session.payment_status !== "paid"
+  ) {
+    await updateCheckoutAttemptAfterSession(attempt.id, {
+      checkout_status: session.status === "expired" ? "expired" : "canceled",
+      failure_reason:
+        session.status === "expired"
+          ? "stripe_session_expired"
+          : "stripe_session_canceled",
+      checkout_metadata: {
+        ...(attempt.checkout_metadata ?? {}),
+        stripe_session_reconciled: true,
+        stripe_session_status: session.status,
+      },
+    });
+  }
+
+  return null;
+}
+
 export async function createStripeCheckoutSession(
   supabase: SupabaseClient<Database>,
   input: CreateStripeCheckoutInput,
@@ -928,7 +1057,7 @@ export async function createStripeCheckoutSession(
   );
   assertPilotCustomerAllowed(config, targetContext);
 
-  const { data: eligibilityData, error: eligibilityError } = await supabase.rpc(
+  let { data: eligibilityData, error: eligibilityError } = await supabase.rpc(
     "get_service_request_payment_eligibility_rpc" as never,
     {
       p_target_type: input.targetType,
@@ -941,15 +1070,50 @@ export async function createStripeCheckoutSession(
     throw new Error(eligibilityError.message);
   }
 
-  const eligibility = (eligibilityData ?? {}) as EligibilityPayload;
+  let eligibility = (eligibilityData ?? {}) as EligibilityPayload;
 
   if (eligibility.status !== "eligible") {
+    if (getEligibilityReasons(eligibility).includes("checkout_in_progress")) {
+      const activeCheckout = await reconcileDashboardActiveStripeCheckout({
+        checkoutKind: input.checkoutKind,
+        origin,
+        returnPath: input.returnPath ?? null,
+        targetId: input.targetId,
+        targetType: input.targetType,
+      });
+
+      if (activeCheckout) {
+        return activeCheckout;
+      }
+
+      const retryResult = await supabase.rpc(
+        "get_service_request_payment_eligibility_rpc" as never,
+        {
+          p_target_type: input.targetType,
+          p_target_id: input.targetId,
+          p_revision_id: input.revisionId ?? null,
+        } as never,
+      );
+
+      eligibilityData = retryResult.data;
+      eligibilityError = retryResult.error;
+
+      if (eligibilityError) {
+        throw new Error(eligibilityError.message);
+      }
+
+      eligibility = (eligibilityData ?? {}) as EligibilityPayload;
+    }
+
     if (eligibility.status === "direct_to_invoice") {
       throw new Error("This Estimate has an Invoice. Collect payment against the Invoice.");
     }
 
-    throw new Error("This payment target is not eligible for Stripe Checkout.");
+    if (eligibility.status !== "eligible") {
+      throw new Error("This payment target is not eligible for Stripe Checkout.");
+    }
   }
+
 
   const selectedAction = getEligibleAction(eligibility, input.checkoutKind);
   const amountCents = parseMoneyToCents(
@@ -995,6 +1159,7 @@ export async function createStripeCheckoutSession(
     attempt,
     idempotent: Boolean(reservePayload.idempotent),
     origin,
+    returnPath: input.returnPath ?? null,
     returnToken: null,
   });
 }

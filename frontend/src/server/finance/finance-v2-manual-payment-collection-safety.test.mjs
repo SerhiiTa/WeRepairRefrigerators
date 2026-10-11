@@ -15,6 +15,7 @@ const migration = read(
 const serviceRequestDetail = read(
   "frontend/src/components/dashboard/ServiceRequestDetail.tsx",
 );
+const serviceRequestRecords = read("frontend/src/lib/service-request-records.ts");
 
 test("manual payment RPC uses Finance V2 job-level collectible balance", () => {
   assert.match(
@@ -62,6 +63,32 @@ test("manual collection UI uses current Job balance and combined Invoice provena
     serviceRequestDetail,
     /const paidCents = estimateAllocatedCents\.get\(estimate\.id\) \?\? 0;[\s\S]{0,220}remaining: centsToMoney\(Math\.max\(0, totalCents - paidCents\)\)/,
     "Manual Estimate collection targets must not imply unpaid Job balance from estimate-only allocations.",
+  );
+});
+
+test("technician card collection uses Stripe Checkout without client amount", () => {
+  assert.match(serviceRequestRecords, /"deposit_type"/);
+  assert.match(serviceRequestRecords, /"deposit_value"/);
+  assert.match(serviceRequestRecords, /depositType:/);
+  assert.match(serviceRequestRecords, /depositValue:/);
+  assert.match(serviceRequestDetail, /paymentMethod: "cash"/);
+  assert.match(serviceRequestDetail, /paymentMethod === "card"/);
+  assert.match(serviceRequestDetail, /selectedCardCheckoutAction/);
+  assert.match(serviceRequestDetail, /depositTargetCents/);
+  assert.match(serviceRequestDetail, /depositDueCents/);
+  assert.match(serviceRequestDetail, /startTechnicianStripeCheckout/);
+  assert.match(serviceRequestDetail, /\/api\/payments\/stripe-checkout/);
+  assert.match(serviceRequestDetail, /checkoutKind/);
+  assert.match(serviceRequestDetail, /"pay_in_full"/);
+  assert.match(serviceRequestDetail, /"deposit"/);
+  assert.match(serviceRequestDetail, /"balance_due"/);
+  assert.match(serviceRequestDetail, /window\.location\.assign\(payload\.checkoutUrl\)/);
+  assert.match(serviceRequestDetail, /Card details are entered in Stripe secure checkout/);
+  assert.match(serviceRequestDetail, /Card amounts are calculated by HomeFixOS/);
+  assert.doesNotMatch(
+    serviceRequestDetail,
+    /\/api\/payments\/stripe-checkout[\s\S]{0,500}amount:/,
+    "Dashboard Stripe checkout must not send a browser-computed amount.",
   );
 });
 

@@ -7,9 +7,19 @@ export const dynamic = "force-dynamic";
 type StripeSuccessPageProps = {
   searchParams: Promise<{
     attempt?: string;
+    returnPath?: string;
     token?: string;
   }>;
 };
+
+function getSafeDashboardReturnPath(value: string | undefined) {
+  return value?.startsWith("/dashboard") &&
+    !value.startsWith("//") &&
+    !value.includes("\\") &&
+    !value.includes("\n")
+    ? value
+    : null;
+}
 
 function money(value: string | null) {
   return value ? `$${value}` : "Pending";
@@ -19,6 +29,7 @@ export default async function StripeSuccessPage({
   searchParams,
 }: StripeSuccessPageProps) {
   const params = await searchParams;
+  const dashboardReturnPath = getSafeDashboardReturnPath(params.returnPath);
   const status = await loadStripeReturnStatus({
     attemptId: params.attempt ?? null,
     token: params.token ?? null,
@@ -36,6 +47,14 @@ export default async function StripeSuccessPage({
             Stripe redirected you back to HomeFixOS. For privacy, payment details are only shown
             from a valid customer document link.
           </p>
+          {dashboardReturnPath ? (
+            <Link
+              className="mt-6 inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-blue-700 px-5 text-center text-sm font-black text-white shadow-lg shadow-blue-700/20"
+              href={dashboardReturnPath}
+            >
+              Return to Job Finance
+            </Link>
+          ) : null}
         </section>
       </main>
     );

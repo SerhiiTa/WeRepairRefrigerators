@@ -622,7 +622,8 @@ type InvoiceDeliveryDraft = {
 };
 
 type ManualPaymentTargetType = "estimate" | "invoice";
-type ManualPaymentMethod = "cash" | "check" | "zelle" | "venmo" | "cash_app";
+type ManualPaymentMethod = "cash" | "check" | "zelle" | "venmo" | "cash_app" | "card";
+type CardCheckoutKind = "deposit" | "pay_in_full" | "balance_due";
 type ManualPaymentVoidReason =
   | "payment_not_received"
   | "entered_by_mistake"
@@ -652,6 +653,7 @@ type ManualPaymentDraft = {
   targetType: ManualPaymentTargetType;
   targetId: string;
   amount: string;
+  checkoutKind: CardCheckoutKind;
   paymentMethod: ManualPaymentMethod;
   referenceCode: string;
   note: string;
@@ -659,6 +661,12 @@ type ManualPaymentDraft = {
 };
 
 type ManualPaymentTarget = {
+  cardActions: Array<{
+    amountCents: number;
+    detail: string;
+    kind: CardCheckoutKind;
+    label: string;
+  }>;
   id: string;
   type: ManualPaymentTargetType;
   label: string;
@@ -7587,8 +7595,42 @@ export function ServiceRequestDetail({
         const totalCents = moneyToCents(estimate.total);
         const remainingCents = Math.min(totalCents, financeBalanceDueCents);
         const paidCents = Math.max(0, totalCents - remainingCents);
+        const depositTargetCents =
+          estimate.depositType === "fixed"
+            ? Math.min(moneyToCents(estimate.depositValue ?? 0), totalCents)
+            : estimate.depositType === "percent"
+              ? Math.min(
+                  Math.round((totalCents * (estimate.depositValue ?? 0)) / 100),
+                  totalCents,
+                )
+              : 0;
+        const depositDueCents = Math.min(
+          Math.max(0, depositTargetCents - validPaidCreditCents),
+          remainingCents,
+        );
 
         return {
+          cardActions: [
+            {
+              amountCents: remainingCents,
+              detail: "Default",
+              kind: "pay_in_full" as const,
+              label: "Pay in Full",
+            },
+            ...(depositDueCents > 0
+              ? [
+                  {
+                    amountCents: depositDueCents,
+                    detail:
+                      estimate.depositType === "percent"
+                        ? `${estimate.depositValue}% configured deposit`
+                        : "Configured deposit",
+                    kind: "deposit" as const,
+                    label: "Pay Deposit",
+                  },
+                ]
+              : []),
+          ],
           id: estimate.id,
           type: "estimate" as const,
           label: `Deposit on ${estimate.estimateNumber}`,
@@ -7603,6 +7645,14 @@ export function ServiceRequestDetail({
         const totalCents = moneyToCents(financeApprovedTotal);
 
         return {
+          cardActions: [
+            {
+              amountCents: financeBalanceDueCents,
+              detail: "Current Job balance",
+              kind: "balance_due" as const,
+              label: "Pay Balance Due",
+            },
+          ],
           id: invoice.id,
           type: "invoice" as const,
           label: `Payment toward ${invoice.invoiceNumber}`,
@@ -7621,6 +7671,21 @@ export function ServiceRequestDetail({
             target.id === manualPaymentDraft.targetId &&
             target.type === manualPaymentDraft.targetType,
         ) ?? null;
+  const selectedCardCheckoutAction =
+    manualPaymentDraft === null || selectedManualPaymentTarget === null
+      ? null
+      : selectedManualPaymentTarget.cardActions.find(
+          (action) => action.kind === manualPaymentDraft.checkoutKind,
+        ) ??
+        selectedManualPaymentTarget.cardActions.find(
+          (action) =>
+            action.kind ===
+            (selectedManualPaymentTarget.type === "invoice"
+              ? "balance_due"
+              : "pay_in_full"),
+        ) ??
+        selectedManualPaymentTarget.cardActions[0] ??
+        null;
   const selectedManualPaymentVoid =
     manualPaymentVoidDraft === null
       ? null
@@ -8730,6 +8795,10 @@ export function ServiceRequestDetail({
       return "Check";
     }
 
+    if (method === "card") {
+      return "Card";
+    }
+
     return "Cash";
   }
 
@@ -8841,10 +8910,16 @@ export function ServiceRequestDetail({
       return;
     }
 
+    const defaultCheckoutKind =
+      nextTarget.cardActions.find((action) => action.kind === "pay_in_full")?.kind ??
+      nextTarget.cardActions[0]?.kind ??
+      (nextTarget.type === "invoice" ? "balance_due" : "pay_in_full");
+
     setManualPaymentDraft({
       targetType: nextTarget.type,
       targetId: nextTarget.id,
       amount: formatCentsAsInput(moneyToCents(nextTarget.remaining)),
+      checkoutKind: defaultCheckoutKind,
       paymentMethod: "cash",
       referenceCode: "",
       note: "",
@@ -8859,7 +8934,19 @@ export function ServiceRequestDetail({
     setManualPaymentDraft((current) => ({
       targetType: target.type,
       targetId: target.id,
-      amount: formatCentsAsInput(moneyToCents(target.remaining)),
+      amount:
+        current?.paymentMethod === "card"
+          ? formatCentsAsInput(
+              target.cardActions.find((action) => action.kind === "pay_in_full")
+                ?.amountCents ??
+                target.cardActions[0]?.amountCents ??
+                moneyToCents(target.remaining),
+            )
+          : formatCentsAsInput(moneyToCents(target.remaining)),
+      checkoutKind:
+        target.cardActions.find((action) => action.kind === "pay_in_full")?.kind ??
+        target.cardActions[0]?.kind ??
+        (target.type === "invoice" ? "balance_due" : "pay_in_full"),
       paymentMethod: current?.paymentMethod ?? "cash",
       referenceCode: current?.referenceCode ?? "",
       note: current?.note ?? "",
@@ -8879,6 +8966,11 @@ export function ServiceRequestDetail({
 
     const amountCents = parseMoneyInputToCents(manualPaymentDraft.amount);
     const remainingCents = moneyToCents(selectedManualPaymentTarget.remaining);
+
+    if (manualPaymentDraft.paymentMethod === "card") {
+      await startTechnicianStripeCheckout();
+      return;
+    }
 
     if (amountCents === null || amountCents <= 0) {
       setManualPaymentState({
@@ -8985,6 +9077,116 @@ export function ServiceRequestDetail({
       setManualPaymentDraft(null);
       setManualPaymentState({ status: "idle", message: null });
     }, 700);
+  }
+
+  async function startTechnicianStripeCheckout() {
+    if (state.status !== "ready" || !manualPaymentDraft || !selectedManualPaymentTarget) {
+      setManualPaymentState({
+        status: "error",
+        message: "Choose a valid Estimate or Invoice before starting checkout.",
+      });
+      return;
+    }
+
+    const remainingCents =
+      selectedCardCheckoutAction?.amountCents ??
+      moneyToCents(selectedManualPaymentTarget.remaining);
+
+    if (remainingCents <= 0) {
+      setManualPaymentState({
+        status: "error",
+        message: "This Job is already paid in full.",
+      });
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setManualPaymentState({
+        status: "error",
+        message: "Stripe Checkout is not available for this workspace.",
+      });
+      return;
+    }
+
+    const sessionResult = await getDashboardActionSession(supabase);
+
+    if (!sessionResult.ok) {
+      setManualPaymentState({
+        status: "error",
+        message: sessionResult.message,
+      });
+      return;
+    }
+
+    const { data: sessionData, error: sessionError } = sessionResult.response;
+    const accessToken = sessionData.session?.access_token;
+
+    if (sessionError || !accessToken) {
+      setManualPaymentState({
+        status: "error",
+        message: "Log in again before starting Stripe Checkout.",
+      });
+      return;
+    }
+
+    const checkoutKind =
+      selectedCardCheckoutAction?.kind ??
+      (selectedManualPaymentTarget.type === "invoice" ? "balance_due" : "pay_in_full");
+
+    setManualPaymentState({
+      status: "saving",
+      message: "Opening Stripe Checkout...",
+    });
+
+    let response: Response;
+    let payload:
+      | {
+          ok?: boolean;
+          checkoutUrl?: string | null;
+          message?: string;
+        }
+      | null;
+
+    try {
+      const returnPath =
+        typeof window === "undefined"
+          ? "/dashboard"
+          : `${window.location.pathname}${window.location.search}`;
+
+      response = await fetch("/api/payments/stripe-checkout", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          targetType: selectedManualPaymentTarget.type,
+          targetId: selectedManualPaymentTarget.id,
+          checkoutKind,
+          idempotencyKey: manualPaymentDraft.idempotencyKey,
+          returnPath,
+        }),
+      });
+      payload = (await response.json().catch(() => null)) as typeof payload;
+    } catch {
+      setManualPaymentState({
+        status: "error",
+        message: "Stripe Checkout request could not reach the server. Try again.",
+      });
+      return;
+    }
+
+    if (!response.ok || !payload?.ok || !payload.checkoutUrl) {
+      setManualPaymentState({
+        status: "error",
+        message: payload?.message ?? "Stripe Checkout could not be started.",
+      });
+      return;
+    }
+
+    window.location.assign(payload.checkoutUrl);
   }
 
   async function voidManualPayment() {
@@ -16756,7 +16958,9 @@ export function ServiceRequestDetail({
                     className="text-sm font-black text-[#0F172A]"
                     htmlFor="manual-payment-amount"
                   >
-                    Amount
+                    {manualPaymentDraft.paymentMethod === "card"
+                      ? "Stripe checkout amount"
+                      : "Amount"}
                   </label>
                   <div className="mt-2 flex overflow-hidden rounded-xl border border-[#D7DEE8] bg-white focus-within:border-[#0F6BFF] focus-within:ring-4 focus-within:ring-blue-100 sm:max-w-sm">
                     <span className="flex w-11 shrink-0 items-center justify-center border-r border-[#D7DEE8] bg-[#F8FAFC] text-base font-black text-[#334155] sm:w-12">
@@ -16764,7 +16968,10 @@ export function ServiceRequestDetail({
                     </span>
                     <input
                       className="min-w-0 flex-1 px-3 py-3 text-xl font-black text-[#0F172A] outline-none sm:text-lg"
-                      disabled={manualPaymentState.status === "saving"}
+                      disabled={
+                        manualPaymentState.status === "saving" ||
+                        manualPaymentDraft.paymentMethod === "card"
+                      }
                       id="manual-payment-amount"
                       inputMode="decimal"
                       onChange={(event) => {
@@ -16778,17 +16985,25 @@ export function ServiceRequestDetail({
                       value={manualPaymentDraft.amount}
                     />
                   </div>
+                  {manualPaymentDraft.paymentMethod === "card" ? (
+                    <p className="mt-2 text-xs font-bold leading-5 text-[#64748B]">
+                      Card amounts are calculated by HomeFixOS from the current approved
+                      Job balance and cannot be edited here.
+                    </p>
+                  ) : null}
                 </div>
 
                 <div>
                   <p className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
                     Payment method
                   </p>
-                  <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-5">
-                    {(["cash", "check", "zelle", "venmo", "cash_app"] as const).map(
+                  <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-6">
+                    {(["card", "cash", "check", "zelle", "venmo", "cash_app"] as const).map(
                       (method) => {
                         const methodIcon =
-                          method === "cash"
+                          method === "card"
+                            ? "Card"
+                            : method === "cash"
                             ? "$"
                             : method === "check"
                               ? "Ck"
@@ -16798,7 +17013,9 @@ export function ServiceRequestDetail({
                                   ? "V"
                                   : "$";
                         const iconClass =
-                          method === "zelle"
+                          method === "card"
+                            ? "bg-blue-50 text-blue-700"
+                            : method === "zelle"
                             ? "bg-violet-50 text-violet-700"
                             : method === "venmo"
                               ? "bg-blue-50 text-blue-700"
@@ -16815,7 +17032,21 @@ export function ServiceRequestDetail({
                           key={method}
                           onClick={() => {
                             setManualPaymentDraft((current) =>
-                              current ? { ...current, paymentMethod: method } : current,
+                              current
+                                ? {
+                                    ...current,
+                                    amount:
+                                      method === "card"
+                                        ? formatCentsAsInput(
+                                            selectedCardCheckoutAction?.amountCents ??
+                                              moneyToCents(
+                                                selectedManualPaymentTarget?.remaining ?? 0,
+                                              ),
+                                          )
+                                        : current.amount,
+                                    paymentMethod: method,
+                                  }
+                                : current,
                             );
                             setManualPaymentState({ status: "idle", message: null });
                           }}
@@ -16832,22 +17063,60 @@ export function ServiceRequestDetail({
                       },
                     )}
                   </div>
-                  <div className="mt-3 hidden space-y-2 sm:block">
-                    {["Card - Stripe", "Apple Pay / Google Pay"].map((method) => (
-                      <button
-                        className="flex w-full items-center justify-between rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3 text-sm font-black text-[#94A3B8]"
-                        disabled
-                        key={method}
-                        type="button"
-                      >
-                        <span>{method}</span>
-                        <span className="rounded-full bg-[#E2E8F0] px-3 py-1 text-[0.65rem] uppercase tracking-[0.12em] text-[#64748B]">
-                          Coming Soon
-                        </span>
-                      </button>
-                    ))}
-                  </div>
+                  {manualPaymentDraft.paymentMethod === "card" ? (
+                    <p className="mt-3 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold leading-5 text-blue-800">
+                      Card details are entered in Stripe secure checkout. HomeFixOS never stores
+                      card numbers.
+                    </p>
+                  ) : null}
                 </div>
+
+                {manualPaymentDraft.paymentMethod === "card" &&
+                selectedManualPaymentTarget?.type === "estimate" ? (
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
+                      Stripe checkout action
+                    </p>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      {selectedManualPaymentTarget.cardActions.map((action) => {
+                        const isSelected =
+                          manualPaymentDraft.checkoutKind === action.kind;
+
+                        return (
+                          <button
+                            className={`rounded-xl border px-4 py-3 text-left transition ${
+                              isSelected
+                                ? "border-[#0F6BFF] bg-blue-50 text-[#0F6BFF]"
+                                : "border-[#E5E7EB] bg-white text-[#334155]"
+                            }`}
+                            disabled={manualPaymentState.status === "saving"}
+                            key={action.kind}
+                            onClick={() => {
+                              setManualPaymentDraft((current) =>
+                                current
+                                  ? {
+                                      ...current,
+                                      amount: formatCentsAsInput(action.amountCents),
+                                      checkoutKind: action.kind,
+                                    }
+                                  : current,
+                              );
+                              setManualPaymentState({ status: "idle", message: null });
+                            }}
+                            type="button"
+                          >
+                            <span className="block text-sm font-black">
+                              {action.label}
+                            </span>
+                            <span className="mt-1 block text-xs font-bold text-[#64748B]">
+                              {action.detail}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
 
                 <div>
                   <p className="text-sm font-black text-[#0F172A]">Apply payment to</p>
@@ -16892,6 +17161,7 @@ export function ServiceRequestDetail({
                   </div>
                 </div>
 
+                {manualPaymentDraft.paymentMethod !== "card" ? (
                 <div className="rounded-xl border border-[#E5E7EB] bg-white sm:border-0">
                   <button
                     className="flex w-full items-center justify-between px-3 py-3 text-left text-sm font-black text-[#0F172A] sm:hidden"
@@ -16963,6 +17233,7 @@ export function ServiceRequestDetail({
                     </div>
                   </div>
                 </div>
+                ) : null}
 
                 {manualPaymentState.message ? (
                   <p
@@ -16996,7 +17267,13 @@ export function ServiceRequestDetail({
                     onClick={() => void saveManualPayment()}
                     type="button"
                   >
-                    {manualPaymentState.status === "saving" ? "Saving..." : "Save Payment"}
+                    {manualPaymentState.status === "saving"
+                      ? manualPaymentDraft.paymentMethod === "card"
+                        ? "Opening..."
+                        : "Saving..."
+                      : manualPaymentDraft.paymentMethod === "card"
+                        ? "Continue to Stripe"
+                        : "Save Payment"}
                   </button>
                 </div>
               </>

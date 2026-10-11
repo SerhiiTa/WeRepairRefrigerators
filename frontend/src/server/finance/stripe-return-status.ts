@@ -216,14 +216,20 @@ async function releaseSandboxReservationAfterCancelReturn(
 
 export async function loadStripeReturnStatus(params: {
   attemptId: string | null;
+  dashboardReturnPath?: string | null;
   releaseOnCancelReturn?: boolean;
   token: string | null;
 }): Promise<StripeReturnStatus> {
+  const hasSafeDashboardReturn =
+    typeof params.dashboardReturnPath === "string" &&
+    params.dashboardReturnPath.startsWith("/dashboard") &&
+    !params.dashboardReturnPath.startsWith("//") &&
+    !params.dashboardReturnPath.includes("\\") &&
+    !params.dashboardReturnPath.includes("\n");
+
   if (
     !params.attemptId ||
-    !UUID_PATTERN.test(params.attemptId) ||
-    !params.token ||
-    !TOKEN_PATTERN.test(params.token)
+    !UUID_PATTERN.test(params.attemptId)
   ) {
     return { authorized: false, state: "unauthorized" };
   }
@@ -250,6 +256,19 @@ export async function loadStripeReturnStatus(params: {
 
   if (!attempt) {
     return { authorized: false, state: "not_found" };
+  }
+
+  if (
+    params.releaseOnCancelReturn &&
+    hasSafeDashboardReturn &&
+    (!params.token || !TOKEN_PATTERN.test(params.token))
+  ) {
+    await releaseSandboxReservationAfterCancelReturn(attempt);
+    return { authorized: false, state: "unauthorized" };
+  }
+
+  if (!params.token || !TOKEN_PATTERN.test(params.token)) {
+    return { authorized: false, state: "unauthorized" };
   }
 
   let documentHref = `/estimates/${params.token}`;

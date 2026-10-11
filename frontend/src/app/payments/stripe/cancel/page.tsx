@@ -7,14 +7,26 @@ export const dynamic = "force-dynamic";
 type StripeCancelPageProps = {
   searchParams: Promise<{
     attempt?: string;
+    returnPath?: string;
     token?: string;
   }>;
 };
 
+function getSafeDashboardReturnPath(value: string | undefined) {
+  return value?.startsWith("/dashboard") &&
+    !value.startsWith("//") &&
+    !value.includes("\\") &&
+    !value.includes("\n")
+    ? value
+    : null;
+}
+
 export default async function StripeCancelPage({ searchParams }: StripeCancelPageProps) {
   const params = await searchParams;
+  const dashboardReturnPath = getSafeDashboardReturnPath(params.returnPath);
   const status = await loadStripeReturnStatus({
     attemptId: params.attempt ?? null,
+    dashboardReturnPath,
     releaseOnCancelReturn: true,
     token: params.token ?? null,
   });
@@ -37,6 +49,13 @@ export default async function StripeCancelPage({ searchParams }: StripeCancelPag
             href={status.documentHref}
           >
             Return to {status.targetType === "invoice" ? "Invoice" : "Estimate"}
+          </Link>
+        ) : dashboardReturnPath ? (
+          <Link
+            className="mt-6 inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-blue-700 px-5 text-center text-sm font-black text-white shadow-lg shadow-blue-700/20"
+            href={dashboardReturnPath}
+          >
+            Return to Job Finance
           </Link>
         ) : (
           <p className="mt-6 rounded-xl bg-slate-50 p-4 text-sm font-bold text-slate-600">

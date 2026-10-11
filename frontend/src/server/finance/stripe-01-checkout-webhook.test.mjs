@@ -49,6 +49,8 @@ test("Stripe QA config allows only explicit local Test Mode keys", () => {
 test("Checkout route requires dashboard auth and never accepts client amount", () => {
   assert.match(checkoutRoute, /requireHomeFixPrivateAccess\(request\)/);
   assert.match(checkoutRoute, /createStripeCheckoutSession\(privateAccess\.context\.supabase/);
+  assert.match(checkoutRoute, /getSafeDashboardReturnPath/);
+  assert.match(checkoutRoute, /returnPath/);
   assert.doesNotMatch(checkoutRoute, /payload\.amount|amountCents|unit_amount/);
 });
 
@@ -76,6 +78,13 @@ test("Checkout server calculates eligibility before reserving exact amount", () 
   assert.match(checkoutServer, /stage: "session_persist"/);
   assert.match(checkoutServer, /success_url: `\$\{params\.origin\}\/payments\/stripe\/success\?\$\{returnQuery\.toString\(\)\}`/);
   assert.match(checkoutServer, /cancel_url: `\$\{params\.origin\}\/payments\/stripe\/cancel\?\$\{returnQuery\.toString\(\)\}`/);
+  assert.match(checkoutServer, /returnQuery\.set\("returnPath", params\.returnPath\)/);
+  assert.match(checkoutServer, /dashboard_return_path: params\.returnPath \?\? null/);
+  assert.match(checkoutServer, /reconcileDashboardActiveStripeCheckout/);
+  assert.match(checkoutServer, /getEligibilityReasons\(eligibility\)\.includes\("checkout_in_progress"\)/);
+  assert.match(checkoutServer, /stripe\.checkout\.sessions\.retrieve/);
+  assert.match(checkoutServer, /stripe_resume_verified/);
+  assert.match(checkoutServer, /stripe_session_reconciled/);
   assert.doesNotMatch(checkoutServer, /p_amount:\s*0\.01/);
 });
 
@@ -134,10 +143,14 @@ test("Stripe return pages require customer token authorization for payment detai
   assert.match(stripeCancelPage, /Checkout canceled/);
   assert.match(stripeCancelPage, /payment failed or was refunded/);
   assert.match(stripeCancelPage, /releaseOnCancelReturn: true/);
+  assert.match(stripeCancelPage, /dashboardReturnPath/);
+  assert.match(stripeCancelPage, /Return to Job Finance/);
   assert.doesNotMatch(stripeCancelPage, /api\/public\/payments\/stripe-checkout/);
 
   assert.match(stripeReturnStatus, /TOKEN_PATTERN/);
   assert.match(stripeReturnStatus, /UUID_PATTERN/);
+  assert.match(stripeReturnStatus, /hasSafeDashboardReturn/);
+  assert.match(stripeReturnStatus, /dashboardReturnPath/);
   assert.match(stripeReturnStatus, /get_public_estimate_by_token_rpc/);
   assert.match(stripeReturnStatus, /get_public_estimate_payment_options_rpc/);
   assert.match(stripeReturnStatus, /tokenEstimateId !== attempt\.estimate_id/);
