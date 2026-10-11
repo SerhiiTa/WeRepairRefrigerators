@@ -23,6 +23,9 @@ const devQa = read("frontend/scripts/dev-qa.mjs");
 const stripeAtomicMigration = read(
   "supabase/migrations/0122_stripe_atomic_payment_posting_apply_ready.sql",
 );
+const stripeServiceRoleGrantRepair = read(
+  "supabase/migrations/0130_stripe_checkout_service_role_grants_apply_ready.sql",
+);
 
 test("Stripe QA config allows only explicit local Test Mode keys", () => {
   assert.match(devQa, /qaStripeEnvPath = resolve\(frontendRoot, "\.env\.qa\.stripe\.local"\)/);
@@ -130,6 +133,7 @@ test("Stripe return pages require customer token authorization for payment detai
 
   assert.match(stripeCancelPage, /Checkout canceled/);
   assert.match(stripeCancelPage, /payment failed or was refunded/);
+  assert.match(stripeCancelPage, /releaseOnCancelReturn: true/);
   assert.doesNotMatch(stripeCancelPage, /api\/public\/payments\/stripe-checkout/);
 
   assert.match(stripeReturnStatus, /TOKEN_PATTERN/);
@@ -138,6 +142,32 @@ test("Stripe return pages require customer token authorization for payment detai
   assert.match(stripeReturnStatus, /get_public_estimate_payment_options_rpc/);
   assert.match(stripeReturnStatus, /tokenEstimateId !== attempt\.estimate_id/);
   assert.match(stripeReturnStatus, /attempt\.checkout_status === "succeeded" \|\| attempt\.succeeded_payment_id/);
+  assert.match(stripeReturnStatus, /releaseSandboxReservationAfterCancelReturn/);
+  assert.match(stripeReturnStatus, /config\.mode !== "test" && config\.mode !== "production_sandbox_pilot"/);
+  assert.match(stripeReturnStatus, /stripe\.checkout\.sessions\.retrieve/);
+  assert.match(stripeReturnStatus, /stripe\.checkout\.sessions\.expire/);
+  assert.match(stripeReturnStatus, /session\.livemode \|\| session\.payment_status === "paid"/);
+  assert.match(stripeReturnStatus, /\.in\("checkout_status", \["initiated", "processing"\]\)/);
+  assert.match(stripeReturnStatus, /stripe_cancel_return_reconciled/);
+});
+
+test("Stripe service role can persist sessions and webhook event state only server-side", () => {
+  assert.match(checkoutServer, /getSupabaseServiceRoleClient\(\)/);
+  assert.match(checkoutServer, /\.from\("service_request_payment_checkout_attempts"\)[\s\S]*\.update\(values\)/);
+  assert.match(webhookAccounting, /\.from\("service_request_payment_provider_events"\)/);
+  assert.match(webhookAccounting, /\.from\("service_request_payment_checkout_attempts"\)[\s\S]*checkout_status: "processing"/);
+
+  assert.match(
+    stripeServiceRoleGrantRepair,
+    /grant select, update\s+on table public\.service_request_payment_checkout_attempts\s+to service_role;/i,
+  );
+  assert.match(
+    stripeServiceRoleGrantRepair,
+    /grant select, insert, update\s+on table public\.service_request_payment_provider_events\s+to service_role;/i,
+  );
+  assert.doesNotMatch(stripeServiceRoleGrantRepair, /to\s+anon/i);
+  assert.doesNotMatch(stripeServiceRoleGrantRepair, /to\s+authenticated/i);
+  assert.doesNotMatch(stripeServiceRoleGrantRepair, /\bdelete\b|\btruncate\b/i);
 });
 
 test("Refund and dispute events are audit-only until explicit adjustment ledger exists", () => {

@@ -99,6 +99,30 @@ test("public Invoice payment buttons are hidden unless Stripe pilot gate allows 
   assert.match(publicInvoicePayment, /paymentIsAvailable =[\s\S]*stripePaymentsEnabled/);
 });
 
+test("public Invoice resumes an active open Stripe Checkout session without creating another one", () => {
+  assert.match(publicInvoicePage, /loadPublicInvoiceActiveStripeCheckout/);
+  assert.match(publicInvoicePage, /activeCheckout={activeCheckout}/);
+  assert.match(checkoutServer, /loadPublicInvoiceActiveStripeCheckout/);
+  assert.match(checkoutServer, /stripe\.checkout\.sessions\.retrieve/);
+  assert.match(checkoutServer, /session\.status === "open"/);
+  assert.match(checkoutServer, /session\.payment_status === "unpaid"/);
+  assert.match(checkoutServer, /homefixos_checkout_attempt_id/);
+  assert.match(checkoutServer, /getSessionMetadataValue\(sessionMetadata, "target_id"\) === attempt\.invoice_id/);
+  assert.match(checkoutServer, /sessionAmountCents === attemptAmountCents/);
+  assert.match(checkoutServer, /reserved_until: expiresAt \?\? attempt\.reserved_until/);
+  assert.match(publicInvoicePayment, /activeCheckout/);
+  assert.match(publicInvoicePayment, /Continue Payment/);
+  assert.match(publicInvoicePayment, /href={activeCheckout\.checkoutUrl}/);
+  assert.match(publicInvoicePayment, /!activeCheckout[\s\S]*data\.payment\.status === "eligible"/);
+});
+
+test("public Invoice reconciles expired Sandbox sessions before offering a fresh checkout", () => {
+  assert.match(checkoutServer, /session\.status === "expired"/);
+  assert.match(checkoutServer, /checkout_status: "expired"/);
+  assert.match(checkoutServer, /failure_reason: "stripe_session_expired"/);
+  assert.match(checkoutServer, /config\.mode !== "test" && config\.mode !== "production_sandbox_pilot"/);
+});
+
 test("0123 migration exposes only token-aware public payment RPCs", () => {
   assert.match(migration, /get_public_estimate_payment_options_rpc/);
   assert.match(migration, /reserve_public_estimate_payment_checkout_rpc/);

@@ -37,12 +37,14 @@ type CheckoutAttempt = {
   amount: number | string;
   checkout_kind: CheckoutKind;
   checkout_metadata?: Record<string, unknown> | null;
+  checkout_status?: string | null;
   company_id: string;
   currency: string;
   estimate_id: string | null;
   invoice_id: string | null;
   provider_checkout_session_id?: string | null;
   provider_payment_intent_id?: string | null;
+  reserved_until?: string | null;
   service_request_id: string;
   target_type: CheckoutTargetType;
 };
@@ -87,6 +89,12 @@ export type StripeCheckoutResult = {
   amount: string;
   currency: "usd";
   idempotent: boolean;
+};
+
+export type PublicActiveStripeCheckout = {
+  amount: number;
+  checkoutUrl: string;
+  expiresAt: string | null;
 };
 
 const UUID_PATTERN =
@@ -192,6 +200,15 @@ function extractStoredCheckoutUrl(attempt: CheckoutAttempt): string | null {
       : null;
 
   return value;
+}
+
+function getSessionMetadataValue(
+  metadata: Record<string, string> | null | undefined,
+  key: string,
+) {
+  const value = metadata?.[key];
+
+  return typeof value === "string" ? value : "";
 }
 
 function isStripePaymentEnabled(config = getStripeRuntimeConfig()) {
@@ -487,6 +504,169 @@ async function updateCheckoutAttemptAfterSession(
   if (error) {
     throw new Error(error.message);
   }
+}
+
+export async function loadPublicInvoiceActiveStripeCheckout(input: {
+  token: string;
+}): Promise<PublicActiveStripeCheckout | null> {
+  if (!PUBLIC_TOKEN_PATTERN.test(input.token)) {
+    return null;
+  }
+
+  let config: StripeRuntimeConfig;
+
+  try {
+    config = getStripeRuntimeConfig();
+  } catch {
+    return null;
+  }
+
+  if (config.mode !== "test" && config.mode !== "production_sandbox_pilot") {
+    return null;
+  }
+
+  const serviceRole = getSupabaseServiceRoleClient();
+  const stripe = getStripeClient();
+
+  if (!serviceRole || !stripe) {
+    return null;
+  }
+
+  try {
+    const tokenHash = await hashPublicToken(input.token);
+    const nowIso = new Date().toISOString();
+
+    const { data: tokenData, error: tokenError } = await (serviceRole as any)
+      .from("service_request_invoice_delivery_tokens")
+      .select("company_id,invoice_id,service_request_id")
+      .eq("token_hash", tokenHash)
+      .is("token_revoked_at", null)
+      .gt("token_expires_at", nowIso)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (tokenError || !tokenData?.invoice_id || !tokenData.service_request_id) {
+      return null;
+    }
+
+    const { data: invoiceData, error: invoiceError } = await (serviceRole as any)
+      .from("service_request_invoices")
+      .select("id,company_id,invoice_status,invoice_lifecycle_status,service_request_id")
+      .eq("id", tokenData.invoice_id)
+      .eq("service_request_id", tokenData.service_request_id)
+      .eq("company_id", tokenData.company_id)
+      .maybeSingle();
+
+    if (invoiceError || !invoiceData?.id) {
+      return null;
+    }
+
+    if (
+      invoiceData.invoice_status === "void" ||
+      (invoiceData.invoice_lifecycle_status ?? "current") !== "current"
+    ) {
+      return null;
+    }
+
+    const targetContext = await resolveServiceRequestContext(tokenData.service_request_id);
+    assertPilotCustomerAllowed(config, targetContext);
+
+    const { data: attemptData, error: attemptError } = await (serviceRole as any)
+      .from("service_request_payment_checkout_attempts")
+      .select(
+        "id,amount,checkout_kind,checkout_metadata,checkout_status,company_id,currency,estimate_id,invoice_id,provider_checkout_session_id,provider_payment_intent_id,reserved_until,service_request_id,target_type,succeeded_payment_id",
+      )
+      .eq("provider", "stripe")
+      .eq("target_type", "invoice")
+      .eq("invoice_id", tokenData.invoice_id)
+      .eq("service_request_id", tokenData.service_request_id)
+      .in("checkout_status", ["initiated", "processing"])
+      .is("succeeded_payment_id", null)
+      .not("provider_checkout_session_id", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (attemptError || !attemptData?.provider_checkout_session_id) {
+      return null;
+    }
+
+    const attempt = attemptData as CheckoutAttempt;
+    const checkoutSessionId = attempt.provider_checkout_session_id;
+
+    if (!checkoutSessionId) {
+      return null;
+    }
+
+    const session = await stripe.checkout.sessions.retrieve(checkoutSessionId);
+    const sessionMetadata = session.metadata ?? {};
+    const sessionAmountCents =
+      typeof session.amount_total === "number" ? session.amount_total : null;
+    const attemptAmountCents = parseMoneyToCents(attempt.amount);
+
+    const sessionMatchesAttempt =
+      !session.livemode &&
+      getSessionMetadataValue(sessionMetadata, "homefixos_checkout_attempt_id") ===
+        attempt.id &&
+      getSessionMetadataValue(sessionMetadata, "service_request_id") ===
+        attempt.service_request_id &&
+      getSessionMetadataValue(sessionMetadata, "target_type") === "invoice" &&
+      getSessionMetadataValue(sessionMetadata, "target_id") === attempt.invoice_id &&
+      sessionAmountCents === attemptAmountCents;
+
+    if (!sessionMatchesAttempt) {
+      return null;
+    }
+
+    if (session.status === "open" && session.payment_status === "unpaid" && session.url) {
+      const expiresAt = session.expires_at
+        ? new Date(session.expires_at * 1000).toISOString()
+        : null;
+
+      const shouldRefreshAttempt =
+        attempt.checkout_status !== "processing" ||
+        (expiresAt && attempt.reserved_until !== expiresAt) ||
+        extractStoredCheckoutUrl(attempt) !== session.url;
+
+      if (shouldRefreshAttempt) {
+        await updateCheckoutAttemptAfterSession(attempt.id, {
+          checkout_status: "processing",
+          reserved_until: expiresAt ?? attempt.reserved_until,
+          checkout_metadata: {
+            ...(attempt.checkout_metadata ?? {}),
+            stripe_checkout_url: session.url,
+            stripe_livemode: false,
+            stripe_mode: config.mode,
+            stripe_resume_verified: true,
+            stripe_sandbox_pilot: config.mode === "production_sandbox_pilot",
+          },
+        });
+      }
+
+      return {
+        amount: attemptAmountCents / 100,
+        checkoutUrl: session.url,
+        expiresAt,
+      };
+    }
+
+    if (session.status === "expired" && session.payment_status !== "paid") {
+      await updateCheckoutAttemptAfterSession(attempt.id, {
+        checkout_status: "expired",
+        failure_reason: "stripe_session_expired",
+        checkout_metadata: {
+          ...(attempt.checkout_metadata ?? {}),
+          stripe_session_status: session.status,
+          stripe_session_reconciled: true,
+        },
+      });
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
 }
 
 function categorizeProviderCheckoutError(error: unknown) {

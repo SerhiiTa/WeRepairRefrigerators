@@ -52,6 +52,11 @@ export type PublicInvoicePayload = {
 };
 
 type PublicInvoicePaymentProps = {
+  activeCheckout?: {
+    amount: number;
+    checkoutUrl: string;
+    expiresAt: string | null;
+  } | null;
   data: PublicInvoicePayload;
   stripePaymentsEnabled?: boolean;
   token: string;
@@ -67,6 +72,7 @@ function createIdempotencyKey(invoiceNumber: string) {
 }
 
 export function PublicInvoicePayment({
+  activeCheckout = null,
   data,
   stripePaymentsEnabled = true,
   token,
@@ -79,6 +85,7 @@ export function PublicInvoicePayment({
 
   const paymentIsAvailable =
     stripePaymentsEnabled &&
+    !activeCheckout &&
     data.link_state === "active" &&
     data.payment.status === "eligible" &&
     data.invoice.balance_due > 0 &&
@@ -97,8 +104,17 @@ export function PublicInvoicePayment({
     if (data.payment.status === "paid" || data.invoice.balance_due <= 0) {
       return "Paid";
     }
+    if (activeCheckout) {
+      return "Payment checkout in progress";
+    }
     return "Balance due";
-  }, [data.invoice.balance_due, data.invoice.invoice_status, data.link_state, data.payment.status]);
+  }, [
+    activeCheckout,
+    data.invoice.balance_due,
+    data.invoice.invoice_status,
+    data.link_state,
+    data.payment.status,
+  ]);
 
   async function startCheckout() {
     if (!paymentIsAvailable) {
@@ -284,6 +300,14 @@ export function PublicInvoicePayment({
               ? "Opening Checkout..."
               : `Pay Balance Due ${formatServiceRequestMoney(data.invoice.balance_due)}`}
           </button>
+        ) : null}
+        {activeCheckout ? (
+          <a
+            className="mt-3 flex min-h-12 w-full items-center justify-center rounded-xl bg-[#0F6BFF] px-4 text-center text-base font-black text-white transition hover:bg-[#0959D9]"
+            href={activeCheckout.checkoutUrl}
+          >
+            Continue Payment {formatServiceRequestMoney(activeCheckout.amount)}
+          </a>
         ) : null}
         {checkoutState.message ? (
           <p

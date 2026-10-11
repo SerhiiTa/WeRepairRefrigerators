@@ -5,7 +5,10 @@ import {
   type PublicInvoicePayload,
 } from "@/components/public/PublicInvoicePayment";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { isPublicStripeCheckoutEnabledForToken } from "@/server/finance/stripe-checkout";
+import {
+  isPublicStripeCheckoutEnabledForToken,
+  loadPublicInvoiceActiveStripeCheckout,
+} from "@/server/finance/stripe-checkout";
 
 type PublicInvoicePageProps = {
   params: Promise<{
@@ -42,6 +45,14 @@ export default async function PublicInvoicePage({ params }: PublicInvoicePagePro
     notFound();
   }
 
+  const stripePaymentsEnabled = await isPublicStripeCheckoutEnabledForToken({
+    documentType: "invoice",
+    token,
+  });
+  const activeCheckout = stripePaymentsEnabled
+    ? await loadPublicInvoiceActiveStripeCheckout({ token })
+    : null;
+
   const { data, error } = await supabase.rpc(
     "get_public_invoice_by_token_rpc" as never,
     {
@@ -59,13 +70,9 @@ export default async function PublicInvoicePage({ params }: PublicInvoicePagePro
     notFound();
   }
 
-  const stripePaymentsEnabled = await isPublicStripeCheckoutEnabledForToken({
-    documentType: "invoice",
-    token,
-  });
-
   return (
     <PublicInvoicePayment
+      activeCheckout={activeCheckout}
       data={payload}
       stripePaymentsEnabled={stripePaymentsEnabled}
       token={token}

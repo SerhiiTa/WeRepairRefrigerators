@@ -2,6 +2,8 @@
 import { getSupabaseServiceRoleClient } from "@/lib/supabase/service-role";
 import type { Json } from "@/lib/supabase/types";
 
+import { getStripeClient, getStripeRuntimeConfig } from "./stripe-config";
+
 type CheckoutAttemptRow = {
   id: string;
   amount: number | string;
@@ -124,8 +126,97 @@ function paymentState(attempt: CheckoutAttemptRow): StripePaymentReturnState {
   return "processing";
 }
 
+async function releaseSandboxReservationAfterCancelReturn(
+  attempt: CheckoutAttemptRow,
+): Promise<CheckoutAttemptRow> {
+  if (
+    attempt.checkout_status === "succeeded" ||
+    attempt.succeeded_payment_id ||
+    attempt.checkout_status === "failed" ||
+    attempt.checkout_status === "expired" ||
+    attempt.checkout_status === "canceled" ||
+    !attempt.provider_checkout_session_id
+  ) {
+    return attempt;
+  }
+
+  let config;
+
+  try {
+    config = getStripeRuntimeConfig();
+  } catch {
+    return attempt;
+  }
+
+  if (config.mode !== "test" && config.mode !== "production_sandbox_pilot") {
+    return attempt;
+  }
+
+  const stripe = getStripeClient();
+
+  if (!stripe) {
+    return attempt;
+  }
+
+  try {
+    let session = await stripe.checkout.sessions.retrieve(
+      attempt.provider_checkout_session_id,
+    );
+
+    if (session.livemode || session.payment_status === "paid") {
+      return attempt;
+    }
+
+    if (session.status === "open") {
+      session = await stripe.checkout.sessions.expire(session.id);
+    }
+
+    if (session.status !== "expired" || session.payment_status === "paid") {
+      return attempt;
+    }
+
+    const serviceRole = getSupabaseServiceRoleClient();
+
+    if (!serviceRole) {
+      return attempt;
+    }
+
+    const nextStatus = session.expires_at && session.expires_at <= Math.floor(Date.now() / 1000)
+      ? "expired"
+      : "canceled";
+
+    const { data, error } = await (serviceRole as any)
+      .from("service_request_payment_checkout_attempts")
+      .update({
+        checkout_status: nextStatus,
+        failure_reason: "checkout_cancel_return",
+        checkout_metadata: {
+          ...(attempt.checkout_metadata ?? {}),
+          stripe_cancel_return_reconciled: true,
+          stripe_session_status: session.status,
+        },
+      })
+      .eq("id", attempt.id)
+      .in("checkout_status", ["initiated", "processing"])
+      .is("succeeded_payment_id", null)
+      .select(
+        "id,amount,checkout_kind,checkout_metadata,checkout_status,estimate_id,invoice_id,provider_checkout_session_id,provider_payment_intent_id,succeeded_payment_id,target_type",
+      )
+      .maybeSingle();
+
+    if (error || !data) {
+      return attempt;
+    }
+
+    return data as CheckoutAttemptRow;
+  } catch {
+    return attempt;
+  }
+}
+
 export async function loadStripeReturnStatus(params: {
   attemptId: string | null;
+  releaseOnCancelReturn?: boolean;
   token: string | null;
 }): Promise<StripeReturnStatus> {
   if (
@@ -229,15 +320,19 @@ export async function loadStripeReturnStatus(params: {
       null;
   }
 
+  const finalAttempt = params.releaseOnCancelReturn
+    ? await releaseSandboxReservationAfterCancelReturn(attempt)
+    : attempt;
+
   return {
-    amount: asMoney(attempt.amount) ?? "0.00",
+    amount: asMoney(finalAttempt.amount) ?? "0.00",
     authorized: true,
     balanceDue: asMoney(paymentOptions?.balance_due),
     documentHref,
     documentNumber,
     paid: asMoney(paymentOptions?.paid),
-    paymentStatus: paymentState(attempt),
-    targetType: attempt.target_type,
+    paymentStatus: paymentState(finalAttempt),
+    targetType: finalAttempt.target_type,
     total: asMoney(paymentOptions?.total),
   };
 }

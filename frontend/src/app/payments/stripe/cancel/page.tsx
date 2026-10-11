@@ -15,6 +15,7 @@ export default async function StripeCancelPage({ searchParams }: StripeCancelPag
   const params = await searchParams;
   const status = await loadStripeReturnStatus({
     attemptId: params.attempt ?? null,
+    releaseOnCancelReturn: true,
     token: params.token ?? null,
   });
 
