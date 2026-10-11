@@ -2143,7 +2143,7 @@ export function ServiceRequestDetail({
       return;
     }
 
-    function applyEstimateRouteState() {
+    function applyEstimateRouteState(options: { allowWorkspaceClose: boolean }) {
       if (isManualEstimateOverlayOpen) {
         return;
       }
@@ -2172,6 +2172,13 @@ export function ServiceRequestDetail({
       }
 
       if (tab === "finance") {
+        if (
+          !options.allowWorkspaceClose &&
+          (financeEstimateMode === "manual" || financeEstimateMode === "saved")
+        ) {
+          return;
+        }
+
         setActiveJobTab("estimate");
         setIsFinanceEstimatesOpen(true);
         setManualEstimateId(null);
@@ -2196,13 +2203,23 @@ export function ServiceRequestDetail({
       setFinanceEstimateMode("home");
     }
 
-    applyEstimateRouteState();
-    window.addEventListener("popstate", applyEstimateRouteState);
+    applyEstimateRouteState({ allowWorkspaceClose: false });
+
+    function handleEstimateRoutePopState() {
+      applyEstimateRouteState({ allowWorkspaceClose: true });
+    }
+
+    window.addEventListener("popstate", handleEstimateRoutePopState);
 
     return () => {
-      window.removeEventListener("popstate", applyEstimateRouteState);
+      window.removeEventListener("popstate", handleEstimateRoutePopState);
     };
-  }, [estimatesState.estimates, estimatesState.status, isManualEstimateOverlayOpen]);
+  }, [
+    estimatesState.estimates,
+    estimatesState.status,
+    financeEstimateMode,
+    isManualEstimateOverlayOpen,
+  ]);
 
   const loadCustomerPrimaryAddress = useCallback(async (customerId: string | null) => {
     if (!customerId) {

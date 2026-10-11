@@ -18,6 +18,9 @@ const jobInvoiceAggregation = read(
 const createEstimateRepair = read(
   "supabase/migrations/0132_finance_v2_create_estimate_logical_identity_repair_apply_ready.sql",
 );
+const jobInvoiceAuthorizationRepair = read(
+  "supabase/migrations/0133_finance_v2_job_invoice_sync_authorization_repair_apply_ready.sql",
+);
 const records = read("frontend/src/lib/service-request-records.ts");
 const serviceRequestDetail = read(
   "frontend/src/components/dashboard/ServiceRequestDetail.tsx",
@@ -146,6 +149,23 @@ test("Finance V2 Stage 2 synchronizes one combined current Job Invoice without t
     jobInvoiceAggregation,
     /create unique index[\s\S]*on public\.service_request_invoices \(service_request_id\)[\s\S]*invoice_lifecycle_status = 'current'/i,
     "The final one-current-Invoice uniqueness index must wait until existing duplicate-current Production Jobs are reconciled.",
+  );
+});
+
+test("Finance V2 Job Invoice sync uses internal Finance write authorization", () => {
+  const syncRepair = jobInvoiceAuthorizationRepair.match(
+    /create or replace function public\.sync_job_invoice_from_approved_estimates_rpc[\s\S]*?end;\s*\$\$/i,
+  )?.[0] ?? "";
+
+  assert.match(syncRepair, /public\.can_record_service_request_payment\(request_row\.id\)/);
+  assert.doesNotMatch(
+    syncRepair,
+    /public\.can_view_service_request\(request_row\.id\)/,
+    "Job Invoice sync is a financial document write and must not use read-only Job visibility authorization.",
+  );
+  assert.match(
+    jobInvoiceAuthorizationRepair,
+    /grant execute on function public\.sync_job_invoice_from_approved_estimates_rpc\(uuid\) to authenticated/,
   );
 });
 

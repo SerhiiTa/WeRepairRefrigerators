@@ -203,6 +203,21 @@ assert.match(
 );
 assert.match(
   detail,
+  /function applyEstimateRouteState\(options: \{ allowWorkspaceClose: boolean \}\)/,
+  "Estimate route synchronization must distinguish refresh-driven sync from explicit browser navigation.",
+);
+assert.match(
+  detail,
+  /if \(tab === "finance"\) \{[\s\S]*?!options\.allowWorkspaceClose[\s\S]*financeEstimateMode === "manual"[\s\S]*financeEstimateMode === "saved"[\s\S]*return;[\s\S]*setManualEstimateId\(null\)/,
+  "Refresh-driven route sync must not close an active Estimate editor after a successful item save.",
+);
+assert.match(
+  detail,
+  /function handleEstimateRoutePopState\(\) \{[\s\S]*?applyEstimateRouteState\(\{ allowWorkspaceClose: true \}\);[\s\S]*?\}/,
+  "Explicit Back/Forward navigation must still be able to close the Estimate workspace.",
+);
+assert.match(
+  detail,
   /setInterval\(\(\) => \{[\s\S]*?if \(isManualEstimateOverlayOpen\) \{[\s\S]*?return;/,
   "Finance polling must pause while an Estimate modal is open.",
 );
