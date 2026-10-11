@@ -418,7 +418,23 @@ Payment is recorded through the supported payment flow.
 
 The job, proposal, invoice, payment, warranty, and repair history become part of the customer/property service record.
 
-## 18. Future Company Settings
+## 18. Job-Level Finance V2 Rules
+
+WRA Finance treats the Job as the financial account. Estimates, invoices, checkout attempts, and payments are documents or events inside that account; they are not separate ledgers.
+
+One Job may have multiple logical Estimates approved at the same time. The current approved billing scope is the sum of the latest approved effective revision of each logical Estimate. Draft, declined, superseded, void, archived, or unapproved revisions do not add new collectible scope. Editing an approved Estimate creates or reuses an internal draft working revision; the previous approved revision remains effective until the revision is approved or explicitly unapproved.
+
+One Job should have one current customer-facing Invoice. That Invoice represents the combined approved scope of the Job. Updating the Invoice from approved Estimate scope must be explicit and auditable. Historical Invoice versions remain visible in history and must never be overwritten silently.
+
+Payments are valid Job-level paid credit when they are canonical, active, and not voided or reversed. Balance Due is calculated as:
+
+Current approved or invoiced Job scope minus valid Job-level paid credit.
+
+If valid paid credit exceeds the current scope, the extra amount must be shown as overpayment or credit; it must not be hidden by reducing the total or by rewriting payment history.
+
+Stripe Checkout, manual payments, invoice balances, and Estimate financial summaries must all use the same Job-level paid-credit calculation. Existing payment allocations remain auditable and must not be duplicated, transferred, or recreated merely because an Estimate or Invoice revision changed.
+
+## 19. Future Company Settings
 
 Finance settings should live at the company level and should not clutter every job.
 
@@ -540,4 +556,3 @@ Finance should feel like:
 Everything else should be progressive disclosure.
 
 The strongest Finance system is not the one that exposes the most controls. It is the one that lets the service business move from diagnosis to approval to payment with the least confusion.
-

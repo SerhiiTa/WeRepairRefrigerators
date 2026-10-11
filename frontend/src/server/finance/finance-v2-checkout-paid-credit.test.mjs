@@ -12,6 +12,9 @@ function read(path) {
 const migration = read(
   "supabase/migrations/0128_finance_v2_checkout_paid_credit_alignment_apply_ready.sql",
 );
+const publicInvoiceAuthRepair = read(
+  "supabase/migrations/0129_public_invoice_checkout_token_authorization_repair_apply_ready.sql",
+);
 
 test("Finance V2 checkout uses job-level paid credit and job-level reservations", () => {
   assert.match(migration, /create or replace function public\.active_service_request_checkout_reserved_amount/);
@@ -53,4 +56,55 @@ test("Finance V2 webhook posting preserves canonical ledger and posts to current
   assert.match(migration, /insert into public\.service_request_payment_allocations/);
   assert.match(migration, /finance_v2_job_credit_allocation/);
   assert.match(migration, /target_invoice_id := current_invoice_row\.id/);
+});
+
+test("public Invoice Checkout is token-scoped and avoids dashboard authorization", () => {
+  assert.match(
+    publicInvoiceAuthRepair,
+    /create or replace function public\.reserve_public_invoice_payment_checkout_rpc/,
+  );
+  assert.match(
+    publicInvoiceAuthRepair,
+    /public\.estimate_approval_token_hash\(p_token\)/,
+  );
+  assert.match(
+    publicInvoiceAuthRepair,
+    /from public\.service_request_invoice_delivery_tokens invoice_token[\s\S]*where invoice_token\.token_hash = clean_token_hash[\s\S]*for update/,
+  );
+  assert.match(
+    publicInvoiceAuthRepair,
+    /where id = token_row\.service_request_id[\s\S]*and id = invoice_row\.service_request_id[\s\S]*and company_id = token_row\.company_id/,
+  );
+  assert.match(
+    publicInvoiceAuthRepair,
+    /from public\.customers[\s\S]*where id = request_row\.customer_id[\s\S]*and company_id = request_row\.company_id/,
+  );
+  assert.match(
+    publicInvoiceAuthRepair,
+    /public\.active_service_request_paid_credit\(request_row\.id\)/,
+  );
+  assert.match(
+    publicInvoiceAuthRepair,
+    /public\.active_service_request_checkout_reserved_amount\(request_row\.id\)/,
+  );
+  assert.match(
+    publicInvoiceAuthRepair,
+    /balance_due := greatest\(invoice_row\.total - paid_credit - reserved_amount, 0\)/,
+  );
+  assert.match(publicInvoiceAuthRepair, /Payment checkout already in progress/);
+  assert.match(publicInvoiceAuthRepair, /This idempotency key was already used/);
+  assert.match(
+    publicInvoiceAuthRepair,
+    /grant execute on function public\.reserve_public_invoice_payment_checkout_rpc\(text, text, text, text, text\) to anon, authenticated/,
+  );
+  assert.doesNotMatch(
+    publicInvoiceAuthRepair,
+    /can_view_service_request/,
+    "Public invoice checkout must be authorized by the secure invoice token, not dashboard auth.",
+  );
+  assert.doesNotMatch(
+    publicInvoiceAuthRepair,
+    /reserve_service_request_payment_checkout_rpc/,
+    "Public invoice checkout must not delegate back to the dashboard reservation RPC.",
+  );
 });

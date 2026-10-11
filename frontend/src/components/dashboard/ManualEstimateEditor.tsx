@@ -2085,7 +2085,11 @@ export function ManualEstimateEditor({
                     }}
                     type="button"
                   >
-                    {isCreatingInvoice ? "Creating Invoice..." : "Convert to Invoice"}
+                    {isCreatingInvoice
+                      ? "Updating Invoice..."
+                      : linkedInvoiceNumber
+                        ? "Update Invoice"
+                        : "Create Job Invoice"}
                   </button>
                 ) : null}
                 {canCollectPayment && initialEstimate ? (
@@ -2750,8 +2754,8 @@ export function ManualEstimateEditor({
               {linkedInvoiceNumber
                 ? `Invoice ${linkedInvoiceNumber}`
                 : isCreatingInvoice
-                  ? "Creating..."
-                  : "Convert to Invoice"}
+                  ? "Updating..."
+                  : "Create Job Invoice"}
             </button>
             <button
               className="rounded-xl bg-[#0F6BFF] px-2 py-3 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-45 sm:text-sm"

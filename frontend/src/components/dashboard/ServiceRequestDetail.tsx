@@ -5088,6 +5088,7 @@ export function ServiceRequestDetail({
     );
 
     if (existingDraftRevision) {
+      syncEstimateWorkspaceHistory(existingDraftRevision.id, "replace");
       setManualEstimateId(existingDraftRevision.id);
       setViewingEstimateId(existingDraftRevision.id);
       setViewingInvoiceId(null);
@@ -5181,6 +5182,7 @@ export function ServiceRequestDetail({
     }
 
     if (payload.estimate?.id) {
+      syncEstimateWorkspaceHistory(payload.estimate.id, "replace");
       setPendingManualEstimateAddItem(
         options.openAddItemType
           ? {
@@ -5613,7 +5615,7 @@ export function ServiceRequestDetail({
     setInvoiceActionId(estimate.id);
     setInvoiceActionState({
       status: "saving",
-      message: `Creating invoice from ${estimate.estimateNumber}...`,
+      message: `Synchronizing Job Invoice from approved estimates...`,
     });
 
     const response = await fetch(`/api/estimates/${estimate.id}/invoice`, {
@@ -5646,7 +5648,7 @@ export function ServiceRequestDetail({
     setViewingEstimateId(null);
     setInvoiceActionState({
       status: "success",
-      message: `Invoice ${payload.invoice?.invoice_number ?? ""} created from ${estimate.estimateNumber}.`,
+      message: `Invoice ${payload.invoice?.invoice_number ?? ""} synchronized from approved Job scope.`,
     });
     void Promise.all([loadInvoices(), loadPayments(), loadEstimates()]);
     void loadNotes();
@@ -7385,68 +7387,27 @@ export function ServiceRequestDetail({
     );
   };
 
-  const financeApprovedEstimates = visibleDocumentEstimates.filter(
-    (estimate) =>
-      estimate.estimateStatus === "approved" &&
-      estimate.revisionStatus === "current" &&
-      estimate.archivedAt === null,
-  );
+  const financeApprovedEstimates = Array.from(
+    currentEstimateByLogicalEstimateId.values(),
+  )
+    .filter(
+      (estimate) =>
+        estimate.estimateStatus === "approved" &&
+        estimate.revisionStatus === "current" &&
+        estimate.archivedAt === null,
+    )
+    .sort(
+      (left, right) =>
+        new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime(),
+    );
   const financePayableEstimates = financeApprovedEstimates.filter(
     (estimate) => !activeInvoicesByEstimateId.has(estimate.id),
   );
-  function isEstimateNewerThanInvoiceScope(
-    estimate: DashboardServiceRequestEstimate,
-    invoice: DashboardServiceRequestInvoice,
-  ) {
-    const estimateLogicalId = estimate.logicalEstimateId ?? estimate.id;
-    const invoiceLogicalId = invoice.logicalEstimateId ?? invoice.estimateId;
-
-    return (
-      invoiceLogicalId === estimateLogicalId &&
-      invoice.estimateId !== estimate.id &&
-      estimate.revisionStatus === "current" &&
-      estimate.estimateStatus === "approved"
-    );
-  }
-
-  const staleInvoiceLogicalEstimateIds = new Set(
-    currentLifecycleInvoices
-      .filter((invoice) =>
-        financeApprovedEstimates.some((estimate) =>
-          isEstimateNewerThanInvoiceScope(estimate, invoice),
-        ),
-      )
-      .map((invoice) => invoice.logicalEstimateId ?? invoice.estimateId)
-      .filter((logicalEstimateId): logicalEstimateId is string =>
-        Boolean(logicalEstimateId),
-      ),
+  const financeApprovedTotal = financeApprovedEstimates.reduce(
+    (total, estimate) => total + estimate.total,
+    0,
   );
-  const financeCurrentInvoices = currentLifecycleInvoices.filter((invoice) => {
-    const logicalEstimateId = invoice.logicalEstimateId ?? invoice.estimateId;
-
-    return !logicalEstimateId || !staleInvoiceLogicalEstimateIds.has(logicalEstimateId);
-  });
-  const financeUninvoicedApprovedEstimates = financeApprovedEstimates.filter(
-    (estimate) => {
-      const logicalEstimateId = estimate.logicalEstimateId ?? estimate.id;
-      const hasCurrentInvoice = currentLifecycleInvoices.some(
-        (invoice) =>
-          (invoice.logicalEstimateId ?? invoice.estimateId) === logicalEstimateId,
-      );
-
-      return (
-        !hasCurrentInvoice || staleInvoiceLogicalEstimateIds.has(logicalEstimateId)
-      );
-    },
-  );
-  const financeApprovedTotal =
-    financeCurrentInvoices.reduce((total, invoice) => total + invoice.total, 0) +
-    financeUninvoicedApprovedEstimates.reduce(
-      (total, estimate) => total + estimate.total,
-      0,
-    );
-  const currentBillingScopeCount =
-    financeCurrentInvoices.length + financeUninvoicedApprovedEstimates.length;
+  const currentBillingScopeCount = financeApprovedEstimates.length;
   const estimateUsesJobLevelPaidCredit = (
     estimate: DashboardServiceRequestEstimate | null,
   ) => {
@@ -7460,16 +7421,12 @@ export function ServiceRequestDetail({
     }
 
     const estimateLogicalId = estimate.logicalEstimateId ?? estimate.id;
-    const isCurrentUninvoicedEstimate = financeUninvoicedApprovedEstimates.some(
-      (currentEstimate) => currentEstimate.id === estimate.id,
+    const isCurrentApprovedEstimate = financeApprovedEstimates.some(
+      (currentEstimate) =>
+        (currentEstimate.logicalEstimateId ?? currentEstimate.id) === estimateLogicalId,
     );
-    const isCurrentInvoiceEstimate = financeCurrentInvoices.some((invoice) => {
-      const invoiceLogicalId = invoice.logicalEstimateId ?? invoice.estimateId;
 
-      return invoiceLogicalId === estimateLogicalId;
-    });
-
-    return isCurrentUninvoicedEstimate || isCurrentInvoiceEstimate;
+    return isCurrentApprovedEstimate;
   };
   const getEstimateLogicalPaidCreditCents = (
     estimate: DashboardServiceRequestEstimate | null,
@@ -7568,6 +7525,19 @@ export function ServiceRequestDetail({
         new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
     )[0] ??
     null;
+  const financeApprovedTotalCents = moneyToCents(financeApprovedTotal);
+  const financePrimaryInvoiceTotalCents = financePrimaryInvoice
+    ? moneyToCents(financePrimaryInvoice.total)
+    : 0;
+  const financeInvoiceSyncRequired =
+    financeApprovedTotalCents > 0 &&
+    (currentLifecycleInvoices.length !== 1 ||
+      !financePrimaryInvoice ||
+      financePrimaryInvoiceTotalCents !== financeApprovedTotalCents);
+  const financeInvoiceSyncDifference = centsToMoney(
+    Math.abs(financeApprovedTotalCents - financePrimaryInvoiceTotalCents),
+  );
+  const financeInvoiceSyncEstimate = financeApprovedEstimates[0] ?? null;
   const manualPaymentTargets: ManualPaymentTarget[] = [
     ...financeApprovedEstimates
       .filter((estimate) => !activeInvoicesByEstimateId.has(estimate.id))
@@ -13503,6 +13473,43 @@ export function ServiceRequestDetail({
                 <p className="py-2 text-sm font-semibold text-amber-800">
                   {invoicesState.error}
                 </p>
+              ) : null}
+              {financeInvoiceSyncRequired ? (
+                <div className="mb-3 rounded-2xl border border-amber-200 bg-amber-50 p-3">
+                  <p className="text-sm font-black text-amber-900">
+                    Invoice Update Required
+                  </p>
+                  <div className="mt-2 grid gap-2 text-xs font-bold text-amber-900 sm:grid-cols-3">
+                    <p>
+                      Approved Job Scope:{" "}
+                      {formatServiceRequestMoney(financeApprovedTotal)}
+                    </p>
+                    <p>
+                      Current Invoice:{" "}
+                      {formatServiceRequestMoney(financePrimaryInvoice?.total ?? 0)}
+                    </p>
+                    <p>
+                      Difference: {formatServiceRequestMoney(financeInvoiceSyncDifference)}
+                    </p>
+                  </div>
+                  <button
+                    className="mt-3 rounded-full bg-amber-700 px-4 py-2 text-xs font-black text-white transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={
+                      invoiceActionState.status === "saving" ||
+                      !financeInvoiceSyncEstimate
+                    }
+                    onClick={() => {
+                      if (financeInvoiceSyncEstimate) {
+                        void createInvoiceFromEstimate(financeInvoiceSyncEstimate);
+                      }
+                    }}
+                    type="button"
+                  >
+                    {invoiceActionState.status === "saving"
+                      ? "Updating Invoice..."
+                      : "Update Invoice"}
+                  </button>
+                </div>
               ) : null}
               {financePrimaryInvoice ? (
                 renderInvoiceSummaryCard(financePrimaryInvoice)

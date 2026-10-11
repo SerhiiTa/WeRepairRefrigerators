@@ -1755,6 +1755,12 @@ export type Database = {
         };
         Returns: Json;
       };
+      sync_job_invoice_from_approved_estimates_rpc: {
+        Args: {
+          p_service_request_id: string;
+        };
+        Returns: Json;
+      };
       service_request_payment_principal_amount: {
         Args: {
           p_payment_id: string;

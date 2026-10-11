@@ -12,6 +12,12 @@ function read(path) {
 const migration = read(
   "supabase/migrations/0127_finance_v2_estimate_invoice_revision_lifecycle_apply_ready.sql",
 );
+const jobInvoiceAggregation = read(
+  "supabase/migrations/0131_finance_v2_job_invoice_aggregation_apply_ready.sql",
+);
+const createEstimateRepair = read(
+  "supabase/migrations/0132_finance_v2_create_estimate_logical_identity_repair_apply_ready.sql",
+);
 const records = read("frontend/src/lib/service-request-records.ts");
 const serviceRequestDetail = read(
   "frontend/src/components/dashboard/ServiceRequestDetail.tsx",
@@ -51,6 +57,20 @@ test("Finance V2 invoice conversion creates replacement versions without ON CONF
   );
 });
 
+test("Finance V2 independent Estimate creation populates logical root identity", () => {
+  const createEstimate = createEstimateRepair.match(
+    /create or replace function public\.create_service_request_estimate_rpc[\s\S]*?end;\s*\$\$/i,
+  )?.[0] ?? "";
+
+  assert.match(createEstimate, /v_estimate_id uuid := gen_random_uuid\(\)/);
+  assert.match(createEstimate, /insert into public\.service_request_estimates/);
+  assert.match(createEstimate, /logical_estimate_id,\s*[\s\S]*revision_number,\s*[\s\S]*revision_status/);
+  assert.match(createEstimate, /v_estimate_id,\s*[\s\S]*1,\s*[\s\S]*'current'/);
+  assert.match(createEstimate, /public\.user_can_access_company\(v_company_id\)/);
+  assert.match(createEstimate, /public\.can_view_service_request\(p_request_id\)/);
+  assert.match(createEstimateRepair, /grant execute on function public\.create_service_request_estimate_rpc\(uuid, jsonb, jsonb, jsonb\) to authenticated/);
+});
+
 test("Finance V2 payment display uses job-level valid paid credit for current scope", () => {
   assert.match(migration, /create or replace function public\.active_service_request_paid_credit/);
   assert.match(migration, /payment\.payment_status in \('paid', 'succeeded', 'imported', 'partially_refunded'\)/);
@@ -68,6 +88,112 @@ test("Finance V2 payment display uses job-level valid paid credit for current sc
   assert.match(serviceRequestDetail, /validPaidCreditCents/);
   assert.match(serviceRequestDetail, /financeBalanceDueTotal = Math\.max\(\s*0,\s*financeApprovedTotal - financePaidTotal/s);
   assert.match(serviceRequestDetail, /invoice\.invoiceLifecycleStatus === "current"[\s\S]*validPaidCreditCents/);
+});
+
+test("Finance V2 Job summary sums effective current approved Estimates instead of stale Invoice snapshots", () => {
+  assert.match(
+    serviceRequestDetail,
+    /const financeApprovedEstimates = Array\.from\(\s*currentEstimateByLogicalEstimateId\.values\(\),\s*\)/s,
+    "Job approved scope must be derived from the effective current approved Estimate revisions.",
+  );
+  assert.match(
+    serviceRequestDetail,
+    /estimate\.estimateStatus === "approved"[\s\S]*estimate\.revisionStatus === "current"[\s\S]*estimate\.archivedAt === null/s,
+  );
+  assert.match(
+    serviceRequestDetail,
+    /const financeApprovedTotal = financeApprovedEstimates\.reduce\(\s*\(total, estimate\) => total \+ estimate\.total,\s*0,\s*\)/s,
+    "Multiple approved logical Estimates should combine into one Job-level approved scope.",
+  );
+  assert.doesNotMatch(
+    serviceRequestDetail,
+    /const financeApprovedTotal =\s*financeCurrentInvoices\.reduce/,
+    "A stale current Invoice snapshot must not define the Job approved scope.",
+  );
+});
+
+test("Finance V2 Stage 2 resolves Job approved scope from effective approved Estimate revisions", () => {
+  assert.match(
+    jobInvoiceAggregation,
+    /create or replace function public\.get_service_request_effective_approved_scope_rpc/,
+  );
+  assert.match(jobInvoiceAggregation, /partition by coalesce\(estimate\.logical_estimate_id, estimate\.id\)/);
+  assert.match(jobInvoiceAggregation, /estimate\.estimate_status = 'approved'/);
+  assert.match(jobInvoiceAggregation, /coalesce\(estimate\.revision_status, 'current'\) = 'current'/);
+  assert.match(jobInvoiceAggregation, /estimate\.archived_at is null/);
+  assert.match(jobInvoiceAggregation, /coalesce\(round\(sum\(effective\.total\), 2\), 0\) as total/);
+  assert.doesNotMatch(
+    jobInvoiceAggregation,
+    /sum\(invoice\.total\)/i,
+    "Approved Job scope must not be derived from existing Invoice totals.",
+  );
+});
+
+test("Finance V2 Stage 2 synchronizes one combined current Job Invoice without touching payments", () => {
+  assert.match(
+    jobInvoiceAggregation,
+    /create or replace function public\.sync_job_invoice_from_approved_estimates_rpc/,
+  );
+  assert.match(jobInvoiceAggregation, /pg_advisory_xact_lock\(hashtextextended\(request_row\.id::text, 127\)\)/);
+  assert.match(jobInvoiceAggregation, /invoice_lifecycle_status = 'superseded'/);
+  assert.match(jobInvoiceAggregation, /source_type,\s*[\s\S]*'consolidated_conversion'/);
+  assert.match(jobInvoiceAggregation, /source_logical_estimate_id/);
+  assert.match(jobInvoiceAggregation, /source_approved_estimate_id/);
+  assert.match(jobInvoiceAggregation, /public\.active_service_request_paid_credit\(request_row\.id\)/);
+  assert.doesNotMatch(jobInvoiceAggregation, /delete from public\.service_request_payments/i);
+  assert.doesNotMatch(jobInvoiceAggregation, /delete from public\.service_request_payment_allocations/i);
+  assert.doesNotMatch(
+    jobInvoiceAggregation,
+    /create unique index[\s\S]*on public\.service_request_invoices \(service_request_id\)[\s\S]*invoice_lifecycle_status = 'current'/i,
+    "The final one-current-Invoice uniqueness index must wait until existing duplicate-current Production Jobs are reconciled.",
+  );
+});
+
+test("Finance V2 Stage 2 summary exposes sync status, balance and overpayment", () => {
+  assert.match(
+    jobInvoiceAggregation,
+    /create or replace function public\.get_service_request_finance_v2_summary_rpc/,
+  );
+  assert.match(jobInvoiceAggregation, /'invoice_sync_required'/);
+  assert.match(jobInvoiceAggregation, /'balance_due', greatest\(approved_total - paid_credit, 0\)/);
+  assert.match(jobInvoiceAggregation, /'overpayment', greatest\(paid_credit - approved_total, 0\)/);
+  assert.match(jobInvoiceAggregation, /'contributing_approved_estimate_ids'/);
+  assert.match(jobInvoiceAggregation, /current_invoice_count <> 1/);
+});
+
+test("Finance V2 Stage 2 blocks checkout reservations for stale current Invoices", () => {
+  assert.match(
+    jobInvoiceAggregation,
+    /create or replace function public\.validate_invoice_checkout_matches_job_scope/,
+  );
+  assert.match(
+    jobInvoiceAggregation,
+    /create trigger validate_invoice_checkout_matches_job_scope[\s\S]*before insert or update of invoice_id, checkout_status, amount[\s\S]*on public\.service_request_payment_checkout_attempts/s,
+  );
+  assert.match(jobInvoiceAggregation, /current_invoice_count <> 1/);
+  assert.match(
+    jobInvoiceAggregation,
+    /round\(coalesce\(invoice_row\.total, 0\), 2\) <> approved_total/,
+  );
+  assert.match(jobInvoiceAggregation, /Invoice must be synchronized before checkout/);
+});
+
+test("Finance V2 Stage 3 unapprove removes one logical Estimate from scope without payment deletion", () => {
+  const unapprove = jobInvoiceAggregation.match(
+    /create or replace function public\.undo_service_request_estimate_approval_rpc[\s\S]*?end;\s*\$\$/i,
+  )?.[0] ?? "";
+
+  assert.match(unapprove, /coalesce\(estimate_row\.logical_estimate_id, estimate_row\.id\)/);
+  assert.match(unapprove, /estimate\.estimate_status = 'approved'/);
+  assert.match(unapprove, /coalesce\(estimate\.revision_status, 'current'\) = 'current'/);
+  assert.match(unapprove, /estimate_status = 'draft'/);
+  assert.match(unapprove, /revision_status = 'draft'/);
+  assert.match(unapprove, /finance_v2_invoice_sync_required/);
+  assert.match(unapprove, /public\.get_service_request_finance_v2_summary_rpc/);
+  assert.doesNotMatch(unapprove, /service_request_payment_allocations allocation[\s\S]*raise exception/i);
+  assert.doesNotMatch(unapprove, /service_request_invoice_estimates membership[\s\S]*raise exception/i);
+  assert.doesNotMatch(unapprove, /delete from public\.service_request_payments/i);
+  assert.doesNotMatch(unapprove, /delete from public\.service_request_payment_allocations/i);
 });
 
 test("Finance V2 UI exposes unified Add Item revisions and keeps history visible", () => {

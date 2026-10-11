@@ -36,7 +36,8 @@ includesAll(editor, [
   "Paid",
   "Remaining",
   "Collect Payment",
-  "Convert to Invoice",
+  "Create Job Invoice",
+  "Update Invoice",
   "onCollectPayment",
   "onCreateInvoice",
   "sendToClient",
@@ -176,6 +177,20 @@ assert.match(
   /setPendingManualEstimateAddItem\([\s\S]*?await loadEstimates\(\);[\s\S]*?setManualEstimateId\(payload\.estimate\.id\)/,
   "New draft revisions must refresh into estimate state before opening the editor for Add Item.",
 );
+assert.ok(
+  !detail.includes("syncEstimateWorkspaceUrl("),
+  "Revision transitions must call the existing Estimate workspace history helper, not an undefined URL helper.",
+);
+assert.match(
+  detail,
+  /if \(existingDraftRevision\) \{[\s\S]*?syncEstimateWorkspaceHistory\(existingDraftRevision\.id, "replace"\)/,
+  "Existing draft revisions must update the Estimate workspace URL without throwing.",
+);
+assert.match(
+  detail,
+  /if \(payload\.estimate\?\.id\) \{[\s\S]*?syncEstimateWorkspaceHistory\(payload\.estimate\.id, "replace"\)/,
+  "Newly created draft revisions must update the Estimate workspace URL without throwing.",
+);
 assert.match(
   detail,
   /key=\{`\$\{financeEstimateMode\}:\$\{manualEstimateId \?\? "new"\}:\$\{manualEstimate\?\.estimateStatus \?\? "none"\}`\}/,
@@ -207,6 +222,9 @@ includesAll(detail, [
   "allocatedEstimate?.logicalEstimateId",
   "allocationLogicalId === estimateLogicalId",
   "getEstimateLogicalPaidCreditCents(manualEstimate)",
+  "Invoice Update Required",
+  "financeInvoiceSyncRequired",
+  "financeInvoiceSyncDifference",
 ]);
 assert.doesNotMatch(
   detail,
@@ -221,7 +239,8 @@ includesAll(manualApprovalRoute, [
 ]);
 
 includesAll(invoiceRoute, [
-  "create_invoice_from_estimate_rpc",
+  "sync_job_invoice_from_approved_estimates_rpc",
+  "service_request_id",
   "Choose a valid approved estimate to invoice.",
 ]);
 

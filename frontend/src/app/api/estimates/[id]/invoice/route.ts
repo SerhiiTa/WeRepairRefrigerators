@@ -32,15 +32,19 @@ function isUuid(value: string): boolean {
 
 function formatInvoiceError(message: string): string {
   if (
-    message.includes("create_invoice_from_estimate_rpc") ||
+    message.includes("sync_job_invoice_from_approved_estimates_rpc") ||
     message.includes("Could not find the function") ||
     message.includes("schema cache")
   ) {
-    return "Invoices are not ready yet. Apply migration 0028 in Supabase, then try again.";
+    return "Job Invoice sync is not ready yet. Apply the latest Finance V2 migration in Supabase, then try again.";
   }
 
-  if (message.includes("approved estimate")) {
-    return "Create an invoice only after the customer approves the estimate.";
+  if (message.includes("no_approved_scope")) {
+    return "Approve at least one estimate before creating an invoice.";
+  }
+
+  if (message.includes("Active checkout")) {
+    return "Finish or cancel the active checkout before updating this invoice.";
   }
 
   if (message.includes("not accessible") || message.includes("permission denied")) {
@@ -107,10 +111,24 @@ export async function POST(
     return fail("Choose a valid approved estimate to invoice.");
   }
 
+  const { data: estimate, error: estimateError } = await auth.supabase
+    .from("service_request_estimates")
+    .select("id, service_request_id")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (estimateError) {
+    return fail(formatInvoiceError(estimateError.message), 403);
+  }
+
+  if (!estimate?.service_request_id) {
+    return fail("Estimate not found.", 404);
+  }
+
   const { data, error } = await auth.supabase.rpc(
-    "create_invoice_from_estimate_rpc",
+    "sync_job_invoice_from_approved_estimates_rpc",
     {
-      p_estimate_id: id,
+      p_service_request_id: estimate.service_request_id,
     },
   );
 
