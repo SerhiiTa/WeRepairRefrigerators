@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -36,6 +37,7 @@ type DashboardGateStep =
     };
 
 const PROFILE_STEP_TIMEOUT_MS = 6000;
+const DASHBOARD_LOADING_IMAGE_SRC = "/images/homefixos-dashboard-loading.png";
 
 export function DashboardAuthGate({ children }: DashboardAuthGateProps) {
   const pathname = usePathname();
@@ -212,6 +214,22 @@ export function DashboardAuthGate({ children }: DashboardAuthGateProps) {
       profileResult: null,
     });
 
+  if (gateState.status === "checking") {
+    return (
+      <main className="flex min-h-screen w-full items-center justify-center overflow-hidden bg-[#071321] px-6 py-10">
+        <Image
+          src={DASHBOARD_LOADING_IMAGE_SRC}
+          alt="HomeFixOS"
+          width={1559}
+          height={1009}
+          priority
+          className="h-auto w-full max-w-[min(82vw,760px)] object-contain"
+          sizes="(max-width: 640px) 82vw, 760px"
+        />
+      </main>
+    );
+  }
+
   return (
     <main className="flex min-h-screen items-center justify-center bg-slate-950 px-5 py-10 text-white">
       <section className="w-full max-w-xl rounded-lg border border-slate-800 bg-slate-900 p-6 shadow-2xl shadow-slate-950/40">
@@ -224,12 +242,6 @@ export function DashboardAuthGate({ children }: DashboardAuthGateProps) {
             : decision.title}
         </h1>
         <p className="mt-3 leading-7 text-slate-300">{decision.description}</p>
-        {gateState.status === "checking" ? (
-          <div className="mt-4 rounded-md border border-cyan-300/20 bg-cyan-300/10 px-3 py-2 text-sm font-bold text-cyan-100">
-            Checking authenticated session, profile status, role, and
-            onboarding completion.
-          </div>
-        ) : null}
         {diagnosticSteps.length > 0 ? (
           <div className="mt-4 rounded-md border border-slate-700 bg-slate-950/60 p-3">
             <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-400">
