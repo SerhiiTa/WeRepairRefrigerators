@@ -163,6 +163,11 @@ test("success page waits for receipt-backed verified payment", () => {
   assert.match(successExperience, /polls < 12/);
   assert.match(successExperience, /requestSequenceRef/);
   assert.match(successExperience, /requestSequence === requestSequenceRef\.current/);
+  assert.match(successExperience, /payload\?\.ok === true[\s\S]*payload\.status/);
+  assert.ok(
+    successExperience.indexOf("setStatus(payload.status)") <
+      successExperience.indexOf("setPolls((current) => current + 1)"),
+  );
   assert.match(successExperience, /Receipt temporarily unavailable/);
   assert.match(successExperience, /HomeFixOS could not prepare the receipt link yet/);
   assert.match(successExperience, /api\/payments\/stripe-return-status/);

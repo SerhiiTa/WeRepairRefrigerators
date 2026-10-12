@@ -153,6 +153,11 @@ test("Stripe return pages require customer token authorization for payment detai
   assert.match(stripeSuccessExperience, /headers\.Authorization = `Bearer \$\{accessToken\}`/);
   assert.match(stripeSuccessExperience, /polls < 12/);
   assert.match(stripeSuccessExperience, /requestSequenceRef/);
+  assert.match(stripeSuccessExperience, /payload\?\.ok === true[\s\S]*payload\.status/);
+  assert.ok(
+    stripeSuccessExperience.indexOf("setStatus(payload.status)") <
+      stripeSuccessExperience.indexOf("setPolls((current) => current + 1)"),
+  );
   assert.match(stripeSuccessExperience, /Verifying payment/);
   assert.match(stripeSuccessExperience, /Receipt temporarily unavailable/);
   assert.match(stripeSuccessExperience, /Payment Successful!/);

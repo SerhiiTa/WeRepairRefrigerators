@@ -77,38 +77,45 @@ export function StripeSuccessExperience({
 
     let canceled = false;
     const timeout = window.setTimeout(async () => {
-      setPolls((current) => current + 1);
       const headers: HeadersInit = {};
       const requestSequence = requestSequenceRef.current + 1;
       requestSequenceRef.current = requestSequence;
 
-      if (dashboardReturnPath && !query.token) {
-        const supabase = getSupabaseBrowserClient();
-        const session = supabase
-          ? await supabase.auth.getSession().catch(() => null)
-          : null;
-        const accessToken = session?.data.session?.access_token;
+      try {
+        if (dashboardReturnPath && !query.token) {
+          const supabase = getSupabaseBrowserClient();
+          const session = supabase
+            ? await supabase.auth.getSession().catch(() => null)
+            : null;
+          const accessToken = session?.data.session?.access_token;
 
-        if (!accessToken) {
-          return;
+          if (!accessToken) {
+            return;
+          }
+
+          headers.Authorization = `Bearer ${accessToken}`;
         }
 
-        headers.Authorization = `Bearer ${accessToken}`;
-      }
-
-      const response = await fetch(`/api/payments/stripe-return-status?${queryString}`, {
-        cache: "no-store",
-        headers,
-      });
-      const payload = (await response.json().catch(() => null)) as {
-        status?: StripeReturnStatus;
-      } | null;
-      if (
-        payload?.status &&
-        !canceled &&
-        requestSequence === requestSequenceRef.current
-      ) {
-        setStatus(payload.status);
+        const response = await fetch(`/api/payments/stripe-return-status?${queryString}`, {
+          cache: "no-store",
+          headers,
+        });
+        const payload = (await response.json().catch(() => null)) as {
+          ok?: boolean;
+          status?: StripeReturnStatus;
+        } | null;
+        if (
+          payload?.ok === true &&
+          payload.status &&
+          !canceled &&
+          requestSequence === requestSequenceRef.current
+        ) {
+          setStatus(payload.status);
+        }
+      } finally {
+        if (!canceled && requestSequence === requestSequenceRef.current) {
+          setPolls((current) => current + 1);
+        }
       }
     }, 2000);
 
