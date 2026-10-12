@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -38,7 +37,227 @@ type DashboardGateStep =
 
 const PROFILE_STEP_TIMEOUT_MS = 6000;
 const ACCESS_STEP_TIMEOUT_MS = 6000;
-const DASHBOARD_LOADING_IMAGE_SRC = "/images/homefixos-dashboard-loading.png";
+
+function HomeFixOsLoadingScreen() {
+  return (
+    <main
+      className="homefixos-loading-stage"
+      aria-busy="true"
+      aria-live="polite"
+    >
+      <section className="homefixos-loading-center" aria-label="Loading dashboard">
+        <div className="homefixos-loading-brand" aria-label="HomeFixOS">
+          <span className="homefixos-loading-home">HomeFix</span>
+          <span className="homefixos-loading-os">OS</span>
+        </div>
+        <div
+          className="homefixos-loading-ringWrap"
+          role="status"
+          aria-label="Loading dashboard"
+        >
+          <div className="homefixos-loading-ring" aria-hidden="true" />
+        </div>
+        <div className="homefixos-loading-glow" aria-hidden="true" />
+      </section>
+
+      <style jsx>{`
+        .homefixos-loading-stage {
+          min-height: 100vh;
+          min-height: 100svh;
+          width: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: hidden;
+          padding: 2.5rem 1rem;
+          color: #ffffff;
+          background:
+            radial-gradient(
+              ellipse 75% 48% at 50% 49%,
+              #0a2c5a 0%,
+              #071b39 43%,
+              #061426 100%
+            );
+        }
+
+        .homefixos-loading-center {
+          width: min(94vw, 900px);
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          padding: 2.5rem 0.5rem 4.75rem;
+        }
+
+        .homefixos-loading-brand {
+          display: flex;
+          align-items: baseline;
+          justify-content: center;
+          max-width: 100%;
+          white-space: nowrap;
+          overflow: visible;
+          font-size: clamp(2.875rem, 9vw, 6.375rem);
+          font-weight: 800;
+          letter-spacing: 0;
+          line-height: 1.2;
+          filter: drop-shadow(0 0 24px rgba(11, 91, 211, 0.17));
+        }
+
+        .homefixos-loading-home {
+          animation: homefixos-enter-left 1.25s cubic-bezier(0.18, 0.8, 0.18, 1)
+            both;
+        }
+
+        .homefixos-loading-os {
+          color: transparent;
+          background: linear-gradient(125deg, #16d7ff 0%, #0887ff 80%);
+          background-clip: text;
+          -webkit-background-clip: text;
+          animation: homefixos-enter-right 1.25s cubic-bezier(0.18, 0.8, 0.18, 1)
+            both;
+        }
+
+        .homefixos-loading-ringWrap {
+          position: relative;
+          display: grid;
+          place-items: center;
+          width: 5.875rem;
+          height: 5.875rem;
+          margin-top: 2.375rem;
+          animation: homefixos-reveal 0.65s 1.05s both;
+        }
+
+        .homefixos-loading-ring {
+          position: relative;
+          width: 4.6875rem;
+          height: 4.6875rem;
+          border-radius: 999px;
+          background: conic-gradient(
+            from 0deg,
+            transparent 0deg,
+            transparent 115deg,
+            #1762a8 200deg,
+            #168dff 280deg,
+            #29e7ff 345deg,
+            transparent 360deg
+          );
+          filter: drop-shadow(0 0 11px rgba(0, 186, 255, 0.53));
+          animation: homefixos-spin 1.12s linear infinite;
+        }
+
+        .homefixos-loading-ring::after {
+          content: "";
+          position: absolute;
+          inset: 0.5rem;
+          border-radius: inherit;
+          background: #082448;
+        }
+
+        .homefixos-loading-glow {
+          width: min(58vw, 390px);
+          height: 0.25rem;
+          margin-top: 1.625rem;
+          border-radius: 999px;
+          background: #008dff;
+          box-shadow:
+            0 0 11px 4px #0a8fff,
+            0 0 40px 12px rgba(6, 108, 255, 0.6);
+          filter: blur(2px);
+          animation:
+            homefixos-reveal 0.65s 1.05s both,
+            homefixos-pulse 2.1s 1.7s ease-in-out infinite;
+        }
+
+        @keyframes homefixos-enter-left {
+          from {
+            opacity: 0;
+            transform: translateX(-42vw);
+          }
+
+          to {
+            opacity: 1;
+            transform: translateX(0);
+          }
+        }
+
+        @keyframes homefixos-enter-right {
+          from {
+            opacity: 0;
+            transform: translateX(42vw);
+          }
+
+          to {
+            opacity: 1;
+            transform: translateX(0);
+          }
+        }
+
+        @keyframes homefixos-reveal {
+          from {
+            opacity: 0;
+            transform: translateY(12px);
+          }
+
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+
+        @keyframes homefixos-spin {
+          to {
+            transform: rotate(360deg);
+          }
+        }
+
+        @keyframes homefixos-pulse {
+          0%,
+          100% {
+            opacity: 0.45;
+            transform: scaleX(0.72);
+          }
+
+          50% {
+            opacity: 1;
+            transform: scaleX(1.08);
+          }
+        }
+
+        @media (max-width: 480px) {
+          .homefixos-loading-brand {
+            font-size: clamp(2.625rem, 11vw, 4.0625rem);
+          }
+
+          .homefixos-loading-ringWrap {
+            margin-top: 1.8125rem;
+          }
+
+          .homefixos-loading-glow {
+            width: 60vw;
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .homefixos-loading-home,
+          .homefixos-loading-os,
+          .homefixos-loading-ringWrap,
+          .homefixos-loading-ring,
+          .homefixos-loading-glow {
+            animation: none;
+          }
+
+          .homefixos-loading-home,
+          .homefixos-loading-os,
+          .homefixos-loading-ringWrap,
+          .homefixos-loading-glow {
+            opacity: 1;
+            transform: none;
+          }
+        }
+      `}</style>
+    </main>
+  );
+}
 
 function createGateTimeoutError(message: string): Error {
   return new Error(message);
@@ -255,19 +474,7 @@ export function DashboardAuthGate({ children }: DashboardAuthGateProps) {
     });
 
   if (gateState.status === "checking") {
-    return (
-      <main className="flex min-h-screen w-full items-center justify-center overflow-hidden bg-[#071321] px-6 py-10">
-        <Image
-          src={DASHBOARD_LOADING_IMAGE_SRC}
-          alt="HomeFixOS"
-          width={1559}
-          height={1009}
-          priority
-          className="h-auto max-h-[78vh] w-full max-w-[min(90vw,1120px)] object-contain"
-          sizes="(max-width: 640px) 90vw, 1120px"
-        />
-      </main>
-    );
+    return <HomeFixOsLoadingScreen />;
   }
 
   return (
