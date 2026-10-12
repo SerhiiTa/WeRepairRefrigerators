@@ -46,6 +46,10 @@ type EstimatePayload = {
     warrantyText: string | null;
     disclaimerText: string | null;
   };
+  depositSettings: {
+    depositType: "fixed" | "percent" | null;
+    depositValue: number | null;
+  };
   estimateDecisionContext?: Json | null;
 };
 
@@ -141,6 +145,86 @@ function cleanEstimateAdjustments(value: unknown): EstimatePayload["adjustments"
     discountType,
     discountValue,
     taxRate,
+  };
+}
+
+function calculatePayloadEstimateTotal({
+  customItems,
+  adjustments,
+}: {
+  customItems: EstimateCustomItemInput[];
+  adjustments: NonNullable<EstimatePayload["adjustments"]>;
+}) {
+  const subtotal = customItems.reduce(
+    (sum, item) => sum + item.quantity * item.unitPrice,
+    0,
+  );
+  const taxableSubtotal = customItems
+    .filter((item) => item.taxable !== false)
+    .reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+  const discountAmount =
+    adjustments.discountType === "percent"
+      ? Math.min(subtotal, subtotal * (adjustments.discountValue / 100))
+      : Math.min(subtotal, adjustments.discountValue);
+  const taxableDiscountShare =
+    subtotal > 0 ? (taxableSubtotal / subtotal) * discountAmount : 0;
+  const taxableAmount = Math.max(0, taxableSubtotal - taxableDiscountShare);
+  const tax = taxableAmount * (adjustments.taxRate / 100);
+
+  return Math.round((subtotal - discountAmount + tax) * 100) / 100;
+}
+
+function cleanEstimateDepositSettings(
+  value: unknown,
+  estimateTotal: number,
+):
+  | { ok: true; depositSettings: EstimatePayload["depositSettings"] }
+  | { ok: false; message: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {
+      ok: true,
+      depositSettings: { depositType: null, depositValue: null },
+    };
+  }
+
+  const rawValue = value as Record<string, unknown>;
+  const depositType =
+    rawValue.depositType === "fixed" || rawValue.depositType === "percent"
+      ? rawValue.depositType
+      : null;
+
+  if (!depositType) {
+    return {
+      ok: true,
+      depositSettings: { depositType: null, depositValue: null },
+    };
+  }
+
+  const numericValue = Number(rawValue.depositValue);
+
+  if (!Number.isFinite(numericValue) || numericValue <= 0) {
+    return { ok: false, message: "Deposit value must be greater than zero." };
+  }
+
+  const depositValue = Math.round(numericValue * 100) / 100;
+
+  if (depositType === "fixed" && depositValue > estimateTotal) {
+    return {
+      ok: false,
+      message: "Fixed deposit cannot exceed the Estimate total.",
+    };
+  }
+
+  if (depositType === "percent" && depositValue > 100) {
+    return {
+      ok: false,
+      message: "Deposit percentage cannot exceed 100%.",
+    };
+  }
+
+  return {
+    ok: true,
+    depositSettings: { depositType, depositValue },
   };
 }
 
@@ -285,13 +369,35 @@ async function readEstimatePayload(request: Request): Promise<
     };
   }
 
+  const adjustments = cleanEstimateAdjustments(payload.adjustments) ?? {
+    discountType: "flat",
+    discountValue: 0,
+    taxRate: 0,
+  };
+  const estimateTotal = calculatePayloadEstimateTotal({
+    customItems,
+    adjustments,
+  });
+  const depositSettingsResult = cleanEstimateDepositSettings(
+    payload.depositSettings,
+    estimateTotal,
+  );
+
+  if (!depositSettingsResult.ok) {
+    return {
+      ok: false,
+      response: fail(depositSettingsResult.message),
+    };
+  }
+
   return {
     ok: true,
     payload: {
       catalogItems,
       customItems,
-      adjustments: cleanEstimateAdjustments(payload.adjustments),
+      adjustments,
       metadata: cleanEstimateMetadata(payload.metadata),
+      depositSettings: depositSettingsResult.depositSettings,
       estimateDecisionContext: cleanJsonObject(payload.estimateDecisionContext),
     },
     rawPayload: payload,
@@ -377,6 +483,46 @@ async function persistEstimateMetadata({
   return { ok: true as const };
 }
 
+async function persistEstimateDepositSettings({
+  supabase,
+  estimateId,
+  depositSettings,
+}: {
+  supabase: EstimateSupabaseClient;
+  estimateId: string | null;
+  depositSettings: EstimatePayload["depositSettings"];
+}) {
+  if (!estimateId) {
+    return { ok: true as const };
+  }
+
+  const { error } = await supabase.rpc(
+    "update_service_request_estimate_deposit_settings_rpc" as never,
+    {
+      p_estimate_id: estimateId,
+      p_deposit_type: depositSettings.depositType,
+      p_deposit_value: depositSettings.depositValue,
+    } as never,
+  );
+
+  if (error) {
+    console.error("Manual estimate deposit settings persistence failed", {
+      message: error.message,
+      code: error.code,
+      details: error.details,
+      hint: error.hint,
+      operation: "update_estimate_deposit_settings",
+    });
+
+    return {
+      ok: false as const,
+      message: error.message,
+    };
+  }
+
+  return { ok: true as const };
+}
+
 export async function POST(
   request: Request,
   { params }: ServiceRequestEstimatesRouteProps,
@@ -419,6 +565,16 @@ export async function POST(
 
   if (!metadataResult.ok) {
     return fail("Estimate could not be fully saved. Please try again.", 500);
+  }
+
+  const depositResult = await persistEstimateDepositSettings({
+    supabase: auth.supabase,
+    estimateId,
+    depositSettings: parsed.payload.depositSettings,
+  });
+
+  if (!depositResult.ok) {
+    return fail("Estimate deposit settings could not be saved. Please try again.", 500);
   }
 
   await recordEstimateDecisionEvent({
@@ -476,6 +632,16 @@ export async function PATCH(request: Request) {
 
   if (!metadataResult.ok) {
     return fail("Estimate could not be fully saved. Please try again.", 500);
+  }
+
+  const depositResult = await persistEstimateDepositSettings({
+    supabase: auth.supabase,
+    estimateId,
+    depositSettings: parsed.payload.depositSettings,
+  });
+
+  if (!depositResult.ok) {
+    return fail("Estimate deposit settings could not be saved. Please try again.", 500);
   }
 
   await recordEstimateDecisionEvent({

@@ -21,6 +21,7 @@ import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { calculateRepairProposalTotals } from "@/server/finance/repair-proposal-calculations";
 
 type ManualEstimateLineType = "labor" | "part" | "service" | "fee" | "other";
+type EstimateDepositType = "none" | "fixed" | "percent";
 
 type ManualEstimateLine = {
   id: string;
@@ -633,6 +634,26 @@ function getInitialWarrantyText(
   );
 }
 
+function getInitialDepositType(
+  estimate: DashboardServiceRequestEstimate | null,
+): EstimateDepositType {
+  return estimate?.depositType === "fixed" || estimate?.depositType === "percent"
+    ? estimate.depositType
+    : "none";
+}
+
+function getInitialDepositValue(estimate: DashboardServiceRequestEstimate | null) {
+  return estimate?.depositType === "fixed" || estimate?.depositType === "percent"
+    ? String(estimate.depositValue ?? "")
+    : "";
+}
+
+function parseDepositInput(value: string) {
+  const parsed = Number(value);
+
+  return Number.isFinite(parsed) ? Math.round(parsed * 100) / 100 : NaN;
+}
+
 function EstimateWorkspacePortal({ children }: { children: ReactNode }) {
   if (typeof document === "undefined") {
     return null;
@@ -699,6 +720,12 @@ export function ManualEstimateEditor({
     String(initialEstimate?.discountValue ?? 0),
   );
   const [taxRate, setTaxRate] = useState(String(initialEstimate?.taxRate ?? 8.25));
+  const [depositType, setDepositType] = useState<EstimateDepositType>(
+    getInitialDepositType(initialEstimate),
+  );
+  const [depositValue, setDepositValue] = useState(
+    getInitialDepositValue(initialEstimate),
+  );
   const [itemDraft, setItemDraft] = useState<ItemDraftState>(null);
   const [openLineMenuId, setOpenLineMenuId] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>({
@@ -920,6 +947,31 @@ export function ManualEstimateEditor({
     discountValue: Number(discountValue),
     taxRate: Number(taxRate),
   });
+  const parsedDepositValue = parseDepositInput(depositValue);
+  const calculatedRequiredDeposit =
+    depositType === "fixed"
+      ? Math.min(Number.isFinite(parsedDepositValue) ? parsedDepositValue : 0, totals.total)
+      : depositType === "percent"
+        ? Math.min(
+            Math.round((totals.total * (Number.isFinite(parsedDepositValue) ? parsedDepositValue : 0)) / 100 * 100) / 100,
+            totals.total,
+          )
+        : 0;
+  const remainingAfterDeposit = Math.max(0, totals.total - calculatedRequiredDeposit);
+  const depositErrors =
+    depositType === "none"
+      ? []
+      : [
+          !Number.isFinite(parsedDepositValue) || parsedDepositValue <= 0
+            ? "Deposit value must be greater than zero."
+            : null,
+          depositType === "fixed" && parsedDepositValue > totals.total
+            ? "Fixed deposit cannot exceed the Estimate total."
+            : null,
+          depositType === "percent" && parsedDepositValue > 100
+            ? "Deposit percentage cannot exceed 100%."
+            : null,
+        ].filter((error): error is string => Boolean(error));
   const hasCustomerLinkage = Boolean(request.customerName || request.customerId);
   const itemErrors = new Map<string, string[]>();
 
@@ -954,6 +1006,7 @@ export function ManualEstimateEditor({
       candidateLines.some((line) => line.quantity <= 0)
       ? "Every item quantity must be greater than zero."
       : null,
+      ...depositErrors,
     ].filter((error): error is string => Boolean(error));
   }
 
@@ -1096,8 +1149,12 @@ export function ManualEstimateEditor({
       discountType,
       discountValue,
       taxRate,
+      depositType,
+      depositValue,
     });
   }, [
+    depositType,
+    depositValue,
     discountType,
     discountValue,
     estimatedCompletion,
@@ -1153,6 +1210,8 @@ export function ManualEstimateEditor({
     setDiscountType(initialEstimate.discountType ?? "flat");
     setDiscountValue(String(initialEstimate.discountValue ?? 0));
     setTaxRate(String(initialEstimate.taxRate ?? 8.25));
+    setDepositType(getInitialDepositType(initialEstimate));
+    setDepositValue(getInitialDepositValue(initialEstimate));
     setLastSavedSignature(nextSignature);
     lastSavedSignatureRef.current = nextSignature;
   }, [
@@ -1390,6 +1449,11 @@ export function ManualEstimateEditor({
         discountType,
         discountValue: totals.discountValue,
         taxRate: totals.taxRate,
+      },
+      depositSettings: {
+        depositType,
+        depositValue:
+          depositType === "none" ? null : Math.round(parsedDepositValue * 100) / 100,
       },
       metadata: {
         customerPreviewNotes: JSON.stringify({
@@ -1905,6 +1969,11 @@ export function ManualEstimateEditor({
     }
   }
 
+  async function reviseEstimateForDepositSettings() {
+    setActiveWorkspaceTab("details");
+    await reviseEstimate();
+  }
+
   async function deleteEstimate() {
     if (!savedEstimateId || !canDeleteEstimate) {
       return;
@@ -2243,6 +2312,111 @@ export function ManualEstimateEditor({
                 readOnly={!canEditFinancialFields}
                 value={repairSolution}
               />
+            </div>
+            <div className="rounded-2xl border border-[#E5E7EB] bg-white p-4 lg:col-span-2">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h3 className="text-base font-black text-[#0F172A]">
+                    Deposit Settings
+                  </h3>
+                  <p className="mt-1 text-sm font-semibold leading-6 text-[#64748B]">
+                    These terms become customer-facing only after the Estimate is approved.
+                  </p>
+                </div>
+                {!canEditFinancialFields && canReviseEstimate ? (
+                  <button
+                    className="inline-flex min-h-11 items-center justify-center rounded-xl border border-amber-200 bg-amber-50 px-4 text-sm font-black text-amber-800 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={pendingAction === "revise"}
+                    onClick={() => void reviseEstimateForDepositSettings()}
+                    type="button"
+                  >
+                    {pendingAction === "revise" ? "Opening..." : "Edit in Draft Revision"}
+                  </button>
+                ) : null}
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                <label className="block">
+                  <span className="text-xs font-black text-[#64748B]">
+                    Deposit Type
+                  </span>
+                  <select
+                    className="mt-1 w-full rounded-xl border border-[#D7DEE8] bg-white px-3 py-3 text-sm font-black text-[#0F172A] disabled:bg-[#F8FAFC] disabled:text-[#64748B]"
+                    disabled={!canEditFinancialFields}
+                    onChange={(event) => {
+                      const nextType =
+                        event.target.value === "fixed" ||
+                        event.target.value === "percent"
+                          ? event.target.value
+                          : "none";
+                      setDepositType(nextType);
+                      if (nextType === "none") {
+                        setDepositValue("");
+                      }
+                      resetFeedback();
+                    }}
+                    value={depositType}
+                  >
+                    <option value="none">No Deposit</option>
+                    <option value="fixed">Fixed Amount ($)</option>
+                    <option value="percent">Percentage (%)</option>
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="text-xs font-black text-[#64748B]">
+                    Deposit Value
+                  </span>
+                  <div className="mt-1 flex overflow-hidden rounded-xl border border-[#D7DEE8] bg-white focus-within:border-[#0F6BFF] focus-within:ring-4 focus-within:ring-blue-100">
+                    <span className="flex w-12 shrink-0 items-center justify-center border-r border-[#D7DEE8] bg-[#F8FAFC] text-sm font-black text-[#64748B]">
+                      {depositType === "percent" ? "%" : "$"}
+                    </span>
+                    <input
+                      className="min-w-0 flex-1 px-3 py-3 text-right text-sm font-black text-[#0F172A] outline-none disabled:bg-[#F8FAFC] disabled:text-[#64748B]"
+                      disabled={!canEditFinancialFields || depositType === "none"}
+                      inputMode="decimal"
+                      min="0"
+                      onChange={(event) => {
+                        setDepositValue(event.target.value);
+                        resetFeedback();
+                      }}
+                      placeholder={depositType === "none" ? "None" : "0.00"}
+                      step="0.01"
+                      type="number"
+                      value={depositType === "none" ? "" : depositValue}
+                    />
+                  </div>
+                </label>
+              </div>
+              {depositErrors.length > 0 ? (
+                <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-900">
+                  {depositErrors[0]}
+                </p>
+              ) : null}
+              <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
+                <div className="rounded-xl bg-[#F8FAFC] p-3">
+                  <dt className="text-xs font-black uppercase tracking-[0.12em] text-[#64748B]">
+                    Calculated Required Deposit
+                  </dt>
+                  <dd className="mt-1 text-lg font-black text-[#0F172A]">
+                    {formatServiceRequestMoney(calculatedRequiredDeposit)}
+                  </dd>
+                </div>
+                <div className="rounded-xl bg-[#F8FAFC] p-3">
+                  <dt className="text-xs font-black uppercase tracking-[0.12em] text-[#64748B]">
+                    Estimate Total
+                  </dt>
+                  <dd className="mt-1 text-lg font-black text-[#0F172A]">
+                    {formatServiceRequestMoney(totals.total)}
+                  </dd>
+                </div>
+                <div className="rounded-xl bg-[#F8FAFC] p-3">
+                  <dt className="text-xs font-black uppercase tracking-[0.12em] text-[#64748B]">
+                    Remaining After Deposit
+                  </dt>
+                  <dd className="mt-1 text-lg font-black text-[#0F172A]">
+                    {formatServiceRequestMoney(remainingAfterDeposit)}
+                  </dd>
+                </div>
+              </dl>
             </div>
           </div>
         ) : null}

@@ -19,6 +19,17 @@ const invoiceRoute = readFileSync(
   resolve(root, "frontend/src/app/api/estimates/[id]/invoice/route.ts"),
   "utf8",
 );
+const estimateSaveRoute = readFileSync(
+  resolve(root, "frontend/src/app/api/service-requests/[id]/estimates/route.ts"),
+  "utf8",
+);
+const depositSettingsMigration = readFileSync(
+  resolve(
+    root,
+    "supabase/migrations/0136_estimate_deposit_settings_rpc_apply_ready.sql",
+  ),
+  "utf8",
+);
 
 function includesAll(source, values) {
   for (const value of values) {
@@ -55,6 +66,14 @@ includesAll(editor, [
   "Terms",
   "Attachments",
   "History",
+  "Deposit Settings",
+  "Deposit Type",
+  "Deposit Value",
+  "Calculated Required Deposit",
+  "Remaining After Deposit",
+  "Fixed Amount ($)",
+  "Percentage (%)",
+  "Edit in Draft Revision",
   "lg:static",
   "max-w-6xl",
   "pb-[calc(7.5rem+env(safe-area-inset-bottom))]",
@@ -164,6 +183,26 @@ assert.match(
   /canEditFinancialFields \? \([\s\S]*?Discount type[\s\S]*?\) : null/,
   "Discount and tax controls should be hidden outside draft editing.",
 );
+assert.match(
+  editor,
+  /depositSettings: \{[\s\S]*?depositType,[\s\S]*?depositValue:[\s\S]*?depositType === "none" \? null/,
+  "Estimate save payload must include normalized deposit settings.",
+);
+assert.match(
+  editor,
+  /depositType === "fixed"[\s\S]*?Fixed deposit cannot exceed the Estimate total\./,
+  "Fixed deposit validation must prevent deposits above the Estimate total.",
+);
+assert.match(
+  editor,
+  /depositType === "percent"[\s\S]*?Deposit percentage cannot exceed 100%\./,
+  "Percentage deposit validation must prevent values above 100%.",
+);
+assert.match(
+  editor,
+  /async function reviseEstimateForDepositSettings\(\)[\s\S]*?setActiveWorkspaceTab\("details"\);[\s\S]*?await reviseEstimate\(\);/,
+  "Approved Estimate deposit changes must go through the Draft Revision flow.",
+);
 
 includesAll(detail, [
   "onCollectPayment={(estimate) =>",
@@ -258,5 +297,47 @@ includesAll(invoiceRoute, [
   "service_request_id",
   "Choose a valid approved estimate to invoice.",
 ]);
+
+includesAll(estimateSaveRoute, [
+  "depositSettings",
+  "cleanEstimateDepositSettings",
+  "persistEstimateDepositSettings",
+  "update_service_request_estimate_deposit_settings_rpc",
+  "p_deposit_type: depositSettings.depositType",
+  "p_deposit_value: depositSettings.depositValue",
+]);
+assert.match(
+  estimateSaveRoute,
+  /depositType === "fixed"[\s\S]*?depositValue > estimateTotal/,
+  "Server-side fixed deposit validation must use the Estimate total.",
+);
+assert.match(
+  estimateSaveRoute,
+  /depositType === "percent"[\s\S]*?depositValue > 100/,
+  "Server-side percentage deposit validation must cap at 100%.",
+);
+includesAll(depositSettingsMigration, [
+  "create or replace function public.update_service_request_estimate_deposit_settings_rpc",
+  "security definer",
+  "set search_path = public",
+  "where p.id = auth.uid()",
+  "v_status <> 'draft'",
+  "user_can_access_company(v_company_id)",
+  "deposit_type = null",
+  "deposit_value = null",
+  "deposit_type = v_deposit_type",
+  "deposit_value = v_deposit_value",
+  "grant execute on function public.update_service_request_estimate_deposit_settings_rpc(uuid, text, numeric) to authenticated",
+]);
+assert.match(
+  depositSettingsMigration,
+  /v_deposit_type = 'fixed'[\s\S]*?v_deposit_value > coalesce\(v_total, 0\)/,
+  "Deposit settings RPC must prevent fixed deposits above the Estimate total.",
+);
+assert.match(
+  depositSettingsMigration,
+  /v_deposit_type = 'percent'[\s\S]*?v_deposit_value > 100/,
+  "Deposit settings RPC must prevent percentages above 100%.",
+);
 
 console.log("estimate-workspace-redesign static contract: PASS");
