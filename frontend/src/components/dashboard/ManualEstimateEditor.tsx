@@ -94,7 +94,7 @@ type ManualEstimateEditorProps = {
   estimates?: DashboardServiceRequestEstimate[];
   activeEstimateId?: string | null;
   onClose: () => void;
-  onSaved: () => Promise<void> | void;
+  onSaved: (result?: SaveResult) => Promise<void> | void;
   onSwitchEstimate?: (estimate: DashboardServiceRequestEstimate) => void;
   onApproveForCustomer: (estimate: {
     id: string;
@@ -1645,7 +1645,11 @@ export function ManualEstimateEditor({
         status: "success",
         message: "Saved",
       });
-      await onSaved();
+      await onSaved(
+        nextEstimateId
+          ? { id: nextEstimateId, estimateNumber: nextEstimateNumber }
+          : null,
+      );
 
       return nextEstimateId
         ? { id: nextEstimateId, estimateNumber: nextEstimateNumber }

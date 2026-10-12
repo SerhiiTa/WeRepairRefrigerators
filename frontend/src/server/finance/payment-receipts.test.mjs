@@ -12,6 +12,9 @@ function read(path) {
 const migration = read(
   "supabase/migrations/0140_payment_receipts_foundation_apply_ready.sql",
 );
+const receiptRepairMigration = read(
+  "supabase/migrations/0141_payment_receipt_rpc_allocation_status_repair_apply_ready.sql",
+);
 const receipts = read("frontend/src/server/finance/payment-receipts.ts");
 const webhookAccounting = read(
   "frontend/src/server/finance/stripe-webhook-accounting.ts",
@@ -49,6 +52,24 @@ test("0140 creates one hashed-token receipt per canonical successful payment", (
   assert.match(migration, /select coalesce\(max\(receipt_sequence\), 0\) \+ 1/);
   assert.match(migration, /'RCP-' \|\| job_number_text \|\| '-' \|\| lpad\(next_sequence::text, 3, '0'\)/);
   assert.doesNotMatch(migration, /'receipt-sms:' \|\| payment_row\.id::text/);
+});
+
+test("0141 repairs receipt creation for the actual Finance V2 allocation schema", () => {
+  assert.match(
+    receiptRepairMigration,
+    /create or replace function public\.ensure_service_request_payment_receipt_rpc/,
+  );
+  assert.match(
+    receiptRepairMigration,
+    /from public\.service_request_payment_allocations allocation[\s\S]*allocation\.allocation_status = 'active'/,
+  );
+  assert.doesNotMatch(receiptRepairMigration, /allocation\.voided_at/);
+  assert.match(receiptRepairMigration, /where payment_id = payment_row\.id[\s\S]*for update/);
+  assert.match(receiptRepairMigration, /pg_advisory_xact_lock\(hashtextextended\(payment_row\.service_request_id::text, 302\)\)/);
+  assert.match(receiptRepairMigration, /payment_row\.payment_status <> 'succeeded'/);
+  assert.match(receiptRepairMigration, /coalesce\(payment_row\.provider, ''\) <> 'stripe'/);
+  assert.match(receiptRepairMigration, /coalesce\(payment_row\.payment_method, ''\) <> 'card'/);
+  assert.match(receiptRepairMigration, /grant execute on function public\.ensure_service_request_payment_receipt_rpc\(uuid\) to service_role/);
 });
 
 test("0140 supports manual idempotent receipt delivery finalization", () => {

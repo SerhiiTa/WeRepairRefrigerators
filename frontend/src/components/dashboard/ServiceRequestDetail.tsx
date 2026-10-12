@@ -5541,6 +5541,7 @@ export function ServiceRequestDetail({
       null;
 
     if (authoritativeEstimate) {
+      setFinanceEstimateMode("saved");
       setManualEstimateId(authoritativeEstimate.id);
       setViewingEstimateId(authoritativeEstimate.id);
       setViewingInvoiceId(null);
@@ -14055,8 +14056,26 @@ export function ServiceRequestDetail({
 
               openPaymentWorkflow(target);
             }}
-            onSaved={async () => {
-              await loadEstimates();
+            onSaved={async (result) => {
+              const loadedEstimates = await loadEstimates();
+
+              if (!result?.id) {
+                return;
+              }
+
+              const savedEstimate =
+                loadedEstimates.find((estimate) => estimate.id === result.id) ??
+                null;
+
+              if (!savedEstimate) {
+                return;
+              }
+
+              setFinanceEstimateMode("saved");
+              setManualEstimateId(savedEstimate.id);
+              setViewingEstimateId(savedEstimate.id);
+              setViewingInvoiceId(null);
+              syncEstimateWorkspaceHistory(savedEstimate.id, "replace");
             }}
             onSwitchEstimate={(estimate) =>
               openSavedManualEstimateEditor(estimate, { history: "replace" })

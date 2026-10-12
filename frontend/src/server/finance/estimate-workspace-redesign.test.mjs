@@ -219,8 +219,24 @@ includesAll(detail, [
   "const [loadedEstimates] = await Promise.all([loadEstimates(), loadNotes()]);",
   "estimate.estimateStatus === \"approved\"",
   "estimate.revisionStatus === \"current\"",
+  "setFinanceEstimateMode(\"saved\");",
   "setManualEstimateId(authoritativeEstimate.id)",
 ]);
+assert.match(
+  editor,
+  /onSaved: \(result\?: SaveResult\) => Promise<void> \| void;/,
+  "Manual Estimate saves must pass the saved Estimate identity back to the Job workspace.",
+);
+assert.match(
+  editor,
+  /await onSaved\([\s\S]*?nextEstimateId[\s\S]*?id: nextEstimateId[\s\S]*?estimateNumber: nextEstimateNumber[\s\S]*?\);/,
+  "Manual Estimate save must report the authoritative saved Estimate ID to the parent.",
+);
+assert.match(
+  detail,
+  /onSaved=\{async \(result\) => \{[\s\S]*?const loadedEstimates = await loadEstimates\(\);[\s\S]*?loadedEstimates\.find\(\(estimate\) => estimate\.id === result\.id\)[\s\S]*?setFinanceEstimateMode\("saved"\);[\s\S]*?setManualEstimateId\(savedEstimate\.id\)[\s\S]*?syncEstimateWorkspaceHistory\(savedEstimate\.id, "replace"\);/,
+  "New Estimate save must promote the editor from manual/new mode to the saved Estimate workspace.",
+);
 assert.match(
   detail,
   /setPendingManualEstimateAddItem\([\s\S]*?await loadEstimates\(\);[\s\S]*?setManualEstimateId\(payload\.estimate\.id\)/,
