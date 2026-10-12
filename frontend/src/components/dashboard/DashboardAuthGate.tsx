@@ -223,8 +223,8 @@ export function DashboardAuthGate({ children }: DashboardAuthGateProps) {
           width={1559}
           height={1009}
           priority
-          className="h-auto w-full max-w-[min(82vw,760px)] object-contain"
-          sizes="(max-width: 640px) 82vw, 760px"
+          className="h-auto max-h-[78vh] w-full max-w-[min(90vw,1120px)] object-contain"
+          sizes="(max-width: 640px) 90vw, 1120px"
         />
       </main>
     );
