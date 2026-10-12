@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
+import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { StripeReturnStatus } from "@/server/finance/stripe-return-status";
 
 type StripeSuccessExperienceProps = {
@@ -60,7 +61,9 @@ export function StripeSuccessExperience({
   }, [query.attempt, query.returnPath, query.token]);
 
   const shouldPoll =
-    status.authorized && status.paymentStatus === "processing" && polls < 8;
+    ((status.authorized && status.paymentStatus === "processing") ||
+      (!status.authorized && Boolean(dashboardReturnPath) && Boolean(query.attempt))) &&
+    polls < 8;
 
   useEffect(() => {
     if (!shouldPoll || !queryString) {
@@ -69,8 +72,25 @@ export function StripeSuccessExperience({
 
     const timeout = window.setTimeout(async () => {
       setPolls((current) => current + 1);
+      const headers: HeadersInit = {};
+
+      if (dashboardReturnPath && !query.token) {
+        const supabase = getSupabaseBrowserClient();
+        const session = supabase
+          ? await supabase.auth.getSession().catch(() => null)
+          : null;
+        const accessToken = session?.data.session?.access_token;
+
+        if (!accessToken) {
+          return;
+        }
+
+        headers.Authorization = `Bearer ${accessToken}`;
+      }
+
       const response = await fetch(`/api/payments/stripe-return-status?${queryString}`, {
         cache: "no-store",
+        headers,
       });
       const payload = (await response.json().catch(() => null)) as {
         status?: StripeReturnStatus;
@@ -81,7 +101,7 @@ export function StripeSuccessExperience({
     }, 2000);
 
     return () => window.clearTimeout(timeout);
-  }, [queryString, shouldPoll]);
+  }, [dashboardReturnPath, query.attempt, query.token, queryString, shouldPoll]);
 
   if (!status.authorized) {
     return (

@@ -214,6 +214,12 @@ includesAll(detail, [
   "depositPaid={",
   "estimateUsesJobLevelPaidCredit(manualEstimate)",
   "getEstimateLogicalPaidCreditCents(manualEstimate)",
+  "const approvedEstimateId = isPersistedEstimateUuid(payload.estimate?.id ?? \"\")",
+  "const approvedLogicalEstimateId =",
+  "const [loadedEstimates] = await Promise.all([loadEstimates(), loadNotes()]);",
+  "estimate.estimateStatus === \"approved\"",
+  "estimate.revisionStatus === \"current\"",
+  "setManualEstimateId(authoritativeEstimate.id)",
 ]);
 assert.match(
   detail,

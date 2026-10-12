@@ -123,13 +123,17 @@ test("dashboard exposes manual receipt view and delivery controls", () => {
 
 test("success page waits for receipt-backed verified payment", () => {
   assert.match(returnStatus, /ensure_service_request_payment_receipt_rpc/);
+  assert.match(returnStatus, /existingReceipt/);
   assert.match(returnStatus, /finalAttempt\.checkout_status === "succeeded"[\s\S]*loadPaymentReceipt/);
   assert.match(returnStatus, /finalAttempt\.checkout_status === "succeeded"[\s\S]*"processing"/);
   assert.match(successPage, /StripeSuccessExperience/);
   assert.match(successExperience, /polls < 8/);
   assert.match(successExperience, /api\/payments\/stripe-return-status/);
+  assert.match(successExperience, /Authorization/);
   assert.match(successExperience, /Payment Successful!/);
   assert.match(successExperience, /View Receipt/);
+  assert.match(statusRoute, /requireHomeFixPrivateAccess/);
+  assert.match(statusRoute, /loadDashboardStripeReturnStatus/);
   assert.match(statusRoute, /Cache-Control": "no-store"/);
 });
 

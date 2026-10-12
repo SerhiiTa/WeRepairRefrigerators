@@ -28,17 +28,40 @@ export async function POST(request: Request) {
   }
 
   const rawBody = await request.text();
+  let event;
 
   try {
-    const event = stripe.webhooks.constructEvent(
+    event = stripe.webhooks.constructEvent(
       rawBody,
       signature,
       config.webhookSecret,
     );
+  } catch {
+    console.error("[stripe-webhook-diagnostic]", {
+      errorCategory: "signature_verification_failed",
+      stage: "signature",
+    });
+    return NextResponse.json(
+      { ok: false, message: "Stripe webhook could not be verified or processed." },
+      { status: 400 },
+    );
+  }
+
+  try {
     const result = await processStripeWebhookEvent(event, rawBody);
 
     return NextResponse.json({ ok: true, result });
-  } catch {
+  } catch (error) {
+    console.error("[stripe-webhook-diagnostic]", {
+      errorCategory: "processing_failed",
+      eventId: event.id,
+      eventType: event.type,
+      message:
+        error instanceof Error && process.env.NODE_ENV !== "production"
+          ? error.message
+          : undefined,
+      stage: "processing",
+    });
     return NextResponse.json(
       { ok: false, message: "Stripe webhook could not be verified or processed." },
       { status: 400 },

@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { getSupabaseServiceRoleClient } from "@/lib/supabase/service-role";
-import type { Json } from "@/lib/supabase/types";
+import type { Database, Json } from "@/lib/supabase/types";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { getStripeClient, getStripeRuntimeConfig } from "./stripe-config";
 
@@ -163,6 +164,16 @@ async function loadPaymentReceipt(
     return null;
   }
 
+  const { data: existingReceipt, error: existingReceiptError } = await (serviceRole as any)
+    .from("service_request_payment_receipts")
+    .select("id")
+    .eq("payment_id", paymentId)
+    .maybeSingle();
+
+  if (existingReceiptError || !existingReceipt?.id) {
+    return null;
+  }
+
   const { data: receiptTokenData, error: receiptTokenError } = await (serviceRole as any).rpc(
     "ensure_service_request_payment_receipt_rpc",
     {
@@ -194,6 +205,105 @@ async function loadPaymentReceipt(
     ...(data as Omit<PaymentReceiptRow, "receipt_token">),
     job_number: requestData?.job_number ? String(requestData.job_number) : null,
     receipt_token: receiptTokenData.receipt_token,
+  };
+}
+
+async function getCheckoutAttemptById(
+  attemptId: string | null,
+): Promise<CheckoutAttemptRow | null> {
+  if (!attemptId || !UUID_PATTERN.test(attemptId)) {
+    return null;
+  }
+
+  const serviceRole = getSupabaseServiceRoleClient();
+
+  if (!serviceRole) {
+    return null;
+  }
+
+  const { data, error } = await (serviceRole as any)
+    .from("service_request_payment_checkout_attempts")
+    .select(
+      "id,amount,checkout_kind,checkout_metadata,checkout_status,estimate_id,invoice_id,provider_checkout_session_id,provider_payment_intent_id,service_request_id,succeeded_payment_id,target_type",
+    )
+    .eq("id", attemptId)
+    .maybeSingle();
+
+  if (error || !data) {
+    return null;
+  }
+
+  return data as CheckoutAttemptRow;
+}
+
+async function canViewDashboardPaymentAttempt(
+  supabase: SupabaseClient<Database>,
+  serviceRequestId: string,
+) {
+  const { data, error } = await supabase.rpc("can_view_service_request" as never, {
+    p_service_request_id: serviceRequestId,
+  } as never);
+
+  return !error && data === true;
+}
+
+export async function loadDashboardStripeReturnStatus(params: {
+  attemptId: string | null;
+  dashboardReturnPath?: string | null;
+  supabase: SupabaseClient<Database>;
+}): Promise<StripeReturnStatus> {
+  const hasSafeDashboardReturn =
+    typeof params.dashboardReturnPath === "string" &&
+    params.dashboardReturnPath.startsWith("/dashboard") &&
+    !params.dashboardReturnPath.startsWith("//") &&
+    !params.dashboardReturnPath.includes("\\") &&
+    !params.dashboardReturnPath.includes("\n");
+
+  if (!hasSafeDashboardReturn) {
+    return { authorized: false, state: "unauthorized" };
+  }
+
+  const attempt = await getCheckoutAttemptById(params.attemptId);
+
+  if (!attempt) {
+    return { authorized: false, state: "not_found" };
+  }
+
+  if (!(await canViewDashboardPaymentAttempt(params.supabase, attempt.service_request_id))) {
+    return { authorized: false, state: "unauthorized" };
+  }
+
+  const receipt =
+    attempt.checkout_status === "succeeded"
+      ? await loadPaymentReceipt(attempt.succeeded_payment_id, attempt.service_request_id)
+      : null;
+
+  return {
+    amount: asMoney(attempt.amount) ?? "0.00",
+    authorized: true,
+    balanceDue: null,
+    documentHref: params.dashboardReturnPath ?? "/dashboard",
+    documentNumber: null,
+    paid: null,
+    paymentStatus: receipt
+      ? paymentState(attempt)
+      : attempt.checkout_status === "succeeded"
+        ? "processing"
+        : paymentState(attempt),
+    receipt: receipt
+      ? {
+          amount: asMoney(receipt.amount) ?? "0.00",
+          cardBrand: receipt.card_brand,
+          cardLast4: receipt.card_last4,
+          href: `/receipts/${receipt.receipt_token}`,
+          jobNumber: receipt.job_number,
+          paidAt: receipt.paid_at,
+          paymentMethod: receipt.payment_method,
+          receiptNumber: receipt.receipt_number,
+        }
+      : null,
+    targetType: attempt.target_type,
+    total: null,
   };
 }
 

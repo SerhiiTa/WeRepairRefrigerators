@@ -2954,7 +2954,7 @@ export function ServiceRequestDetail({
         estimates: [],
         error: "Estimates are not available for this workspace.",
       });
-      return;
+      return [];
     }
 
     const { data, error } = await supabase
@@ -2972,16 +2972,20 @@ export function ServiceRequestDetail({
           : error.message;
 
       setEstimatesState({ status: "error", estimates: [], error: message });
-      return;
+      return [];
     }
+
+    const estimates = (data as unknown as ServiceRequestEstimateRow[]).map(
+      mapServiceRequestEstimateRow,
+    );
 
     setEstimatesState({
       status: "ready",
-      estimates: (data as unknown as ServiceRequestEstimateRow[]).map(
-        mapServiceRequestEstimateRow,
-      ),
+      estimates,
       error: null,
     });
+
+    return estimates;
   }
 
   async function loadInvoices() {
@@ -5428,10 +5432,13 @@ export function ServiceRequestDetail({
       ok?: boolean;
       message?: string;
       estimate?: {
+        id?: string;
         estimate_status?: DashboardServiceRequestEstimate["estimateStatus"];
         service_request_status?: string;
         customer_responded_at?: string | null;
         approval_source?: "customer" | "technician_manual";
+        logical_estimate_id?: string | null;
+        revision_status?: DashboardServiceRequestEstimate["revisionStatus"];
       };
     } | null;
 
@@ -5471,8 +5478,15 @@ export function ServiceRequestDetail({
 
     const approvedAt =
       payload.estimate?.customer_responded_at ?? new Date().toISOString();
+    const approvedEstimateId = isPersistedEstimateUuid(payload.estimate?.id ?? "")
+      ? payload.estimate?.id ?? estimateId
+      : estimateId;
+    const approvedLogicalEstimateId =
+      typeof payload.estimate?.logical_estimate_id === "string"
+        ? payload.estimate.logical_estimate_id
+        : null;
 
-    setViewingEstimateId(estimateId);
+    setViewingEstimateId(approvedEstimateId);
     setViewingInvoiceId(null);
     setEstimatesState((current) => {
       if (current.status !== "ready") {
@@ -5482,7 +5496,7 @@ export function ServiceRequestDetail({
       return {
         status: "ready",
         estimates: current.estimates.map((currentEstimate) =>
-          currentEstimate.id === estimateId
+          currentEstimate.id === approvedEstimateId
             ? {
                 ...currentEstimate,
                 estimateStatus: "approved",
@@ -5513,7 +5527,25 @@ export function ServiceRequestDetail({
       status: "success",
       message: "Estimate approved by technician on behalf of customer.",
     });
-    await Promise.all([loadEstimates(), loadNotes()]);
+    const [loadedEstimates] = await Promise.all([loadEstimates(), loadNotes()]);
+    const authoritativeEstimate =
+      loadedEstimates.find((estimate) => estimate.id === approvedEstimateId) ??
+      loadedEstimates.find(
+        (estimate) =>
+          estimate.estimateStatus === "approved" &&
+          estimate.revisionStatus === "current" &&
+          (approvedLogicalEstimateId
+            ? (estimate.logicalEstimateId ?? estimate.id) === approvedLogicalEstimateId
+            : estimate.id === estimateId),
+      ) ??
+      null;
+
+    if (authoritativeEstimate) {
+      setManualEstimateId(authoritativeEstimate.id);
+      setViewingEstimateId(authoritativeEstimate.id);
+      setViewingInvoiceId(null);
+    }
+
     return { ok: true as const };
   }
 
@@ -14023,7 +14055,9 @@ export function ServiceRequestDetail({
 
               openPaymentWorkflow(target);
             }}
-            onSaved={loadEstimates}
+            onSaved={async () => {
+              await loadEstimates();
+            }}
             onSwitchEstimate={(estimate) =>
               openSavedManualEstimateEditor(estimate, { history: "replace" })
             }

@@ -100,6 +100,11 @@ test("Webhook route verifies raw Stripe signature before processing", () => {
   assert.match(webhookRoute, /stripe\.webhooks\.constructEvent\(/);
   assert.match(webhookRoute, /config\.webhookSecret/);
   assert.match(webhookRoute, /production_sandbox_pilot/);
+  assert.match(webhookRoute, /\[stripe-webhook-diagnostic\]/);
+  assert.match(webhookRoute, /errorCategory: "signature_verification_failed"/);
+  assert.match(webhookRoute, /errorCategory: "processing_failed"/);
+  assert.match(webhookRoute, /eventId: event\.id/);
+  assert.match(webhookRoute, /eventType: event\.type/);
   assert.doesNotMatch(webhookRoute, /request\.json\(\)/);
 });
 
@@ -142,6 +147,8 @@ test("Webhook accounting dedupes provider events and posts canonical ledger only
 test("Stripe return pages require customer token authorization for payment details", () => {
   assert.match(stripeSuccessPage, /loadStripeReturnStatus/);
   assert.match(stripeSuccessPage, /StripeSuccessExperience/);
+  assert.match(stripeSuccessExperience, /getSupabaseBrowserClient/);
+  assert.match(stripeSuccessExperience, /headers\.Authorization = `Bearer \$\{accessToken\}`/);
   assert.match(stripeSuccessExperience, /Verifying payment/);
   assert.match(stripeSuccessExperience, /Payment Successful!/);
   assert.match(stripeSuccessExperience, /View Receipt/);
@@ -157,6 +164,10 @@ test("Stripe return pages require customer token authorization for payment detai
 
   assert.match(stripeReturnStatus, /TOKEN_PATTERN/);
   assert.match(stripeReturnStatus, /UUID_PATTERN/);
+  assert.match(stripeReturnStatus, /loadDashboardStripeReturnStatus/);
+  assert.match(stripeReturnStatus, /canViewDashboardPaymentAttempt/);
+  assert.match(stripeReturnStatus, /can_view_service_request/);
+  assert.match(stripeReturnStatus, /existingReceipt/);
   assert.match(stripeReturnStatus, /hasSafeDashboardReturn/);
   assert.match(stripeReturnStatus, /dashboardReturnPath/);
   assert.match(stripeReturnStatus, /get_public_estimate_by_token_rpc/);
