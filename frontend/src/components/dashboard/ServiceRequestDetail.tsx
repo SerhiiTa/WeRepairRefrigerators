@@ -2168,10 +2168,27 @@ export function ServiceRequestDetail({
         if (!matchingEstimate) {
           return;
         }
+        const matchingLogicalEstimateId =
+          matchingEstimate.logicalEstimateId ?? matchingEstimate.id;
+        const workspaceEstimate =
+          estimatesState.estimates.find(
+            (estimate) =>
+              estimate.estimateStatus === "draft" &&
+              estimate.revisionStatus === "draft" &&
+              (estimate.logicalEstimateId ?? estimate.id) ===
+                matchingLogicalEstimateId,
+          ) ??
+          estimatesState.estimates.find(
+            (estimate) =>
+              estimate.revisionStatus === "current" &&
+              (estimate.logicalEstimateId ?? estimate.id) ===
+                matchingLogicalEstimateId,
+          ) ??
+          matchingEstimate;
 
         setActiveJobTab("estimate");
         setIsFinanceEstimatesOpen(true);
-        setManualEstimateId(matchingEstimate.id);
+        setManualEstimateId(workspaceEstimate.id);
         setFinanceEstimateMode("saved");
         setIsFinanceEstimateWorkflowOpen(false);
         setIsRepairProposalBuilderOpen(false);
@@ -9331,6 +9348,11 @@ export function ServiceRequestDetail({
     const paymentTarget = manualPaymentTargets.find(
       (target) => target.type === "estimate" && target.id === estimate.id,
     );
+    const depositAction = paymentTarget?.cardActions.find(
+      (action) => action.kind === "deposit" && action.amountCents > 0,
+    );
+    const paymentActionLabel = depositAction ? "Collect Deposit" : "Collect Payment";
+    const paymentSummaryLabel = depositAction ? "Deposit paid" : "Paid";
 
     return (
       <article
@@ -9377,7 +9399,7 @@ export function ServiceRequestDetail({
           {estimate.estimateStatus === "approved" && !linkedInvoice ? (
             <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-xs font-bold text-[#64748B]">
-                Deposit paid {formatServiceRequestMoney(depositPaid)} · Remaining{" "}
+                {paymentSummaryLabel} {formatServiceRequestMoney(depositPaid)} · Remaining{" "}
                 {formatServiceRequestMoney(remainingDeposit)}
               </p>
               <button
@@ -9391,7 +9413,7 @@ export function ServiceRequestDetail({
                 }}
                 type="button"
               >
-                Collect Deposit
+                {paymentActionLabel}
               </button>
             </div>
           ) : null}

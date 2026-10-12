@@ -1522,7 +1522,7 @@ export function ManualEstimateEditor({
       if (source !== "autosave") {
         setSaveState({
           status: "error",
-          message: "Approved estimates are read-only. Duplicate this estimate to make changes.",
+          message: "Approved estimates are read-only. Open a Draft Revision to make changes.",
         });
       }
 
@@ -3005,7 +3005,7 @@ export function ManualEstimateEditor({
           </div>
         ) : (
           <div className="rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-3 text-center text-sm font-black text-[#64748B]">
-            This estimate is read-only. Duplicate it to make changes.
+            This estimate is read-only. Open a Draft Revision to make changes.
           </div>
         )}
       </div>

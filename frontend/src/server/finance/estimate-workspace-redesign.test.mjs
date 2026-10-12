@@ -83,8 +83,8 @@ includesAll(editor, [
   "isAddItemMenuOpen",
   "Add Item",
   "canEditFinancialFields",
-  "Approved estimates are read-only. Duplicate this estimate to make changes.",
-  "This estimate is read-only. Duplicate it to make changes.",
+  "Approved estimates are read-only. Open a Draft Revision to make changes.",
+  "This estimate is read-only. Open a Draft Revision to make changes.",
 ]);
 
 const sendForApprovalCount = (editor.match(/Send for Approval/g) ?? []).length;
@@ -135,6 +135,10 @@ assert.match(
   editor,
   /estimateStatus === "approved"[\s\S]*?Collect Payment/,
   "Approved estimates should expose Collect Payment through the shared action area.",
+);
+assert.ok(
+  editor.includes("Open a Draft Revision") && editor.includes("Duplicate"),
+  "Read-only guidance should point approved Estimate edits to Draft Revision while preserving the separate Duplicate action.",
 );
 assert.match(
   editor,
@@ -247,6 +251,11 @@ assert.match(
 );
 assert.match(
   detail,
+  /const matchingLogicalEstimateId =[\s\S]*?matchingEstimate\.logicalEstimateId \?\? matchingEstimate\.id;[\s\S]*?const workspaceEstimate =[\s\S]*?estimate\.estimateStatus === "draft"[\s\S]*?estimate\.revisionStatus === "draft"[\s\S]*?estimate\.revisionStatus === "current"[\s\S]*?setManualEstimateId\(workspaceEstimate\.id\)/,
+  "Estimate route synchronization must open the resolved workspace document, not a stale logical root revision.",
+);
+assert.match(
+  detail,
   /if \(tab === "finance"\) \{[\s\S]*?!options\.allowWorkspaceClose[\s\S]*financeEstimateMode === "manual"[\s\S]*financeEstimateMode === "saved"[\s\S]*return;[\s\S]*setManualEstimateId\(null\)/,
   "Refresh-driven route sync must not close an active Estimate editor after a successful item save.",
 );
@@ -276,6 +285,9 @@ includesAll(detail, [
   "allocatedEstimate?.logicalEstimateId",
   "allocationLogicalId === estimateLogicalId",
   "getEstimateLogicalPaidCreditCents(manualEstimate)",
+  "const depositAction = paymentTarget?.cardActions.find(",
+  "const paymentActionLabel = depositAction ? \"Collect Deposit\" : \"Collect Payment\"",
+  "const paymentSummaryLabel = depositAction ? \"Deposit paid\" : \"Paid\"",
   "Invoice Update Required",
   "financeInvoiceSyncRequired",
   "financeInvoiceSyncDifference",
