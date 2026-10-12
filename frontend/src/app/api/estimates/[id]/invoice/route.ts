@@ -60,6 +60,63 @@ function formatInvoiceError(message: string): string {
     : `Invoice creation failed: ${message}`;
 }
 
+function createInvoiceSyncRequestId(): string {
+  return `invoice_sync_${crypto.randomUUID()}`;
+}
+
+function categorizeInvoiceSyncError(
+  error: { code?: string; message?: string } | null,
+): string {
+  const code = error?.code ?? null;
+  const message = error?.message ?? "";
+
+  if (code === "42501" || message.includes("permission denied")) {
+    return "permission_denied";
+  }
+
+  if (code === "28000" || message.includes("Authentication is required")) {
+    return "authentication_required";
+  }
+
+  if (code === "P0002" || message.includes("not found")) {
+    return "not_found";
+  }
+
+  if (
+    code === "23514" ||
+    message.includes("Active checkout") ||
+    message.includes("no_approved_scope")
+  ) {
+    return "business_rule";
+  }
+
+  if (
+    message.includes("schema cache") ||
+    message.includes("Could not find the function")
+  ) {
+    return "schema_cache";
+  }
+
+  return code ? "database_error" : "unknown";
+}
+
+function logInvoiceSyncDiagnostic(details: {
+  requestId: string;
+  stage: "estimate_lookup" | "sync_rpc";
+  success: boolean;
+  errorCode?: string | null;
+  category?: string;
+}) {
+  console.info("[invoice-sync-diagnostic]", {
+    operation: "invoice_sync",
+    requestId: details.requestId,
+    stage: details.stage,
+    success: details.success,
+    errorCode: details.errorCode ?? null,
+    category: details.category ?? null,
+  });
+}
+
 async function requireInvoiceSupabase(request: Request) {
   const accessToken = extractBearerToken(request);
 
@@ -99,6 +156,7 @@ export async function POST(
   request: Request,
   { params }: EstimateInvoiceRouteProps,
 ) {
+  const requestId = createInvoiceSyncRequestId();
   const auth = await requireInvoiceSupabase(request);
 
   if (!auth.ok) {
@@ -118,12 +176,34 @@ export async function POST(
     .maybeSingle();
 
   if (estimateError) {
+    logInvoiceSyncDiagnostic({
+      requestId,
+      stage: "estimate_lookup",
+      success: false,
+      errorCode: estimateError.code ?? null,
+      category: categorizeInvoiceSyncError(estimateError),
+    });
+
     return fail(formatInvoiceError(estimateError.message), 403);
   }
 
   if (!estimate?.service_request_id) {
+    logInvoiceSyncDiagnostic({
+      requestId,
+      stage: "estimate_lookup",
+      success: false,
+      errorCode: null,
+      category: "not_found",
+    });
+
     return fail("Estimate not found.", 404);
   }
+
+  logInvoiceSyncDiagnostic({
+    requestId,
+    stage: "estimate_lookup",
+    success: true,
+  });
 
   const { data, error } = await auth.supabase.rpc(
     "sync_job_invoice_from_approved_estimates_rpc",
@@ -133,8 +213,22 @@ export async function POST(
   );
 
   if (error) {
+    logInvoiceSyncDiagnostic({
+      requestId,
+      stage: "sync_rpc",
+      success: false,
+      errorCode: error.code ?? null,
+      category: categorizeInvoiceSyncError(error),
+    });
+
     return fail(formatInvoiceError(error.message), 403);
   }
+
+  logInvoiceSyncDiagnostic({
+    requestId,
+    stage: "sync_rpc",
+    success: true,
+  });
 
   return NextResponse.json({
     ok: true,
