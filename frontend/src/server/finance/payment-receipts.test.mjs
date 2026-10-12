@@ -144,7 +144,7 @@ test("dashboard exposes manual receipt view and delivery controls", () => {
   assert.match(serviceRequestDetail, /Receipt delivery history is unavailable:/);
   assert.match(serviceRequestDetail, /stripeReturnRefreshKeyRef/);
   assert.match(serviceRequestDetail, /tab !== "finance"/);
-  assert.match(serviceRequestDetail, /Promise\.all\(\[loadPayments\(\), loadEstimates\(\), loadInvoices\(\)\]\)/);
+  assert.match(serviceRequestDetail, /Promise\.all\(\[loadPayments\(\), loadInvoices\(\)\]\)/);
 });
 
 test("success page waits for receipt-backed verified payment", () => {

@@ -2449,7 +2449,7 @@ export function ServiceRequestDetail({
     }
 
     stripeReturnRefreshKeyRef.current = refreshKey;
-    void Promise.all([loadPayments(), loadEstimates(), loadInvoices()]);
+    void Promise.all([loadPayments(), loadInvoices()]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestId]);
 
