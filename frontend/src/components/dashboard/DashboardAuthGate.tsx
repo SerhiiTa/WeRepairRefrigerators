@@ -37,7 +37,39 @@ type DashboardGateStep =
     };
 
 const PROFILE_STEP_TIMEOUT_MS = 6000;
+const ACCESS_STEP_TIMEOUT_MS = 6000;
 const DASHBOARD_LOADING_IMAGE_SRC = "/images/homefixos-dashboard-loading.png";
+
+function createGateTimeoutError(message: string): Error {
+  return new Error(message);
+}
+
+async function withGateTimeout<T>({
+  promise,
+  timeoutMs,
+  timeoutMessage,
+}: {
+  promise: PromiseLike<T>;
+  timeoutMs: number;
+  timeoutMessage: string;
+}): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(createGateTimeoutError(timeoutMessage));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
 
 export function DashboardAuthGate({ children }: DashboardAuthGateProps) {
   const pathname = usePathname();
@@ -107,11 +139,16 @@ export function DashboardAuthGate({ children }: DashboardAuthGateProps) {
           ) {
             const supabase = getSupabaseBrowserClient();
             const customerResult = supabase
-              ? await supabase
-                  .from("customers")
-                  .select("id")
-                  .eq("auth_user_id", profileResult.session.user.id)
-                  .maybeSingle()
+              ? await withGateTimeout({
+                  promise: supabase
+                    .from("customers")
+                    .select("id")
+                    .eq("auth_user_id", profileResult.session.user.id)
+                    .maybeSingle(),
+                  timeoutMs: ACCESS_STEP_TIMEOUT_MS,
+                  timeoutMessage:
+                    "Customer portal access lookup timed out before dashboard access could be verified.",
+                })
               : null;
 
             shouldUseCustomerPortal = Boolean(
@@ -147,9 +184,12 @@ export function DashboardAuthGate({ children }: DashboardAuthGateProps) {
             "Evaluating dashboard role, status, onboarding, and HomeFix access.",
         });
 
-        const homeFixAccess = await evaluateHomeFixPrivateAccess(
-          getSupabaseBrowserClient(),
-        );
+        const homeFixAccess = await withGateTimeout({
+          promise: evaluateHomeFixPrivateAccess(getSupabaseBrowserClient()),
+          timeoutMs: ACCESS_STEP_TIMEOUT_MS,
+          timeoutMessage:
+            "HomeFix private access check timed out before dashboard access could be verified.",
+        });
         const decision = evaluateDashboardAccess({
           pathname,
           profileResult,
