@@ -12,6 +12,9 @@ function read(path) {
 const migration = read(
   "supabase/migrations/0128_finance_v2_checkout_paid_credit_alignment_apply_ready.sql",
 );
+const jobBalanceAlignmentMigration = read(
+  "supabase/migrations/0138_finance_v2_stripe_estimate_job_balance_alignment_apply_ready.sql",
+);
 const publicInvoiceAuthRepair = read(
   "supabase/migrations/0129_public_invoice_checkout_token_authorization_repair_apply_ready.sql",
 );
@@ -56,6 +59,74 @@ test("Finance V2 webhook posting preserves canonical ledger and posts to current
   assert.match(migration, /insert into public\.service_request_payment_allocations/);
   assert.match(migration, /finance_v2_job_credit_allocation/);
   assert.match(migration, /target_invoice_id := current_invoice_row\.id/);
+});
+
+test("Finance V2 Stripe Estimate checkout uses current Job approved scope instead of only the target Estimate total", () => {
+  assert.match(
+    jobBalanceAlignmentMigration,
+    /service_request_payment_checkout_attempts_kind_check[\s\S]*custom_deposit/,
+  );
+  assert.match(
+    jobBalanceAlignmentMigration,
+    /create or replace function public\.get_service_request_payment_eligibility_rpc/,
+  );
+  assert.match(
+    jobBalanceAlignmentMigration,
+    /scope := public\.get_service_request_effective_approved_scope_rpc\(estimate_row\.service_request_id\);/,
+  );
+  assert.match(
+    jobBalanceAlignmentMigration,
+    /target_total := approved_total;/,
+  );
+  assert.match(
+    jobBalanceAlignmentMigration,
+    /remaining_amount := greatest\(target_total - paid_credit - reserved_amount, 0\);/,
+  );
+  assert.match(
+    jobBalanceAlignmentMigration,
+    /approved_scope_estimate\.value::uuid/,
+  );
+  assert.match(
+    jobBalanceAlignmentMigration,
+    /estimate_not_in_current_scope/,
+  );
+  assert.doesNotMatch(
+    jobBalanceAlignmentMigration,
+    /target_total := estimate_row\.total;/,
+    "Estimate checkout must not compare total of one Estimate against all Job-level paid credit.",
+  );
+});
+
+test("Finance V2 Stripe posting validates against remaining Job balance without double-counting its own reservation", () => {
+  assert.match(
+    jobBalanceAlignmentMigration,
+    /create or replace function public\.record_stripe_checkout_payment_rpc/,
+  );
+  assert.match(
+    jobBalanceAlignmentMigration,
+    /scope := public\.get_service_request_effective_approved_scope_rpc\(attempt_row\.service_request_id\);/,
+  );
+  assert.match(
+    jobBalanceAlignmentMigration,
+    /other_reserved_amount := greatest\(active_reserved_amount - attempt_row\.amount, 0\);/,
+  );
+  assert.match(
+    jobBalanceAlignmentMigration,
+    /available_amount := greatest\(target_total - paid_credit - other_reserved_amount, 0\);/,
+  );
+  assert.match(
+    jobBalanceAlignmentMigration,
+    /Cannot post payment to an Estimate outside the current approved Job scope/,
+  );
+  assert.match(
+    jobBalanceAlignmentMigration,
+    /finance_v2_other_active_reserved_before_posting/,
+  );
+  assert.doesNotMatch(
+    jobBalanceAlignmentMigration,
+    /available_amount := greatest\(target_total - paid_credit, 0\);/,
+    "Webhook posting must account for other active reservations without subtracting the completed attempt twice.",
+  );
 });
 
 test("public Invoice Checkout is token-scoped and avoids dashboard authorization", () => {
