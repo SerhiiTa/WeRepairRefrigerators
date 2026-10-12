@@ -46,12 +46,14 @@ test("Stripe QA config allows only explicit local Test Mode keys", () => {
   assert.match(stripeConfig, /new Stripe\(process\.env\.STRIPE_SECRET_KEY/);
 });
 
-test("Checkout route requires dashboard auth and never accepts client amount", () => {
+test("Checkout route requires dashboard auth and only accepts custom amount for bounded custom deposits", () => {
   assert.match(checkoutRoute, /requireHomeFixPrivateAccess\(request\)/);
   assert.match(checkoutRoute, /createStripeCheckoutSession\(privateAccess\.context\.supabase/);
   assert.match(checkoutRoute, /getSafeDashboardReturnPath/);
   assert.match(checkoutRoute, /returnPath/);
-  assert.doesNotMatch(checkoutRoute, /payload\.amount|amountCents|unit_amount/);
+  assert.match(checkoutRoute, /checkoutKind === "custom_deposit"/);
+  assert.match(checkoutRoute, /requestedAmountCents/);
+  assert.doesNotMatch(checkoutRoute, /payload\.amount\b/);
 });
 
 test("Checkout server calculates eligibility before reserving exact amount", () => {
@@ -65,6 +67,8 @@ test("Checkout server calculates eligibility before reserving exact amount", () 
   assert.ok(eligibilityIndex >= 0, "Eligibility RPC must be called.");
   assert.ok(reserveIndex > eligibilityIndex, "Reservation must follow eligibility calculation.");
   assert.match(checkoutServer, /selectedAction\?\.max_amount \?\? selectedAction\?\.amount/);
+  assert.match(checkoutServer, /getDashboardCheckoutAmountCents/);
+  assert.match(checkoutServer, /requestedAmountCents > maxCollectibleCents/);
   assert.match(checkoutServer, /p_amount: amount/);
   assert.match(checkoutServer, /buildRequestFingerprint/);
   assert.match(checkoutServer, /idempotencyKey: `checkout:\$\{params\.attempt\.id\}`/);

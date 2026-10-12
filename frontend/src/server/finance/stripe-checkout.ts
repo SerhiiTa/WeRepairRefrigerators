@@ -13,7 +13,7 @@ import {
 } from "./stripe-config";
 
 type CheckoutTargetType = "estimate" | "invoice";
-type CheckoutKind = "deposit" | "pay_in_full" | "balance_due";
+type CheckoutKind = "deposit" | "custom_deposit" | "pay_in_full" | "balance_due";
 
 type PaymentAction = {
   kind: CheckoutKind;
@@ -28,6 +28,7 @@ type EligibilityPayload = {
   company_id?: string;
   status?: string;
   invoice_redirect_id?: string | null;
+  remaining_balance?: number | string;
   actions?: PaymentAction[];
   reasons?: string[];
 };
@@ -67,6 +68,7 @@ export type CreateStripeCheckoutInput = {
   targetId: string;
   checkoutKind: CheckoutKind;
   idempotencyKey: string;
+  requestedAmountCents?: number | null;
   revisionId?: string | null;
   origin: string;
   returnPath?: string | null;
@@ -181,6 +183,67 @@ function getEligibleAction(eligibility: EligibilityPayload, kind: CheckoutKind) 
   return Array.isArray(eligibility.actions)
     ? eligibility.actions.find((action) => action.kind === kind)
     : undefined;
+}
+
+function getMaxCollectibleCents(
+  eligibility: EligibilityPayload,
+  targetType: CheckoutTargetType,
+) {
+  const fullBalanceAction = getEligibleAction(
+    eligibility,
+    targetType === "invoice" ? "balance_due" : "pay_in_full",
+  );
+
+  return parseMoneyToCents(
+    fullBalanceAction?.max_amount ??
+      fullBalanceAction?.amount ??
+      eligibility.remaining_balance,
+  );
+}
+
+function getDashboardCheckoutAmountCents(input: {
+  checkoutKind: CheckoutKind;
+  eligibility: EligibilityPayload;
+  requestedAmountCents?: number | null;
+  targetType: CheckoutTargetType;
+}) {
+  if (input.checkoutKind === "custom_deposit") {
+    const requestedAmountCents = input.requestedAmountCents;
+    const maxCollectibleCents = getMaxCollectibleCents(
+      input.eligibility,
+      input.targetType,
+    );
+
+    if (
+      !Number.isInteger(requestedAmountCents) ||
+      requestedAmountCents === undefined ||
+      requestedAmountCents === null ||
+      requestedAmountCents <= 0
+    ) {
+      throw new Error("Enter a valid custom deposit amount.");
+    }
+
+    if (maxCollectibleCents <= 0) {
+      throw new Error("This Job is already paid in full.");
+    }
+
+    if (requestedAmountCents > maxCollectibleCents) {
+      throw new Error("Custom deposit exceeds the current collectible balance.");
+    }
+
+    return requestedAmountCents;
+  }
+
+  const selectedAction = getEligibleAction(input.eligibility, input.checkoutKind);
+  const amountCents = parseMoneyToCents(
+    selectedAction?.max_amount ?? selectedAction?.amount,
+  );
+
+  if (!selectedAction || amountCents <= 0) {
+    throw new Error("That payment action is not available for this target.");
+  }
+
+  return amountCents;
 }
 
 function getEligibilityReasons(eligibility: EligibilityPayload) {
@@ -1115,14 +1178,12 @@ export async function createStripeCheckoutSession(
   }
 
 
-  const selectedAction = getEligibleAction(eligibility, input.checkoutKind);
-  const amountCents = parseMoneyToCents(
-    selectedAction?.max_amount ?? selectedAction?.amount,
-  );
-
-  if (!selectedAction || amountCents <= 0) {
-    throw new Error("That payment action is not available for this target.");
-  }
+  const amountCents = getDashboardCheckoutAmountCents({
+    checkoutKind: input.checkoutKind,
+    eligibility,
+    requestedAmountCents: input.requestedAmountCents,
+    targetType: input.targetType,
+  });
 
   const amount = centsToDollars(amountCents);
   const fingerprint = buildRequestFingerprint({

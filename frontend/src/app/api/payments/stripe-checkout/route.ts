@@ -4,7 +4,7 @@ import { createStripeCheckoutSession } from "@/server/finance/stripe-checkout";
 import { requireHomeFixPrivateAccess } from "@/server/security/homefix-private-access";
 
 type CheckoutTargetType = "estimate" | "invoice";
-type CheckoutKind = "deposit" | "pay_in_full" | "balance_due";
+type CheckoutKind = "deposit" | "custom_deposit" | "pay_in_full" | "balance_due";
 
 function fail(message: string, status = 400) {
   return NextResponse.json({ ok: false, message }, { status });
@@ -28,6 +28,19 @@ function getSafeDashboardReturnPath(value: unknown): string | null {
   }
 
   return path.slice(0, 300);
+}
+
+function getRequestedAmountCents(value: unknown): number | null {
+  const numeric =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim().length > 0
+        ? Number(value)
+        : null;
+
+  return Number.isInteger(numeric) && numeric !== null && numeric > 0
+    ? numeric
+    : null;
 }
 
 function formatCheckoutError(message: string) {
@@ -74,6 +87,7 @@ export async function POST(request: Request) {
   const checkoutKind = getString(payload.checkoutKind) as CheckoutKind | null;
   const idempotencyKey = getString(payload.idempotencyKey);
   const revisionId = getString(payload.revisionId);
+  const requestedAmountCents = getRequestedAmountCents(payload.requestedAmountCents);
   const returnPath = getSafeDashboardReturnPath(payload.returnPath);
 
   if (targetType !== "estimate" && targetType !== "invoice") {
@@ -82,10 +96,15 @@ export async function POST(request: Request) {
 
   if (
     checkoutKind !== "deposit" &&
+    checkoutKind !== "custom_deposit" &&
     checkoutKind !== "pay_in_full" &&
     checkoutKind !== "balance_due"
   ) {
     return fail("Choose a supported checkout action.");
+  }
+
+  if (checkoutKind === "custom_deposit" && requestedAmountCents === null) {
+    return fail("Enter a valid custom deposit amount.");
   }
 
   if (!targetId) {
@@ -102,6 +121,8 @@ export async function POST(request: Request) {
       targetId,
       checkoutKind,
       idempotencyKey,
+      requestedAmountCents:
+        checkoutKind === "custom_deposit" ? requestedAmountCents : null,
       revisionId,
       origin: new URL(request.url).origin,
       returnPath,

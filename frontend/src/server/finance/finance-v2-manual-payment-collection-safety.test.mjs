@@ -12,9 +12,13 @@ function read(path) {
 const migration = read(
   "supabase/migrations/0135_finance_v2_manual_payment_collectible_safety_apply_ready.sql",
 );
+const customDepositMigration = read(
+  "supabase/migrations/0137_technician_custom_deposit_checkout_apply_ready.sql",
+);
 const serviceRequestDetail = read(
   "frontend/src/components/dashboard/ServiceRequestDetail.tsx",
 );
+const stripeCheckoutServer = read("frontend/src/server/finance/stripe-checkout.ts");
 const serviceRequestRecords = read("frontend/src/lib/service-request-records.ts");
 
 test("manual payment RPC uses Finance V2 job-level collectible balance", () => {
@@ -66,7 +70,7 @@ test("manual collection UI uses current Job balance and combined Invoice provena
   );
 });
 
-test("technician card collection uses Stripe Checkout without client amount", () => {
+test("technician card collection supports bounded custom deposits", () => {
   assert.match(serviceRequestRecords, /"deposit_type"/);
   assert.match(serviceRequestRecords, /"deposit_value"/);
   assert.match(serviceRequestRecords, /depositType:/);
@@ -81,14 +85,30 @@ test("technician card collection uses Stripe Checkout without client amount", ()
   assert.match(serviceRequestDetail, /checkoutKind/);
   assert.match(serviceRequestDetail, /"pay_in_full"/);
   assert.match(serviceRequestDetail, /"deposit"/);
+  assert.match(serviceRequestDetail, /"custom_deposit"/);
   assert.match(serviceRequestDetail, /"balance_due"/);
+  assert.match(serviceRequestDetail, /Custom Deposit/);
+  assert.match(serviceRequestDetail, /customDepositMode/);
+  assert.match(serviceRequestDetail, /customDepositPercent/);
+  assert.match(serviceRequestDetail, /requestedAmountCents/);
   assert.match(serviceRequestDetail, /window\.location\.assign\(payload\.checkoutUrl\)/);
   assert.match(serviceRequestDetail, /Card details are entered in Stripe secure checkout/);
-  assert.match(serviceRequestDetail, /Card amounts are calculated by HomeFixOS/);
+  assert.match(serviceRequestDetail, /Never silently substitute a different amount|Custom deposit exceeds the current collectible balance|Selected/);
   assert.doesNotMatch(
     serviceRequestDetail,
     /\/api\/payments\/stripe-checkout[\s\S]{0,500}amount:/,
-    "Dashboard Stripe checkout must not send a browser-computed amount.",
+    "Dashboard Stripe checkout must not send legacy unvalidated amount fields.",
+  );
+
+  assert.match(stripeCheckoutServer, /getDashboardCheckoutAmountCents/);
+  assert.match(stripeCheckoutServer, /requestedAmountCents > maxCollectibleCents/);
+  assert.match(stripeCheckoutServer, /Custom deposit exceeds the current collectible balance/);
+  assert.match(customDepositMigration, /normalized_checkout_kind = 'custom_deposit'/);
+  assert.match(customDepositMigration, /max_collectible_amount/);
+  assert.match(customDepositMigration, /round\(p_amount, 2\) > round\(max_collectible_amount, 2\)/);
+  assert.match(
+    customDepositMigration,
+    /custom_deposit_authorized', normalized_checkout_kind = 'custom_deposit'/,
   );
 });
 

@@ -411,6 +411,17 @@ function parseMoneyInputToCents(value: string): number | null {
   return Number.parseInt(dollars, 10) * 100 + Number.parseInt(cents.padEnd(2, "0"), 10);
 }
 
+function parsePercentInput(value: string): number | null {
+  const normalized = value.trim().replace(/[%\s]/g, "");
+
+  if (!/^\d+(?:\.\d{0,2})?$/.test(normalized) || normalized === "") {
+    return null;
+  }
+
+  const percent = Number(normalized);
+  return Number.isFinite(percent) ? percent : null;
+}
+
 function buildPaymentIdempotencyKey() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -623,7 +634,8 @@ type InvoiceDeliveryDraft = {
 
 type ManualPaymentTargetType = "estimate" | "invoice";
 type ManualPaymentMethod = "cash" | "check" | "zelle" | "venmo" | "cash_app" | "card";
-type CardCheckoutKind = "deposit" | "pay_in_full" | "balance_due";
+type CardCheckoutKind = "deposit" | "custom_deposit" | "pay_in_full" | "balance_due";
+type CustomDepositMode = "fixed" | "percent";
 type ManualPaymentVoidReason =
   | "payment_not_received"
   | "entered_by_mistake"
@@ -654,6 +666,8 @@ type ManualPaymentDraft = {
   targetId: string;
   amount: string;
   checkoutKind: CardCheckoutKind;
+  customDepositMode: CustomDepositMode;
+  customDepositPercent: string;
   paymentMethod: ManualPaymentMethod;
   referenceCode: string;
   note: string;
@@ -667,6 +681,7 @@ type ManualPaymentTarget = {
     kind: CardCheckoutKind;
     label: string;
   }>;
+  depositSuggestionCents: number;
   id: string;
   type: ManualPaymentTargetType;
   label: string;
@@ -7634,6 +7649,15 @@ export function ServiceRequestDetail({
               kind: "pay_in_full" as const,
               label: "Pay in Full",
             },
+            {
+              amountCents: depositDueCents > 0 ? depositDueCents : remainingCents,
+              detail:
+                depositDueCents > 0
+                  ? "Suggested from Estimate deposit"
+                  : "Choose amount",
+              kind: "custom_deposit" as const,
+              label: "Custom Deposit",
+            },
             ...(depositDueCents > 0
               ? [
                   {
@@ -7652,6 +7676,7 @@ export function ServiceRequestDetail({
           type: "estimate" as const,
           label: `Deposit on ${estimate.estimateNumber}`,
           detail: "Approved Estimate",
+          depositSuggestionCents: depositDueCents,
           total: estimate.total,
           paid: centsToMoney(paidCents),
           remaining: centsToMoney(remainingCents),
@@ -7674,6 +7699,7 @@ export function ServiceRequestDetail({
           type: "invoice" as const,
           label: `Payment toward ${invoice.invoiceNumber}`,
           detail: "Invoice",
+          depositSuggestionCents: 0,
           total: centsToMoney(totalCents),
           paid: centsToMoney(validPaidCreditCents),
           remaining: centsToMoney(financeBalanceDueCents),
@@ -7703,6 +7729,36 @@ export function ServiceRequestDetail({
         ) ??
         selectedManualPaymentTarget.cardActions[0] ??
         null;
+  const customDepositBaseCents =
+    selectedManualPaymentTarget?.type === "estimate"
+      ? moneyToCents(selectedManualPaymentTarget.total)
+      : moneyToCents(selectedManualPaymentTarget?.remaining ?? 0);
+  const customDepositMaxCents = moneyToCents(
+    selectedManualPaymentTarget?.remaining ?? 0,
+  );
+  const customDepositFixedCents =
+    manualPaymentDraft?.checkoutKind === "custom_deposit"
+      ? parseMoneyInputToCents(manualPaymentDraft.amount)
+      : null;
+  const customDepositPercent =
+    manualPaymentDraft?.checkoutKind === "custom_deposit"
+      ? parsePercentInput(manualPaymentDraft.customDepositPercent)
+      : null;
+  const selectedCardAmountCents =
+    manualPaymentDraft?.checkoutKind === "custom_deposit"
+      ? manualPaymentDraft.customDepositMode === "percent"
+        ? customDepositPercent === null || customDepositPercent <= 0
+          ? null
+          : Math.min(
+              Math.round((customDepositBaseCents * customDepositPercent) / 100),
+              customDepositMaxCents,
+            )
+        : customDepositFixedCents
+      : selectedCardCheckoutAction?.amountCents ?? null;
+  const selectedCardRemainingAfterCents =
+    selectedCardAmountCents === null
+      ? null
+      : Math.max(0, customDepositMaxCents - selectedCardAmountCents);
   const selectedManualPaymentVoid =
     manualPaymentVoidDraft === null
       ? null
@@ -8937,6 +8993,8 @@ export function ServiceRequestDetail({
       targetId: nextTarget.id,
       amount: formatCentsAsInput(moneyToCents(nextTarget.remaining)),
       checkoutKind: defaultCheckoutKind,
+      customDepositMode: "fixed",
+      customDepositPercent: "30",
       paymentMethod: "cash",
       referenceCode: "",
       note: "",
@@ -8964,6 +9022,8 @@ export function ServiceRequestDetail({
         target.cardActions.find((action) => action.kind === "pay_in_full")?.kind ??
         target.cardActions[0]?.kind ??
         (target.type === "invoice" ? "balance_due" : "pay_in_full"),
+      customDepositMode: current?.customDepositMode ?? "fixed",
+      customDepositPercent: current?.customDepositPercent ?? "30",
       paymentMethod: current?.paymentMethod ?? "cash",
       referenceCode: current?.referenceCode ?? "",
       note: current?.note ?? "",
@@ -9106,8 +9166,7 @@ export function ServiceRequestDetail({
     }
 
     const remainingCents =
-      selectedCardCheckoutAction?.amountCents ??
-      moneyToCents(selectedManualPaymentTarget.remaining);
+      selectedCardAmountCents ?? moneyToCents(selectedManualPaymentTarget.remaining);
 
     if (remainingCents <= 0) {
       setManualPaymentState({
@@ -9152,6 +9211,37 @@ export function ServiceRequestDetail({
       selectedCardCheckoutAction?.kind ??
       (selectedManualPaymentTarget.type === "invoice" ? "balance_due" : "pay_in_full");
 
+    if (checkoutKind === "custom_deposit") {
+      if (
+        manualPaymentDraft.customDepositMode === "percent" &&
+        (customDepositPercent === null ||
+          customDepositPercent <= 0 ||
+          customDepositPercent > 100)
+      ) {
+        setManualPaymentState({
+          status: "error",
+          message: "Enter a custom deposit percentage greater than 0 and no more than 100%.",
+        });
+        return;
+      }
+
+      if (selectedCardAmountCents === null || selectedCardAmountCents <= 0) {
+        setManualPaymentState({
+          status: "error",
+          message: "Enter a valid custom deposit amount.",
+        });
+        return;
+      }
+
+      if (selectedCardAmountCents > moneyToCents(selectedManualPaymentTarget.remaining)) {
+        setManualPaymentState({
+          status: "error",
+          message: "Custom deposit exceeds the current collectible balance.",
+        });
+        return;
+      }
+    }
+
     setManualPaymentState({
       status: "saving",
       message: "Opening Stripe Checkout...",
@@ -9182,6 +9272,8 @@ export function ServiceRequestDetail({
           targetType: selectedManualPaymentTarget.type,
           targetId: selectedManualPaymentTarget.id,
           checkoutKind,
+          requestedAmountCents:
+            checkoutKind === "custom_deposit" ? selectedCardAmountCents : undefined,
           idempotencyKey: manualPaymentDraft.idempotencyKey,
           returnPath,
         }),
@@ -16992,7 +17084,9 @@ export function ServiceRequestDetail({
                       className="min-w-0 flex-1 px-3 py-3 text-xl font-black text-[#0F172A] outline-none sm:text-lg"
                       disabled={
                         manualPaymentState.status === "saving" ||
-                        manualPaymentDraft.paymentMethod === "card"
+                        (manualPaymentDraft.paymentMethod === "card" &&
+                          (manualPaymentDraft.checkoutKind !== "custom_deposit" ||
+                            manualPaymentDraft.customDepositMode === "percent"))
                       }
                       id="manual-payment-amount"
                       inputMode="decimal"
@@ -17004,10 +17098,19 @@ export function ServiceRequestDetail({
                         setManualPaymentState({ status: "idle", message: null });
                       }}
                       placeholder="0.00"
-                      value={manualPaymentDraft.amount}
+                      value={
+                        manualPaymentDraft.paymentMethod === "card" &&
+                        manualPaymentDraft.checkoutKind === "custom_deposit" &&
+                        manualPaymentDraft.customDepositMode === "percent"
+                          ? selectedCardAmountCents === null
+                            ? ""
+                            : formatCentsAsInput(selectedCardAmountCents)
+                          : manualPaymentDraft.amount
+                      }
                     />
                   </div>
-                  {manualPaymentDraft.paymentMethod === "card" ? (
+                  {manualPaymentDraft.paymentMethod === "card" &&
+                  manualPaymentDraft.checkoutKind !== "custom_deposit" ? (
                     <p className="mt-2 text-xs font-bold leading-5 text-[#64748B]">
                       Card amounts are calculated by HomeFixOS from the current approved
                       Job balance and cannot be edited here.
@@ -17060,7 +17163,8 @@ export function ServiceRequestDetail({
                                     amount:
                                       method === "card"
                                         ? formatCentsAsInput(
-                                            selectedCardCheckoutAction?.amountCents ??
+                                            selectedCardAmountCents ??
+                                              selectedCardCheckoutAction?.amountCents ??
                                               moneyToCents(
                                                 selectedManualPaymentTarget?.remaining ?? 0,
                                               ),
@@ -17118,7 +17222,12 @@ export function ServiceRequestDetail({
                                 current
                                   ? {
                                       ...current,
-                                      amount: formatCentsAsInput(action.amountCents),
+                                      amount: formatCentsAsInput(
+                                        action.kind === "custom_deposit" &&
+                                          selectedManualPaymentTarget.depositSuggestionCents > 0
+                                          ? selectedManualPaymentTarget.depositSuggestionCents
+                                          : action.amountCents,
+                                      ),
                                       checkoutKind: action.kind,
                                     }
                                   : current,
@@ -17136,6 +17245,114 @@ export function ServiceRequestDetail({
                           </button>
                         );
                       })}
+                    </div>
+                  </div>
+                ) : null}
+
+                {manualPaymentDraft.paymentMethod === "card" &&
+                manualPaymentDraft.checkoutKind === "custom_deposit" &&
+                selectedManualPaymentTarget ? (
+                  <div className="rounded-xl border border-[#D7DEE8] bg-[#F8FAFC] p-3 sm:p-4">
+                    <p className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
+                      Custom Deposit
+                    </p>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      {(["fixed", "percent"] as const).map((mode) => (
+                        <button
+                          className={`rounded-xl border px-3 py-2 text-sm font-black transition ${
+                            manualPaymentDraft.customDepositMode === mode
+                              ? "border-[#0F6BFF] bg-blue-50 text-[#0F6BFF]"
+                              : "border-[#E5E7EB] bg-white text-[#334155]"
+                          }`}
+                          disabled={manualPaymentState.status === "saving"}
+                          key={mode}
+                          onClick={() => {
+                            setManualPaymentDraft((current) =>
+                              current
+                                ? {
+                                    ...current,
+                                    customDepositMode: mode,
+                                    amount:
+                                      mode === "fixed"
+                                        ? current.amount
+                                        : formatCentsAsInput(
+                                            selectedCardAmountCents ??
+                                              selectedManualPaymentTarget.depositSuggestionCents ??
+                                              0,
+                                          ),
+                                  }
+                                : current,
+                            );
+                            setManualPaymentState({ status: "idle", message: null });
+                          }}
+                          type="button"
+                        >
+                          {mode === "fixed" ? "Fixed Amount" : "Percentage"}
+                        </button>
+                      ))}
+                    </div>
+                    {manualPaymentDraft.customDepositMode === "percent" ? (
+                      <div className="mt-3">
+                        <label
+                          className="text-sm font-black text-[#0F172A]"
+                          htmlFor="manual-payment-percent"
+                        >
+                          Percent
+                        </label>
+                        <div className="mt-2 flex overflow-hidden rounded-xl border border-[#D7DEE8] bg-white focus-within:border-[#0F6BFF] focus-within:ring-4 focus-within:ring-blue-100 sm:max-w-sm">
+                          <input
+                            className="min-w-0 flex-1 px-3 py-3 text-xl font-black text-[#0F172A] outline-none sm:text-lg"
+                            disabled={manualPaymentState.status === "saving"}
+                            id="manual-payment-percent"
+                            inputMode="decimal"
+                            onChange={(event) => {
+                              const nextPercent = event.currentTarget.value;
+                              setManualPaymentDraft((current) =>
+                                current
+                                  ? { ...current, customDepositPercent: nextPercent }
+                                  : current,
+                              );
+                              setManualPaymentState({ status: "idle", message: null });
+                            }}
+                            placeholder="30"
+                            value={manualPaymentDraft.customDepositPercent}
+                          />
+                          <span className="flex w-11 shrink-0 items-center justify-center border-l border-[#D7DEE8] bg-[#F8FAFC] text-base font-black text-[#334155] sm:w-12">
+                            %
+                          </span>
+                        </div>
+                        <p className="mt-2 text-xs font-bold leading-5 text-[#64748B]">
+                          Percentage is calculated from{" "}
+                          {selectedManualPaymentTarget.type === "estimate"
+                            ? "the approved Estimate total"
+                            : "the current collectible Job balance"}
+                          : {formatServiceRequestMoney(centsToMoney(customDepositBaseCents))}.
+                        </p>
+                      </div>
+                    ) : null}
+                    <div className="mt-3 grid gap-2 text-sm font-bold text-[#334155] sm:grid-cols-3">
+                      <p>
+                        <span className="block text-xs uppercase tracking-[0.12em] text-[#64748B]">
+                          Collectible
+                        </span>
+                        {formatServiceRequestMoney(centsToMoney(customDepositMaxCents))}
+                      </p>
+                      <p>
+                        <span className="block text-xs uppercase tracking-[0.12em] text-[#64748B]">
+                          Selected
+                        </span>
+                        {selectedCardAmountCents === null
+                          ? "Enter amount"
+                          : formatServiceRequestMoney(centsToMoney(selectedCardAmountCents))}
+                      </p>
+                      <p>
+                        <span className="block text-xs uppercase tracking-[0.12em] text-[#64748B]">
+                          Remaining
+                        </span>
+                        {selectedCardRemainingAfterCents === null
+                          ? "—"
+                          : formatServiceRequestMoney(centsToMoney(selectedCardRemainingAfterCents))}
+                      </p>
                     </div>
                   </div>
                 ) : null}
