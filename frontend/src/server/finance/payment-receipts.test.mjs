@@ -171,6 +171,7 @@ test("success page waits for receipt-backed verified payment", () => {
   assert.match(successExperience, /View Receipt/);
   assert.match(statusRoute, /requireHomeFixPrivateAccess/);
   assert.match(statusRoute, /loadDashboardStripeReturnStatus/);
+  assert.match(returnStatus, /target_service_request_id: serviceRequestId/);
   assert.match(statusRoute, /Cache-Control": "no-store"/);
 });
 

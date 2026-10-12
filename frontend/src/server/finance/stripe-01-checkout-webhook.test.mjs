@@ -172,6 +172,7 @@ test("Stripe return pages require customer token authorization for payment detai
   assert.match(stripeReturnStatus, /loadDashboardStripeReturnStatus/);
   assert.match(stripeReturnStatus, /canViewDashboardPaymentAttempt/);
   assert.match(stripeReturnStatus, /can_view_service_request/);
+  assert.match(stripeReturnStatus, /target_service_request_id: serviceRequestId/);
   assert.match(stripeReturnStatus, /existingReceipt/);
   assert.match(stripeReturnStatus, /receipt_unavailable/);
   assert.match(stripeReturnStatus, /token_rpc_failed/);

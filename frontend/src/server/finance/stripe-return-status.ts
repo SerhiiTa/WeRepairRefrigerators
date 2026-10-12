@@ -337,7 +337,7 @@ async function canViewDashboardPaymentAttempt(
   serviceRequestId: string,
 ) {
   const { data, error } = await supabase.rpc("can_view_service_request" as never, {
-    p_service_request_id: serviceRequestId,
+    target_service_request_id: serviceRequestId,
   } as never);
 
   return !error && data === true;
