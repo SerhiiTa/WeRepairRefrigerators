@@ -251,6 +251,16 @@ assert.match(
 );
 assert.match(
   detail,
+  /estimateStatus: "approved",[\s\S]*?revisionStatus: "current",/,
+  "Manual approval must optimistically mark the selected Estimate revision approved/current so payment actions do not disappear before reload.",
+);
+assert.match(
+  detail,
+  /await Promise\.all\(\[loadEstimates\(\), loadNotes\(\)\]\);/,
+  "Manual approval must wait for authoritative Estimate rows before returning success to the editor.",
+);
+assert.match(
+  detail,
   /const matchingLogicalEstimateId =[\s\S]*?matchingEstimate\.logicalEstimateId \?\? matchingEstimate\.id;[\s\S]*?const workspaceEstimate =[\s\S]*?estimate\.estimateStatus === "draft"[\s\S]*?estimate\.revisionStatus === "draft"[\s\S]*?estimate\.revisionStatus === "current"[\s\S]*?setManualEstimateId\(workspaceEstimate\.id\)/,
   "Estimate route synchronization must open the resolved workspace document, not a stale logical root revision.",
 );
@@ -288,6 +298,7 @@ includesAll(detail, [
   "const depositAction = paymentTarget?.cardActions.find(",
   "const paymentActionLabel = depositAction ? \"Collect Deposit\" : \"Collect Payment\"",
   "const paymentSummaryLabel = depositAction ? \"Deposit paid\" : \"Paid\"",
+  "fixed inset-0 z-[130] flex items-end justify-center overflow-hidden",
   "Invoice Update Required",
   "financeInvoiceSyncRequired",
   "financeInvoiceSyncDifference",

@@ -5374,6 +5374,7 @@ export function ServiceRequestDetail({
             ? {
                 ...currentEstimate,
                 estimateStatus: "approved",
+                revisionStatus: "current",
                 approvalSource: "technician_manual",
                 customerRespondedAt: approvedAt,
                 updatedAt: new Date().toISOString(),
@@ -5400,8 +5401,7 @@ export function ServiceRequestDetail({
       status: "success",
       message: "Estimate approved by technician on behalf of customer.",
     });
-    void loadEstimates();
-    void loadNotes();
+    await Promise.all([loadEstimates(), loadNotes()]);
     return { ok: true as const };
   }
 
@@ -16862,7 +16862,7 @@ export function ServiceRequestDetail({
       ) : null}
 
       {isManualPaymentOpen ? (
-        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-hidden bg-[#0F172A]/55 backdrop-blur-sm sm:px-3 sm:py-4 sm:items-center">
+        <div className="fixed inset-0 z-[130] flex items-end justify-center overflow-hidden bg-[#0F172A]/55 backdrop-blur-sm sm:px-3 sm:py-4 sm:items-center">
           <div className="flex h-[100dvh] w-full flex-col overflow-hidden rounded-none bg-white shadow-2xl sm:max-h-[92vh] sm:max-w-2xl sm:rounded-3xl">
             <div className="flex shrink-0 items-center justify-between gap-4 border-b border-[#E5E7EB] px-4 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))] sm:items-start sm:border-b-0 sm:p-6 sm:pb-0">
               <div>
