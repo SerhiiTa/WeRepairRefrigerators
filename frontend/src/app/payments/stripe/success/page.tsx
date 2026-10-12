@@ -1,4 +1,5 @@
 import { loadStripeReturnStatus } from "@/server/finance/stripe-return-status";
+import type { StripeReturnStatus } from "@/server/finance/stripe-return-status";
 
 import { StripeSuccessExperience } from "./StripeSuccessExperience";
 
@@ -26,10 +27,26 @@ export default async function StripeSuccessPage({
 }: StripeSuccessPageProps) {
   const params = await searchParams;
   const dashboardReturnPath = getSafeDashboardReturnPath(params.returnPath);
-  const status = await loadStripeReturnStatus({
-    attemptId: params.attempt ?? null,
-    token: params.token ?? null,
-  });
+  const isDashboardReturn = Boolean(
+    dashboardReturnPath && params.attempt && !params.token,
+  );
+  const status: StripeReturnStatus = isDashboardReturn
+    ? {
+        amount: "0.00",
+        authorized: true,
+        balanceDue: null,
+        documentHref: dashboardReturnPath ?? "/dashboard",
+        documentNumber: null,
+        paid: null,
+        paymentStatus: "processing",
+        receipt: null,
+        targetType: "estimate",
+        total: null,
+      }
+    : await loadStripeReturnStatus({
+        attemptId: params.attempt ?? null,
+        token: params.token ?? null,
+      });
 
   return (
     <StripeSuccessExperience

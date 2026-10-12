@@ -539,7 +539,7 @@ type PaymentsState =
       allocations: DashboardServiceRequestPaymentAllocation[];
       receipts: DashboardPaymentReceipt[];
       receiptDeliveries: DashboardPaymentReceiptDelivery[];
-      error: null;
+      error: string | null;
     }
   | {
       status: "error";
@@ -1884,6 +1884,7 @@ export function ServiceRequestDetail({
     receiptDeliveries: [],
     error: null,
   });
+  const stripeReturnRefreshKeyRef = useRef<string | null>(null);
   const [technicianProfilesState, setTechnicianProfilesState] =
     useState<TechnicianProfilesState>({
       status: "loading",
@@ -2430,6 +2431,25 @@ export function ServiceRequestDetail({
     void loadTechnicianProfilesForMatching();
     void loadTechnicianAvailabilityRules();
     void loadLatestDispatcherSnapshot();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get("tab");
+    const estimateId = params.get("estimateId");
+    const refreshKey = `${requestId}:${tab ?? ""}:${estimateId ?? ""}`;
+
+    if (tab !== "finance" || stripeReturnRefreshKeyRef.current === refreshKey) {
+      return;
+    }
+
+    stripeReturnRefreshKeyRef.current = refreshKey;
+    void Promise.all([loadPayments(), loadEstimates(), loadInvoices()]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestId]);
 
@@ -3112,6 +3132,12 @@ export function ServiceRequestDetail({
       return;
     }
 
+    const receiptReadError = receiptsResult.error
+      ? `Receipt history is unavailable: ${receiptsResult.error.message}`
+      : deliveriesResult.error
+        ? `Receipt delivery history is unavailable: ${deliveriesResult.error.message}`
+        : null;
+
     setPaymentsState({
       status: "ready",
       payments: (paymentsResult.data as unknown as ServiceRequestPaymentRow[]).map(
@@ -3150,7 +3176,7 @@ export function ServiceRequestDetail({
               createdAt: String(row.created_at),
             }),
           ),
-      error: null,
+      error: receiptReadError,
     });
   }
 
@@ -14376,7 +14402,7 @@ export function ServiceRequestDetail({
                     Loading payments...
                   </p>
                 ) : null}
-                {paymentsState.status === "error" ? (
+                {paymentsState.error ? (
                   <p className="rounded-2xl bg-amber-50 p-3 text-sm font-semibold text-amber-800">
                     {paymentsState.error}
                   </p>

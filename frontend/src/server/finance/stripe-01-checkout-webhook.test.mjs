@@ -146,9 +146,13 @@ test("Webhook accounting dedupes provider events and posts canonical ledger only
 
 test("Stripe return pages require customer token authorization for payment details", () => {
   assert.match(stripeSuccessPage, /loadStripeReturnStatus/);
+  assert.match(stripeSuccessPage, /isDashboardReturn/);
+  assert.match(stripeSuccessPage, /paymentStatus: "processing"/);
   assert.match(stripeSuccessPage, /StripeSuccessExperience/);
   assert.match(stripeSuccessExperience, /getSupabaseBrowserClient/);
   assert.match(stripeSuccessExperience, /headers\.Authorization = `Bearer \$\{accessToken\}`/);
+  assert.match(stripeSuccessExperience, /polls < 12/);
+  assert.match(stripeSuccessExperience, /requestSequenceRef/);
   assert.match(stripeSuccessExperience, /Verifying payment/);
   assert.match(stripeSuccessExperience, /Payment Successful!/);
   assert.match(stripeSuccessExperience, /View Receipt/);

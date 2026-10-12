@@ -140,6 +140,11 @@ test("dashboard exposes manual receipt view and delivery controls", () => {
   assert.match(serviceRequestDetail, /Delivery History/);
   assert.match(serviceRequestDetail, /Receipt email delivery is not configured yet/);
   assert.match(serviceRequestDetail, /controlled recipient gate/);
+  assert.match(serviceRequestDetail, /Receipt history is unavailable:/);
+  assert.match(serviceRequestDetail, /Receipt delivery history is unavailable:/);
+  assert.match(serviceRequestDetail, /stripeReturnRefreshKeyRef/);
+  assert.match(serviceRequestDetail, /tab !== "finance"/);
+  assert.match(serviceRequestDetail, /Promise\.all\(\[loadPayments\(\), loadEstimates\(\), loadInvoices\(\)\]\)/);
 });
 
 test("success page waits for receipt-backed verified payment", () => {
@@ -148,7 +153,11 @@ test("success page waits for receipt-backed verified payment", () => {
   assert.match(returnStatus, /finalAttempt\.checkout_status === "succeeded"[\s\S]*loadPaymentReceipt/);
   assert.match(returnStatus, /finalAttempt\.checkout_status === "succeeded"[\s\S]*"processing"/);
   assert.match(successPage, /StripeSuccessExperience/);
-  assert.match(successExperience, /polls < 8/);
+  assert.match(successPage, /isDashboardReturn/);
+  assert.match(successPage, /paymentStatus: "processing"/);
+  assert.match(successExperience, /polls < 12/);
+  assert.match(successExperience, /requestSequenceRef/);
+  assert.match(successExperience, /requestSequence === requestSequenceRef\.current/);
   assert.match(successExperience, /api\/payments\/stripe-return-status/);
   assert.match(successExperience, /Authorization/);
   assert.match(successExperience, /Payment Successful!/);

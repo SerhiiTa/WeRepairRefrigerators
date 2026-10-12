@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { StripeReturnStatus } from "@/server/finance/stripe-return-status";
@@ -51,6 +51,7 @@ export function StripeSuccessExperience({
 }: StripeSuccessExperienceProps) {
   const [status, setStatus] = useState(initialStatus);
   const [polls, setPolls] = useState(0);
+  const requestSequenceRef = useRef(0);
 
   const queryString = useMemo(() => {
     const params = new URLSearchParams();
@@ -61,18 +62,23 @@ export function StripeSuccessExperience({
   }, [query.attempt, query.returnPath, query.token]);
 
   const shouldPoll =
+    Boolean(queryString) &&
+    Boolean(query.attempt) &&
     ((status.authorized && status.paymentStatus === "processing") ||
       (!status.authorized && Boolean(dashboardReturnPath) && Boolean(query.attempt))) &&
-    polls < 8;
+    polls < 12;
 
   useEffect(() => {
     if (!shouldPoll || !queryString) {
       return;
     }
 
+    let canceled = false;
     const timeout = window.setTimeout(async () => {
       setPolls((current) => current + 1);
       const headers: HeadersInit = {};
+      const requestSequence = requestSequenceRef.current + 1;
+      requestSequenceRef.current = requestSequence;
 
       if (dashboardReturnPath && !query.token) {
         const supabase = getSupabaseBrowserClient();
@@ -95,13 +101,28 @@ export function StripeSuccessExperience({
       const payload = (await response.json().catch(() => null)) as {
         status?: StripeReturnStatus;
       } | null;
-      if (payload?.status) {
+      if (
+        payload?.status &&
+        !canceled &&
+        requestSequence === requestSequenceRef.current
+      ) {
         setStatus(payload.status);
       }
     }, 2000);
 
-    return () => window.clearTimeout(timeout);
-  }, [dashboardReturnPath, query.attempt, query.token, queryString, shouldPoll]);
+    return () => {
+      canceled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [
+    dashboardReturnPath,
+    polls,
+    query.attempt,
+    query.token,
+    queryString,
+    shouldPoll,
+    status,
+  ]);
 
   if (!status.authorized) {
     return (
@@ -131,7 +152,7 @@ export function StripeSuccessExperience({
   const receipt = status.receipt;
   const received = status.paymentStatus === "received" && Boolean(receipt);
   const failed = status.paymentStatus === "failed" || status.paymentStatus === "canceled";
-  const unavailable = status.paymentStatus === "processing" && polls >= 8;
+  const unavailable = status.paymentStatus === "processing" && polls >= 12;
   const iconState = received ? "success" : failed || unavailable ? "alert" : "pending";
 
   return (
