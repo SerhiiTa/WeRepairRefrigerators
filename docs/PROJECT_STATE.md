@@ -1509,3 +1509,68 @@ Use the webpack build command for verification because it has been the stable bu
 - Manual Estimate persistence is repaired through `0071_manual_estimate_editor_metadata_rpc_apply_ready.sql`; new Manual Estimates save and old Estimates remain visible.
 - Technician manual approval is repaired through `0072_manual_estimate_technician_approval_apply_ready.sql`. `Approve for Customer` records `approval_source = technician_manual`, preserves downstream `Estimate Approved` behavior, and writes timeline/notes that approval was recorded by a technician on behalf of the customer rather than faking a customer-clicked approval.
 - Sending and approval are independent workflows: approve-only, send-only, send-then-approve, and approve-then-send are supported. Autosave and Sync to Job were intentionally not implemented.
+
+## Finance V2 Production Sandbox Milestone - October 12, 2026
+
+Finance V2 reached a verified Production Sandbox milestone on Job `#1034` (`4880eb20-9f9e-4e4d-9cd7-6c2a6504f59f`) for the HomeFix controlled Stripe Sandbox pilot.
+
+Verified state:
+
+- Approved Job Scope: `$2,327.11`.
+- Paid Credit: `$2,267.03`.
+- Balance Due: `$60.08`.
+- Three approved Estimates are included in the current combined Job Invoice.
+- Current Invoice: `INV-2026-BBB388BA`, Draft, Total `$2,327.11`, Paid `$2,267.03`, Balance `$60.08`.
+- Invoice History contains two historical versions.
+- Payment History contains four successful payments: Cash `$1,000.00`, Stripe Sandbox `$1,193.96`, Stripe Sandbox `$12.99`, and Stripe Sandbox Custom Deposit `$60.08`.
+- The `$60.08` Custom Deposit was successfully collected through Stripe Sandbox and reflected in Finance V2.
+
+Implemented and Production Sandbox verified:
+
+- Multiple approved Estimates per Job.
+- One current combined Job Invoice.
+- Invoice version/history preservation.
+- Estimate approval and revision workflow.
+- Fixed Amount Custom Deposit.
+- Percentage Custom Deposit.
+- Technician-initiated Stripe Checkout.
+- Existing manual payment methods.
+- Job-level approved scope, paid credit, and collectible balance.
+- Active Checkout reservations.
+- Stripe webhook payment posting.
+- Idempotency protections.
+- Payment Ledger preservation during Invoice replacement.
+
+Finance V2 migration history for this milestone:
+
+- `0133` - Invoice sync authorization.
+- `0134` - Estimate archive schema repair.
+- `0135` - Manual payment collectible safety.
+- `0136` - Estimate deposit settings persistence.
+- `0137` - Technician Custom Deposit Checkout.
+- `0138` - Stripe Estimate Job balance alignment.
+- `0139` - Invoice sync unique constraint repair.
+
+Important `0139` note: migration `0139` removed the obsolete index `service_request_invoices_estimate_unique_idx`. Production presence of this index was independently verified before the migration. Do not reintroduce this index.
+
+Current Finance V2 business rules:
+
+1. Finance V2 uses Job-level approved scope and valid paid credit.
+2. Historical Invoice payments remain credited to the Job.
+3. New approved Estimates increase Job approved scope.
+4. Invoice synchronization creates or updates the current combined Invoice while preserving historical versions.
+5. Technicians may select Custom Deposit amount or percentage without a predefined Estimate deposit.
+6. Stripe Checkout amount must be server-validated.
+7. Payments must never exceed collectible Job balance.
+8. Successful Stripe payment is recorded exactly once.
+9. Updating an Invoice must not duplicate or remove existing payments.
+10. Existing authorization, tenant isolation, and Stripe Sandbox Pilot restrictions remain mandatory.
+
+Not yet verified or future enhancement:
+
+- Refunds and payment reversals.
+- Credit notes and post-payment adjustments.
+- Additional Invoice lifecycle scenarios.
+- Stripe Live activation.
+- Broader multi-user and multi-company QA.
+- Further mobile payment UX improvements.

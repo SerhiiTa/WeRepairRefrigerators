@@ -897,3 +897,45 @@ Onboarding backend progress:
 - Manual Estimate editor is now the compact mobile-first path for field technicians: Items and Totals first, no duplicate Job number in the estimate context block, dense item rows, collapsed secondary sections, and one sticky action bar.
 - Sending and approval are independent: approve only, send only, send then approve, and approve then send remain valid workflows.
 - Do not start autosave, Sync to Job, payments, Stripe, or Task 169 until production review feedback is complete.
+
+## Finance V2 - Production Sandbox Milestone
+
+Finance V2 is Production Sandbox verified as of October 12, 2026 for HomeFix Job `#1034` (`4880eb20-9f9e-4e4d-9cd7-6c2a6504f59f`).
+
+Implemented and Production Sandbox verified:
+
+- Multiple approved Estimates can contribute to one Job-level approved scope.
+- One current combined Job Invoice represents approved Job scope while preserving historical Invoice versions.
+- Estimate approval/revision history remains intact.
+- Fixed and percentage Custom Deposits are supported for technician-initiated Stripe Sandbox Checkout.
+- Manual payments and Stripe Sandbox payments both feed the canonical Payment Ledger.
+- Job-level paid credit follows the Job across Estimate and Invoice revisions.
+- Active Checkout reservations and webhook idempotency protect against duplicate collection.
+
+Verified milestone values:
+
+- Approved Job Scope `$2,327.11`.
+- Paid Credit `$2,267.03`.
+- Balance Due `$60.08`.
+- Current Invoice `INV-2026-BBB388BA`, Draft, Total `$2,327.11`, Paid `$2,267.03`, Balance `$60.08`.
+- Invoice History: two historical versions.
+- Payment History: Cash `$1,000.00`, Stripe Sandbox `$1,193.96`, Stripe Sandbox `$12.99`, Stripe Sandbox Custom Deposit `$60.08`.
+
+Migration sequence for the verified Finance V2 milestone:
+
+- `0133` Invoice sync authorization.
+- `0134` Estimate archive schema repair.
+- `0135` Manual payment collectible safety.
+- `0136` Estimate deposit settings persistence.
+- `0137` Technician Custom Deposit Checkout.
+- `0138` Stripe Estimate Job balance alignment.
+- `0139` Invoice sync unique constraint repair. `0139` intentionally removed obsolete index `service_request_invoices_estimate_unique_idx`; do not recreate it.
+
+Remaining roadmap work:
+
+- Refunds and payment reversals.
+- Credit notes and post-payment adjustments.
+- Additional Invoice lifecycle scenarios.
+- Stripe Live activation.
+- Broader multi-user and multi-company QA.
+- Further mobile payment UX improvements.
