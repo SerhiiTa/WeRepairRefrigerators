@@ -17,6 +17,9 @@ const webhookAccounting = read(
 );
 const stripeReturnStatus = read("frontend/src/server/finance/stripe-return-status.ts");
 const stripeSuccessPage = read("frontend/src/app/payments/stripe/success/page.tsx");
+const stripeSuccessExperience = read(
+  "frontend/src/app/payments/stripe/success/StripeSuccessExperience.tsx",
+);
 const stripeCancelPage = read("frontend/src/app/payments/stripe/cancel/page.tsx");
 const stripeConfig = read("frontend/src/server/finance/stripe-config.ts");
 const devQa = read("frontend/scripts/dev-qa.mjs");
@@ -138,10 +141,11 @@ test("Webhook accounting dedupes provider events and posts canonical ledger only
 
 test("Stripe return pages require customer token authorization for payment details", () => {
   assert.match(stripeSuccessPage, /loadStripeReturnStatus/);
-  assert.match(stripeSuccessPage, /Payment processing/);
-  assert.match(stripeSuccessPage, /Payment received/);
-  assert.match(stripeSuccessPage, /verified webhook posts it/);
-  assert.match(stripeSuccessPage, /Return to/);
+  assert.match(stripeSuccessPage, /StripeSuccessExperience/);
+  assert.match(stripeSuccessExperience, /Verifying payment/);
+  assert.match(stripeSuccessExperience, /Payment Successful!/);
+  assert.match(stripeSuccessExperience, /View Receipt/);
+  assert.match(stripeSuccessExperience, /Return to/);
   assert.doesNotMatch(stripeSuccessPage, /checkoutAttemptId|company_id|payment_metadata/);
 
   assert.match(stripeCancelPage, /Checkout canceled/);
@@ -158,7 +162,7 @@ test("Stripe return pages require customer token authorization for payment detai
   assert.match(stripeReturnStatus, /get_public_estimate_by_token_rpc/);
   assert.match(stripeReturnStatus, /get_public_estimate_payment_options_rpc/);
   assert.match(stripeReturnStatus, /tokenEstimateId !== attempt\.estimate_id/);
-  assert.match(stripeReturnStatus, /attempt\.checkout_status === "succeeded" \|\| attempt\.succeeded_payment_id/);
+  assert.match(stripeReturnStatus, /attempt\.checkout_status === "succeeded" && attempt\.succeeded_payment_id/);
   assert.match(stripeReturnStatus, /releaseSandboxReservationAfterCancelReturn/);
   assert.match(stripeReturnStatus, /config\.mode !== "test" && config\.mode !== "production_sandbox_pilot"/);
   assert.match(stripeReturnStatus, /stripe\.checkout\.sessions\.retrieve/);

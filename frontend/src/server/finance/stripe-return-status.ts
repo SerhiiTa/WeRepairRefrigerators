@@ -14,8 +14,21 @@ type CheckoutAttemptRow = {
   invoice_id: string | null;
   provider_checkout_session_id: string | null;
   provider_payment_intent_id: string | null;
+  service_request_id: string;
   succeeded_payment_id: string | null;
   target_type: "estimate" | "invoice";
+};
+
+type PaymentReceiptRow = {
+  amount: number | string;
+  card_brand: string | null;
+  card_last4: string | null;
+  paid_at: string;
+  payment_method: string;
+  payment_status: string;
+  job_number: string | null;
+  receipt_number: string;
+  receipt_token: string;
 };
 
 type PublicEstimatePayload = {
@@ -60,6 +73,16 @@ export type StripeReturnStatus =
       documentNumber: string | null;
       paid: string | null;
       paymentStatus: StripePaymentReturnState;
+      receipt: {
+        amount: string;
+        cardBrand: string | null;
+        cardLast4: string | null;
+        href: string;
+        jobNumber: string | null;
+        paidAt: string;
+        paymentMethod: string;
+        receiptNumber: string;
+      } | null;
       targetType: "estimate" | "invoice";
       total: string | null;
     };
@@ -111,7 +134,7 @@ function parsePaymentOptions(data: Json | null): PublicPaymentOptions | null {
 }
 
 function paymentState(attempt: CheckoutAttemptRow): StripePaymentReturnState {
-  if (attempt.checkout_status === "succeeded" || attempt.succeeded_payment_id) {
+  if (attempt.checkout_status === "succeeded" && attempt.succeeded_payment_id) {
     return "received";
   }
 
@@ -124,6 +147,54 @@ function paymentState(attempt: CheckoutAttemptRow): StripePaymentReturnState {
   }
 
   return "processing";
+}
+
+async function loadPaymentReceipt(
+  paymentId: string | null,
+  serviceRequestId: string,
+): Promise<PaymentReceiptRow | null> {
+  if (!paymentId || !UUID_PATTERN.test(paymentId)) {
+    return null;
+  }
+
+  const serviceRole = getSupabaseServiceRoleClient();
+
+  if (!serviceRole) {
+    return null;
+  }
+
+  const { data: receiptTokenData, error: receiptTokenError } = await (serviceRole as any).rpc(
+    "ensure_service_request_payment_receipt_rpc",
+    {
+      p_payment_id: paymentId,
+    },
+  );
+
+  if (receiptTokenError || !receiptTokenData?.receipt_token) {
+    return null;
+  }
+
+  const { data, error } = await (serviceRole as any)
+    .from("service_request_payment_receipts")
+    .select("amount,card_brand,card_last4,paid_at,payment_method,payment_status,receipt_number")
+    .eq("payment_id", paymentId)
+    .maybeSingle();
+
+  if (error || !data) {
+    return null;
+  }
+
+  const { data: requestData } = await (serviceRole as any)
+    .from("service_requests")
+    .select("job_number")
+    .eq("id", serviceRequestId)
+    .maybeSingle();
+
+  return {
+    ...(data as Omit<PaymentReceiptRow, "receipt_token">),
+    job_number: requestData?.job_number ? String(requestData.job_number) : null,
+    receipt_token: receiptTokenData.receipt_token,
+  };
 }
 
 async function releaseSandboxReservationAfterCancelReturn(
@@ -200,7 +271,7 @@ async function releaseSandboxReservationAfterCancelReturn(
       .in("checkout_status", ["initiated", "processing"])
       .is("succeeded_payment_id", null)
       .select(
-        "id,amount,checkout_kind,checkout_metadata,checkout_status,estimate_id,invoice_id,provider_checkout_session_id,provider_payment_intent_id,succeeded_payment_id,target_type",
+        "id,amount,checkout_kind,checkout_metadata,checkout_status,estimate_id,invoice_id,provider_checkout_session_id,provider_payment_intent_id,service_request_id,succeeded_payment_id,target_type",
       )
       .maybeSingle();
 
@@ -243,7 +314,7 @@ export async function loadStripeReturnStatus(params: {
   const { data: attemptData, error: attemptError } = await (serviceRole as any)
     .from("service_request_payment_checkout_attempts")
     .select(
-      "id,amount,checkout_kind,checkout_metadata,checkout_status,estimate_id,invoice_id,provider_checkout_session_id,provider_payment_intent_id,succeeded_payment_id,target_type",
+      "id,amount,checkout_kind,checkout_metadata,checkout_status,estimate_id,invoice_id,provider_checkout_session_id,provider_payment_intent_id,service_request_id,succeeded_payment_id,target_type",
     )
     .eq("id", params.attemptId)
     .maybeSingle();
@@ -342,6 +413,13 @@ export async function loadStripeReturnStatus(params: {
   const finalAttempt = params.releaseOnCancelReturn
     ? await releaseSandboxReservationAfterCancelReturn(attempt)
     : attempt;
+  const receipt =
+    finalAttempt.checkout_status === "succeeded"
+      ? await loadPaymentReceipt(
+          finalAttempt.succeeded_payment_id,
+          finalAttempt.service_request_id,
+        )
+      : null;
 
   return {
     amount: asMoney(finalAttempt.amount) ?? "0.00",
@@ -350,7 +428,23 @@ export async function loadStripeReturnStatus(params: {
     documentHref,
     documentNumber,
     paid: asMoney(paymentOptions?.paid),
-    paymentStatus: paymentState(finalAttempt),
+    paymentStatus: receipt
+      ? paymentState(finalAttempt)
+      : finalAttempt.checkout_status === "succeeded"
+        ? "processing"
+        : paymentState(finalAttempt),
+    receipt: receipt
+      ? {
+          amount: asMoney(receipt.amount) ?? "0.00",
+          cardBrand: receipt.card_brand,
+          cardLast4: receipt.card_last4,
+          href: `/receipts/${receipt.receipt_token}`,
+          jobNumber: receipt.job_number,
+          paidAt: receipt.paid_at,
+          paymentMethod: receipt.payment_method,
+          receiptNumber: receipt.receipt_number,
+        }
+      : null,
     targetType: finalAttempt.target_type,
     total: asMoney(paymentOptions?.total),
   };

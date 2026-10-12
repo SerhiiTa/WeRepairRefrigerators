@@ -5,6 +5,7 @@ import type Stripe from "stripe";
 
 import { getSupabaseServiceRoleClient } from "@/lib/supabase/service-role";
 
+import { ensurePaymentReceipt } from "./payment-receipts";
 import { getStripeRuntimeConfig } from "./stripe-config";
 
 type CheckoutAttempt = {
@@ -404,6 +405,7 @@ export async function processStripeWebhookEvent(
     const paymentId = extractPaymentId(result);
 
     if (paymentId) {
+      await ensurePaymentReceipt(paymentId);
       await annotateStripeSandboxPayment(paymentId);
     }
 

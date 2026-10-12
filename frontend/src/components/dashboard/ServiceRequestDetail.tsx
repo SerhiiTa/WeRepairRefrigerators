@@ -529,20 +529,64 @@ type PaymentsState =
       status: "loading";
       payments: DashboardServiceRequestPayment[];
       allocations: DashboardServiceRequestPaymentAllocation[];
+      receipts: DashboardPaymentReceipt[];
+      receiptDeliveries: DashboardPaymentReceiptDelivery[];
       error: null;
     }
   | {
       status: "ready";
       payments: DashboardServiceRequestPayment[];
       allocations: DashboardServiceRequestPaymentAllocation[];
+      receipts: DashboardPaymentReceipt[];
+      receiptDeliveries: DashboardPaymentReceiptDelivery[];
       error: null;
     }
   | {
       status: "error";
       payments: DashboardServiceRequestPayment[];
       allocations: DashboardServiceRequestPaymentAllocation[];
+      receipts: DashboardPaymentReceipt[];
+      receiptDeliveries: DashboardPaymentReceiptDelivery[];
       error: string;
     };
+
+type DashboardPaymentReceipt = {
+  id: string;
+  paymentId: string;
+  receiptNumber: string;
+  amount: number;
+  createdAt: string;
+};
+
+type DashboardPaymentReceiptDelivery = {
+  id: string;
+  paymentId: string;
+  receiptId: string;
+  channel: "sms" | "email";
+  recipient: string;
+  status: string;
+  providerStatus: string | null;
+  providerError: string | null;
+  sentAt: string | null;
+  failedAt: string | null;
+  createdAt: string;
+};
+
+type ReceiptDeliveryChannel = "sms" | "email";
+
+type ReceiptDeliveryDraft = {
+  paymentId: string;
+  channel: ReceiptDeliveryChannel;
+  recipient: string;
+  idempotencyKey: string;
+};
+
+type ReceiptDeliveryState =
+  | { status: "idle"; message: null }
+  | { status: "loading"; message: string | null }
+  | { status: "sending"; message: string | null }
+  | { status: "success"; message: string }
+  | { status: "error"; message: string };
 
 type TechnicianProfilesState =
   | { status: "loading"; profiles: TechnicianProfileRow[]; error: null }
@@ -1836,6 +1880,8 @@ export function ServiceRequestDetail({
     status: "loading",
     payments: [],
     allocations: [],
+    receipts: [],
+    receiptDeliveries: [],
     error: null,
   });
   const [technicianProfilesState, setTechnicianProfilesState] =
@@ -2074,6 +2120,10 @@ export function ServiceRequestDetail({
     useState<ManualPaymentVoidDraft | null>(null);
   const [manualPaymentVoidState, setManualPaymentVoidState] =
     useState<ManualPaymentVoidState>({ status: "idle", message: null });
+  const [receiptDeliveryDraft, setReceiptDeliveryDraft] =
+    useState<ReceiptDeliveryDraft | null>(null);
+  const [receiptDeliveryState, setReceiptDeliveryState] =
+    useState<ReceiptDeliveryState>({ status: "idle", message: null });
   const [expandedPaymentHistoryId, setExpandedPaymentHistoryId] =
     useState<string | null>(null);
   const [isManualPaymentDetailsOpen, setIsManualPaymentDetailsOpen] =
@@ -3003,29 +3053,44 @@ export function ServiceRequestDetail({
         status: "error",
         payments: [],
         allocations: [],
+        receipts: [],
+        receiptDeliveries: [],
         error: "Payments are not available for this workspace.",
       });
       return;
     }
 
-    const [paymentsResult, allocationsResult] = await Promise.all([
-      supabase
-        .from("service_request_payments")
-        .select(SERVICE_REQUEST_PAYMENT_SELECT_COLUMNS)
-        .eq("service_request_id", requestId)
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("service_request_payment_allocations")
-        .select(SERVICE_REQUEST_PAYMENT_ALLOCATION_SELECT_COLUMNS)
-        .eq("service_request_id", requestId)
-        .order("created_at", { ascending: false }),
-    ]);
+    const [paymentsResult, allocationsResult, receiptsResult, deliveriesResult] =
+      await Promise.all([
+        supabase
+          .from("service_request_payments")
+          .select(SERVICE_REQUEST_PAYMENT_SELECT_COLUMNS)
+          .eq("service_request_id", requestId)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("service_request_payment_allocations")
+          .select(SERVICE_REQUEST_PAYMENT_ALLOCATION_SELECT_COLUMNS)
+          .eq("service_request_id", requestId)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("service_request_payment_receipts" as never)
+          .select("id,payment_id,receipt_number,amount,created_at")
+          .eq("service_request_id", requestId)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("service_request_payment_receipt_deliveries" as never)
+          .select("id,payment_id,receipt_id,delivery_channel,recipient,delivery_status,provider_status,provider_error,sent_at,failed_at,created_at")
+          .eq("service_request_id", requestId)
+          .order("created_at", { ascending: false }),
+      ]);
 
     if (paymentsResult.error) {
       setPaymentsState({
         status: "error",
         payments: [],
         allocations: [],
+        receipts: [],
+        receiptDeliveries: [],
         error: paymentsResult.error.message,
       });
       return;
@@ -3036,6 +3101,8 @@ export function ServiceRequestDetail({
         status: "error",
         payments: [],
         allocations: [],
+        receipts: [],
+        receiptDeliveries: [],
         error: allocationsResult.error.message,
       });
       return;
@@ -3049,6 +3116,36 @@ export function ServiceRequestDetail({
       allocations: (
         allocationsResult.data as unknown as ServiceRequestPaymentAllocationRow[]
       ).map(mapServiceRequestPaymentAllocationRow),
+      receipts: receiptsResult.error
+        ? []
+        : ((receiptsResult.data ?? []) as unknown as Array<Record<string, unknown>>).map(
+            (row) => ({
+              id: String(row.id),
+              paymentId: String(row.payment_id),
+              receiptNumber: String(row.receipt_number),
+              amount: Number(row.amount),
+              createdAt: String(row.created_at),
+            }),
+          ),
+      receiptDeliveries: deliveriesResult.error
+        ? []
+        : ((deliveriesResult.data ?? []) as unknown as Array<Record<string, unknown>>).map(
+            (row) => ({
+              id: String(row.id),
+              paymentId: String(row.payment_id),
+              receiptId: String(row.receipt_id),
+              channel: row.delivery_channel === "email" ? "email" : "sms",
+              recipient: String(row.recipient ?? ""),
+              status: String(row.delivery_status),
+              providerStatus:
+                typeof row.provider_status === "string" ? row.provider_status : null,
+              providerError:
+                typeof row.provider_error === "string" ? row.provider_error : null,
+              sentAt: typeof row.sent_at === "string" ? row.sent_at : null,
+              failedAt: typeof row.failed_at === "string" ? row.failed_at : null,
+              createdAt: String(row.created_at),
+            }),
+          ),
       error: null,
     });
   }
@@ -7562,12 +7659,23 @@ export function ServiceRequestDetail({
         ? invoicesState.invoices.find((invoice) => invoice.id === allocation.invoiceId) ??
           null
         : null;
+      const receipt =
+        paymentsState.receipts.find(
+          (currentReceipt) => currentReceipt.paymentId === payment.id,
+        ) ?? null;
+      const receiptDeliveries = receipt
+        ? paymentsState.receiptDeliveries.filter(
+            (delivery) => delivery.receiptId === receipt.id,
+          )
+        : [];
 
       return {
         payment,
         allocation,
         estimateTarget,
         invoiceTarget,
+        receipt,
+        receiptDeliveries,
       };
     })
     .sort(
@@ -7764,6 +7872,12 @@ export function ServiceRequestDetail({
       ? null
       : paymentsState.payments.find(
           (payment) => payment.id === manualPaymentVoidDraft.paymentId,
+        ) ?? null;
+  const selectedReceiptDeliveryEntry =
+    receiptDeliveryDraft === null
+      ? null
+      : paymentHistory.find(
+          (entry) => entry.payment.id === receiptDeliveryDraft.paymentId,
         ) ?? null;
   const addressAutocomplete = getAddressAutocompleteAdapter();
   const fullAddress = getRequestFullAddress(request);
@@ -8956,6 +9070,14 @@ export function ServiceRequestDetail({
     );
   }
 
+  function canShowReceiptActions(payment: DashboardServiceRequestPayment) {
+    return (
+      payment.paymentStatus === "succeeded" &&
+      payment.voidedAt === null &&
+      moneyToCents(payment.amount) > 0
+    );
+  }
+
   function getPaymentAppliedToLabel(entry: (typeof paymentHistory)[number]) {
     if (entry.invoiceTarget) {
       return "Invoice";
@@ -8968,6 +9090,207 @@ export function ServiceRequestDetail({
     }
 
     return "Job";
+  }
+
+  async function loadReceiptForPayment(paymentId: string) {
+    if (state.status !== "ready") {
+      setReceiptDeliveryState({
+        status: "error",
+        message: "Open a valid Job before viewing receipts.",
+      });
+      return null;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setReceiptDeliveryState({
+        status: "error",
+        message: "Receipt actions are not available for this workspace.",
+      });
+      return null;
+    }
+
+    const sessionResult = await getDashboardActionSession(supabase);
+
+    if (!sessionResult.ok) {
+      setReceiptDeliveryState({
+        status: "error",
+        message: sessionResult.message,
+      });
+      return null;
+    }
+
+    const accessToken = sessionResult.response.data.session?.access_token;
+
+    if (!accessToken) {
+      setReceiptDeliveryState({
+        status: "error",
+        message: "Log in again before opening this receipt.",
+      });
+      return null;
+    }
+
+    const response = await fetch(
+      `/api/service-requests/${state.request.id}/payments/${paymentId}/receipt`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      },
+    );
+    const payload = (await response.json().catch(() => null)) as
+      | {
+          ok?: boolean;
+          message?: string;
+          receipt?: {
+            receiptNumber?: string;
+            receiptUrl?: string;
+          };
+        }
+      | null;
+
+    if (!response.ok || !payload?.ok || !payload.receipt?.receiptUrl) {
+      setReceiptDeliveryState({
+        status: "error",
+        message: payload?.message ?? "Receipt is not ready.",
+      });
+      return null;
+    }
+
+    await loadPayments();
+    return payload.receipt;
+  }
+
+  async function viewPaymentReceipt(paymentId: string) {
+    setReceiptDeliveryState({ status: "loading", message: "Opening receipt..." });
+    const receipt = await loadReceiptForPayment(paymentId);
+
+    if (!receipt?.receiptUrl) {
+      return;
+    }
+
+    window.open(receipt.receiptUrl, "_blank", "noopener,noreferrer");
+    setReceiptDeliveryState({ status: "idle", message: null });
+  }
+
+  async function openReceiptDelivery(paymentId: string, channel: ReceiptDeliveryChannel) {
+    if (state.status !== "ready") {
+      return;
+    }
+
+    if (channel === "email") {
+      setReceiptDeliveryState({
+        status: "error",
+        message: "Email delivery coming soon.",
+      });
+      return;
+    }
+
+    setReceiptDeliveryState({ status: "loading", message: "Preparing receipt..." });
+    const receipt = await loadReceiptForPayment(paymentId);
+
+    if (!receipt) {
+      return;
+    }
+
+    setReceiptDeliveryDraft({
+      paymentId,
+      channel,
+      recipient:
+        channel === "sms"
+          ? state.request.customerPhone ?? ""
+          : state.request.customerEmail ?? "",
+      idempotencyKey: buildPaymentIdempotencyKey(),
+    });
+    setReceiptDeliveryState({ status: "idle", message: null });
+  }
+
+  async function sendPaymentReceipt() {
+    if (state.status !== "ready" || !receiptDeliveryDraft) {
+      return;
+    }
+
+    if (receiptDeliveryDraft.channel === "email") {
+      setReceiptDeliveryState({
+        status: "error",
+        message: "Email delivery coming soon.",
+      });
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setReceiptDeliveryState({
+        status: "error",
+        message: "Receipt delivery is not available for this workspace.",
+      });
+      return;
+    }
+
+    const sessionResult = await getDashboardActionSession(supabase);
+
+    if (!sessionResult.ok) {
+      setReceiptDeliveryState({
+        status: "error",
+        message: sessionResult.message,
+      });
+      return;
+    }
+
+    const accessToken = sessionResult.response.data.session?.access_token;
+
+    if (!accessToken) {
+      setReceiptDeliveryState({
+        status: "error",
+        message: "Log in again before sending this receipt.",
+      });
+      return;
+    }
+
+    setReceiptDeliveryState({
+      status: "sending",
+      message: "Sending receipt...",
+    });
+
+    const response = await fetch(
+      `/api/service-requests/${state.request.id}/payments/${receiptDeliveryDraft.paymentId}/receipt`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify(receiptDeliveryDraft),
+      },
+    );
+    const payload = (await response.json().catch(() => null)) as
+      | { ok?: boolean; message?: string; deliveryStatus?: string }
+      | null;
+
+    await loadPayments();
+
+    if (!response.ok || !payload?.ok) {
+      setReceiptDeliveryState({
+        status: "error",
+        message: payload?.message ?? "Receipt could not be sent.",
+      });
+      return;
+    }
+
+    setReceiptDeliveryState({
+      status: "success",
+      message: "Receipt send request accepted.",
+    });
+    setReceiptDeliveryDraft((current) =>
+      current
+        ? {
+            ...current,
+            idempotencyKey: buildPaymentIdempotencyKey(),
+          }
+        : current,
+    );
   }
 
   function openManualPayment(target?: ManualPaymentTarget) {
@@ -10242,6 +10565,7 @@ export function ServiceRequestDetail({
     const paidAt = entry.payment.paidAt ?? entry.payment.paymentDate ?? entry.payment.createdAt;
     const paymentIsVoid = entry.payment.paymentStatus === "void";
     const paymentCanBeVoided = canVoidPayment(entry.payment);
+    const paymentCanShowReceiptActions = canShowReceiptActions(entry.payment);
 
     return (
       <article
@@ -10324,6 +10648,57 @@ export function ServiceRequestDetail({
                   >
                     Void Payment
                   </button>
+                </div>
+              ) : null}
+              {paymentCanShowReceiptActions ? (
+                <div className="space-y-2 sm:col-span-2">
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      className="rounded-full border border-[#D7E4FF] px-3 py-1.5 text-xs font-black text-[#0F6BFF] transition hover:bg-blue-50"
+                      onClick={() => void viewPaymentReceipt(entry.payment.id)}
+                      type="button"
+                    >
+                      View Receipt
+                    </button>
+                    <button
+                      className="rounded-full border border-[#D7E4FF] px-3 py-1.5 text-xs font-black text-[#0F6BFF] transition hover:bg-blue-50"
+                      onClick={() => void openReceiptDelivery(entry.payment.id, "sms")}
+                      type="button"
+                    >
+                      Send Receipt via SMS
+                    </button>
+                    <button
+                      className="rounded-full border border-[#E5E7EB] px-3 py-1.5 text-xs font-black text-[#94A3B8] opacity-80"
+                      disabled
+                      title="Email delivery coming soon"
+                      type="button"
+                    >
+                      Send Receipt via Email (Coming Soon)
+                    </button>
+                  </div>
+                  <div className="rounded-2xl bg-[#F8FAFC] p-3">
+                    <p className="text-xs font-black uppercase tracking-[0.12em] text-[#64748B]">
+                      Receipt
+                    </p>
+                    <p className="mt-1 text-sm font-bold text-[#0F172A]">
+                      {entry.receipt?.receiptNumber ?? "Receipt will be created on first view/send."}
+                    </p>
+                    {entry.receiptDeliveries.length > 0 ? (
+                      <div className="mt-2 space-y-1">
+                        {entry.receiptDeliveries.map((delivery) => (
+                          <p className="text-xs font-semibold text-[#475569]" key={delivery.id}>
+                            {delivery.channel.toUpperCase()} to {delivery.recipient}:{" "}
+                            {formatServiceRequestSource(delivery.status)}
+                            {delivery.providerError ? ` · ${delivery.providerError}` : ""}
+                          </p>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-1 text-xs font-semibold text-[#64748B]">
+                        No receipt delivery attempts yet.
+                      </p>
+                    )}
+                  </div>
                 </div>
               ) : null}
             </div>
@@ -16835,6 +17210,190 @@ export function ServiceRequestDetail({
             </div>
           </div>
         </div>
+        );
+      })() : null}
+
+      {receiptDeliveryDraft && selectedReceiptDeliveryEntry ? (() => {
+        const receipt = selectedReceiptDeliveryEntry.receipt;
+        const payment = selectedReceiptDeliveryEntry.payment;
+        const amount = receipt?.amount ?? payment.amount;
+        const jobNumber = state.status === "ready" ? state.request.jobNumber : null;
+        const messagePreview =
+          receiptDeliveryDraft.channel === "sms"
+            ? [
+                `HomeFix Appliance Repair: We received your payment of ${formatServiceRequestMoney(amount)} for Job #${jobNumber ?? ""}. Thank you!`,
+                "",
+                "View receipt:",
+                "[secure receipt link]",
+              ].join("\n")
+            : "Receipt email delivery is not configured yet.";
+
+        return (
+          <div className="fixed inset-0 z-[140] flex items-end justify-center bg-[#0F172A]/55 px-3 py-4 backdrop-blur-sm sm:items-center">
+            <div className="w-full max-w-lg rounded-3xl bg-white p-5 shadow-2xl">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.16em] text-[#0F6BFF]">
+                    Send Receipt
+                  </p>
+                  <h3 className="mt-1 text-xl font-black text-[#0F172A]">
+                    {receipt?.receiptNumber ?? "Payment Receipt"}
+                  </h3>
+                  <p className="mt-1 text-sm font-bold text-[#64748B]">
+                    {formatServiceRequestMoney(amount)} · {getPaymentDisplayLabel(payment)}
+                  </p>
+                </div>
+                <button
+                  aria-label="Close Send Receipt"
+                  className="flex h-9 w-9 items-center justify-center rounded-full border border-[#E5E7EB] text-xl font-black text-[#64748B]"
+                  disabled={receiptDeliveryState.status === "sending"}
+                  onClick={() => {
+                    setReceiptDeliveryDraft(null);
+                    setReceiptDeliveryState({ status: "idle", message: null });
+                  }}
+                  type="button"
+                >
+                  ×
+                </button>
+              </div>
+
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                {(["sms", "email"] as const).map((channel) => (
+                  <button
+                    className={`rounded-xl border px-3 py-2 text-sm font-black transition ${
+                      receiptDeliveryDraft.channel === channel
+                        ? "border-[#0F6BFF] bg-blue-50 text-[#0F6BFF]"
+                        : channel === "email"
+                          ? "border-[#E5E7EB] text-[#94A3B8]"
+                          : "border-[#D7DEE8] text-[#334155] hover:border-[#0F6BFF]"
+                    }`}
+                    disabled={receiptDeliveryState.status === "sending" || channel === "email"}
+                    key={channel}
+                    onClick={() =>
+                      setReceiptDeliveryDraft((current) =>
+                        current
+                          ? {
+                              ...current,
+                              channel,
+                              recipient:
+                                channel === "sms"
+                                  ? state.status === "ready"
+                                    ? state.request.customerPhone ?? ""
+                                    : ""
+                                  : state.status === "ready"
+                                    ? state.request.customerEmail ?? ""
+                                    : "",
+                              idempotencyKey: buildPaymentIdempotencyKey(),
+                            }
+                          : current,
+                      )
+                    }
+                    type="button"
+                  >
+                    {channel === "sms" ? "SMS" : "Email (coming soon)"}
+                  </button>
+                ))}
+              </div>
+
+              <label className="mt-4 block">
+                <span className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
+                  Recipient {receiptDeliveryDraft.channel === "sms" ? "phone" : "email"}
+                </span>
+                <input
+                  className="mt-2 w-full rounded-xl border border-[#D7DEE8] bg-white px-3 py-3 text-sm font-bold text-[#0F172A] outline-none transition focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
+                  disabled={receiptDeliveryState.status === "sending"}
+                  inputMode={receiptDeliveryDraft.channel === "sms" ? "tel" : "email"}
+                  onChange={(event) => {
+                    const nextRecipient = event.currentTarget.value;
+                    setReceiptDeliveryDraft((current) =>
+                      current ? { ...current, recipient: nextRecipient } : current,
+                    );
+                    setReceiptDeliveryState({ status: "idle", message: null });
+                  }}
+                  placeholder={
+                    receiptDeliveryDraft.channel === "sms"
+                      ? "(832) 555-0198"
+                      : "customer@example.com"
+                  }
+                  type={receiptDeliveryDraft.channel === "sms" ? "tel" : "email"}
+                  value={receiptDeliveryDraft.recipient}
+                />
+                {receiptDeliveryDraft.channel === "sms" ? (
+                  <p className="mt-1 text-xs font-semibold text-[#64748B]">
+                    SMS uses the authorized Job conversation recipient and the controlled recipient gate.
+                  </p>
+                ) : null}
+              </label>
+
+              <div className="mt-4 rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] p-3">
+                <p className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
+                  Message Preview
+                </p>
+                <p className="mt-2 whitespace-pre-line text-sm font-semibold leading-6 text-[#334155]">
+                  {messagePreview}
+                </p>
+              </div>
+
+              {selectedReceiptDeliveryEntry.receiptDeliveries.length > 0 ? (
+                <div className="mt-4 rounded-2xl bg-[#F8FAFC] p-3">
+                  <p className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
+                    Delivery History
+                  </p>
+                  <div className="mt-2 space-y-1">
+                    {selectedReceiptDeliveryEntry.receiptDeliveries.map((delivery) => (
+                      <p className="text-xs font-semibold text-[#475569]" key={delivery.id}>
+                        {delivery.channel.toUpperCase()} to {delivery.recipient}:{" "}
+                        {formatServiceRequestSource(delivery.status)}
+                        {delivery.providerError ? ` · ${delivery.providerError}` : ""}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {receiptDeliveryState.message ? (
+                <p
+                  className={`mt-4 rounded-xl border px-3 py-2 text-sm font-bold ${
+                    receiptDeliveryState.status === "error"
+                      ? "border-red-200 bg-red-50 text-red-700"
+                      : receiptDeliveryState.status === "success"
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                        : "border-blue-200 bg-blue-50 text-[#0F6BFF]"
+                  }`}
+                >
+                  {receiptDeliveryState.message}
+                </p>
+              ) : null}
+
+              <div className="mt-5 grid grid-cols-2 gap-2">
+                <button
+                  className="rounded-xl border border-[#E5E7EB] px-4 py-3 text-sm font-black text-[#0F172A] disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={receiptDeliveryState.status === "sending"}
+                  onClick={() => {
+                    setReceiptDeliveryDraft(null);
+                    setReceiptDeliveryState({ status: "idle", message: null });
+                  }}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  className="rounded-xl bg-[#0F6BFF] px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={
+                    receiptDeliveryState.status === "sending" ||
+                    receiptDeliveryDraft.channel === "email" ||
+                    receiptDeliveryDraft.recipient.trim().length === 0
+                  }
+                  onClick={() => void sendPaymentReceipt()}
+                  type="button"
+                >
+                  {receiptDeliveryState.status === "sending"
+                    ? "Sending..."
+                    : "Confirm Send"}
+                </button>
+              </div>
+            </div>
+          </div>
         );
       })() : null}
 
