@@ -154,6 +154,7 @@ test("Stripe return pages require customer token authorization for payment detai
   assert.match(stripeSuccessExperience, /polls < 12/);
   assert.match(stripeSuccessExperience, /requestSequenceRef/);
   assert.match(stripeSuccessExperience, /Verifying payment/);
+  assert.match(stripeSuccessExperience, /Receipt temporarily unavailable/);
   assert.match(stripeSuccessExperience, /Payment Successful!/);
   assert.match(stripeSuccessExperience, /View Receipt/);
   assert.match(stripeSuccessExperience, /Return to/);
@@ -172,6 +173,10 @@ test("Stripe return pages require customer token authorization for payment detai
   assert.match(stripeReturnStatus, /canViewDashboardPaymentAttempt/);
   assert.match(stripeReturnStatus, /can_view_service_request/);
   assert.match(stripeReturnStatus, /existingReceipt/);
+  assert.match(stripeReturnStatus, /receipt_unavailable/);
+  assert.match(stripeReturnStatus, /token_rpc_failed/);
+  assert.match(stripeReturnStatus, /token_missing/);
+  assert.match(stripeReturnStatus, /stripe-return-status-receipt-diagnostic/);
   assert.match(stripeReturnStatus, /hasSafeDashboardReturn/);
   assert.match(stripeReturnStatus, /dashboardReturnPath/);
   assert.match(stripeReturnStatus, /get_public_estimate_by_token_rpc/);

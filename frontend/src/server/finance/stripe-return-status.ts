@@ -32,6 +32,28 @@ type PaymentReceiptRow = {
   receipt_token: string;
 };
 
+type PaymentReceiptLoadFailureReason =
+  | "invalid_payment"
+  | "service_unconfigured"
+  | "receipt_missing"
+  | "receipt_query_failed"
+  | "token_rpc_failed"
+  | "token_missing"
+  | "receipt_detail_failed";
+
+type PaymentReceiptLoadResult =
+  | {
+      ok: true;
+      receipt: PaymentReceiptRow;
+    }
+  | {
+      ok: false;
+      errorCode?: string | null;
+      reason: PaymentReceiptLoadFailureReason;
+      receiptRowFound: boolean;
+      tokenIssued: boolean;
+    };
+
 type PublicEstimatePayload = {
   estimate?: {
     id?: string;
@@ -59,7 +81,12 @@ type PublicPaymentOptions = {
   total?: number | string | null;
 };
 
-type StripePaymentReturnState = "received" | "processing" | "canceled" | "failed";
+type StripePaymentReturnState =
+  | "received"
+  | "processing"
+  | "canceled"
+  | "failed"
+  | "receipt_unavailable";
 
 export type StripeReturnStatus =
   | {
@@ -150,18 +177,46 @@ function paymentState(attempt: CheckoutAttemptRow): StripePaymentReturnState {
   return "processing";
 }
 
+function logReceiptReturnStatusDiagnostic(params: {
+  errorCode?: string | null;
+  reason: PaymentReceiptLoadFailureReason;
+  receiptRowFound: boolean;
+  stage: "dashboard_receipt_load" | "public_receipt_load";
+  tokenIssued: boolean;
+}) {
+  console.error("[stripe-return-status-receipt-diagnostic]", {
+    errorCategory: params.reason,
+    errorCode: params.errorCode ?? null,
+    receiptRowFound: params.receiptRowFound,
+    stage: params.stage,
+    tokenIssued: params.tokenIssued,
+  });
+}
+
 async function loadPaymentReceipt(
   paymentId: string | null,
   serviceRequestId: string,
-): Promise<PaymentReceiptRow | null> {
+): Promise<PaymentReceiptLoadResult> {
   if (!paymentId || !UUID_PATTERN.test(paymentId)) {
-    return null;
+    return {
+      errorCode: null,
+      ok: false,
+      reason: "invalid_payment",
+      receiptRowFound: false,
+      tokenIssued: false,
+    };
   }
 
   const serviceRole = getSupabaseServiceRoleClient();
 
   if (!serviceRole) {
-    return null;
+    return {
+      errorCode: null,
+      ok: false,
+      reason: "service_unconfigured",
+      receiptRowFound: false,
+      tokenIssued: false,
+    };
   }
 
   const { data: existingReceipt, error: existingReceiptError } = await (serviceRole as any)
@@ -170,8 +225,24 @@ async function loadPaymentReceipt(
     .eq("payment_id", paymentId)
     .maybeSingle();
 
-  if (existingReceiptError || !existingReceipt?.id) {
-    return null;
+  if (existingReceiptError) {
+    return {
+      errorCode: existingReceiptError.code ?? null,
+      ok: false,
+      reason: "receipt_query_failed",
+      receiptRowFound: false,
+      tokenIssued: false,
+    };
+  }
+
+  if (!existingReceipt?.id) {
+    return {
+      errorCode: null,
+      ok: false,
+      reason: "receipt_missing",
+      receiptRowFound: false,
+      tokenIssued: false,
+    };
   }
 
   const { data: receiptTokenData, error: receiptTokenError } = await (serviceRole as any).rpc(
@@ -181,8 +252,24 @@ async function loadPaymentReceipt(
     },
   );
 
-  if (receiptTokenError || !receiptTokenData?.receipt_token) {
-    return null;
+  if (receiptTokenError) {
+    return {
+      errorCode: receiptTokenError.code ?? null,
+      ok: false,
+      reason: "token_rpc_failed",
+      receiptRowFound: true,
+      tokenIssued: false,
+    };
+  }
+
+  if (!receiptTokenData?.receipt_token) {
+    return {
+      errorCode: null,
+      ok: false,
+      reason: "token_missing",
+      receiptRowFound: true,
+      tokenIssued: false,
+    };
   }
 
   const { data, error } = await (serviceRole as any)
@@ -192,7 +279,13 @@ async function loadPaymentReceipt(
     .maybeSingle();
 
   if (error || !data) {
-    return null;
+    return {
+      errorCode: error?.code ?? null,
+      ok: false,
+      reason: "receipt_detail_failed",
+      receiptRowFound: true,
+      tokenIssued: true,
+    };
   }
 
   const { data: requestData } = await (serviceRole as any)
@@ -202,9 +295,12 @@ async function loadPaymentReceipt(
     .maybeSingle();
 
   return {
-    ...(data as Omit<PaymentReceiptRow, "receipt_token">),
-    job_number: requestData?.job_number ? String(requestData.job_number) : null,
-    receipt_token: receiptTokenData.receipt_token,
+    ok: true,
+    receipt: {
+      ...(data as Omit<PaymentReceiptRow, "receipt_token">),
+      job_number: requestData?.job_number ? String(requestData.job_number) : null,
+      receipt_token: receiptTokenData.receipt_token,
+    },
   };
 }
 
@@ -273,10 +369,26 @@ export async function loadDashboardStripeReturnStatus(params: {
     return { authorized: false, state: "unauthorized" };
   }
 
-  const receipt =
+  const receiptResult =
     attempt.checkout_status === "succeeded"
       ? await loadPaymentReceipt(attempt.succeeded_payment_id, attempt.service_request_id)
       : null;
+  const receipt = receiptResult?.ok ? receiptResult.receipt : null;
+  const receiptUnavailable =
+    attempt.checkout_status === "succeeded" &&
+    Boolean(attempt.succeeded_payment_id) &&
+    receiptResult !== null &&
+    !receiptResult.ok;
+
+  if (receiptResult && !receiptResult.ok) {
+    logReceiptReturnStatusDiagnostic({
+      errorCode: receiptResult.errorCode ?? null,
+      reason: receiptResult.reason,
+      receiptRowFound: receiptResult.receiptRowFound,
+      stage: "dashboard_receipt_load",
+      tokenIssued: receiptResult.tokenIssued,
+    });
+  }
 
   return {
     amount: asMoney(attempt.amount) ?? "0.00",
@@ -287,6 +399,8 @@ export async function loadDashboardStripeReturnStatus(params: {
     paid: null,
     paymentStatus: receipt
       ? paymentState(attempt)
+      : receiptUnavailable
+        ? "receipt_unavailable"
       : attempt.checkout_status === "succeeded"
         ? "processing"
         : paymentState(attempt),
@@ -523,13 +637,29 @@ export async function loadStripeReturnStatus(params: {
   const finalAttempt = params.releaseOnCancelReturn
     ? await releaseSandboxReservationAfterCancelReturn(attempt)
     : attempt;
-  const receipt =
+  const receiptResult =
     finalAttempt.checkout_status === "succeeded"
       ? await loadPaymentReceipt(
           finalAttempt.succeeded_payment_id,
           finalAttempt.service_request_id,
         )
       : null;
+  const receipt = receiptResult?.ok ? receiptResult.receipt : null;
+  const receiptUnavailable =
+    finalAttempt.checkout_status === "succeeded" &&
+    Boolean(finalAttempt.succeeded_payment_id) &&
+    receiptResult !== null &&
+    !receiptResult.ok;
+
+  if (receiptResult && !receiptResult.ok) {
+    logReceiptReturnStatusDiagnostic({
+      errorCode: receiptResult.errorCode ?? null,
+      reason: receiptResult.reason,
+      receiptRowFound: receiptResult.receiptRowFound,
+      stage: "public_receipt_load",
+      tokenIssued: receiptResult.tokenIssued,
+    });
+  }
 
   return {
     amount: asMoney(finalAttempt.amount) ?? "0.00",
@@ -540,6 +670,8 @@ export async function loadStripeReturnStatus(params: {
     paid: asMoney(paymentOptions?.paid),
     paymentStatus: receipt
       ? paymentState(finalAttempt)
+      : receiptUnavailable
+        ? "receipt_unavailable"
       : finalAttempt.checkout_status === "succeeded"
         ? "processing"
         : paymentState(finalAttempt),
