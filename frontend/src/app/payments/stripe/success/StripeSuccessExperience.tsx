@@ -27,7 +27,7 @@ function formatDate(value: string | null | undefined) {
     return "Pending";
   }
 
-  return new Intl.DateTimeFormat("en-US", {
+  const parts = new Intl.DateTimeFormat("en-US", {
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
@@ -35,7 +35,14 @@ function formatDate(value: string | null | undefined) {
     timeZone: "America/Chicago",
     timeZoneName: "short",
     year: "numeric",
-  }).format(date);
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((entry) => entry.type === type)?.value ?? "";
+  const dayPeriod = part("dayPeriod");
+
+  return `${part("month")} ${part("day")}, ${part("year")} at ${part("hour")}:${part("minute")}${
+    dayPeriod ? ` ${dayPeriod}` : ""
+  } ${part("timeZoneName")}`.trim();
 }
 
 function paymentMethod(status: Extract<StripeReturnStatus, { authorized: true }>) {
@@ -173,6 +180,15 @@ export function StripeSuccessExperience({
   const receiptUnavailable = status.paymentStatus === "receipt_unavailable";
   const unavailable = status.paymentStatus === "processing" && polls >= 12;
   const pending = !received && !failed && !receiptUnavailable && !unavailable;
+  const detailRows =
+    received && receipt
+      ? [
+          ["●", "Job Number", receipt.jobNumber ? `#${receipt.jobNumber}` : "Unavailable"],
+          ["◷", "Payment Date", formatDate(receipt.paidAt)],
+          ["▣", "Payment Method", paymentMethod(status)],
+          ["◆", "Receipt Number", receipt.receiptNumber],
+        ]
+      : [];
   const iconState = received
     ? "success"
     : failed || unavailable || receiptUnavailable
@@ -180,15 +196,16 @@ export function StripeSuccessExperience({
       : "pending";
 
   return (
-    <main className="relative min-h-screen overflow-hidden bg-white px-5 py-6 text-slate-950 sm:px-8 sm:py-10">
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-44 overflow-hidden text-blue-50">
-        <div className="absolute -bottom-28 left-1/2 h-64 w-[140%] -translate-x-1/2 rounded-[50%] bg-blue-50" />
-        <div className="absolute -bottom-36 left-[52%] h-64 w-[150%] -translate-x-1/2 rounded-[50%] bg-cyan-50/70" />
+    <main className="relative min-h-screen overflow-hidden bg-gradient-to-b from-white via-slate-50 to-blue-50 px-5 py-6 text-slate-950 sm:px-8 sm:py-10">
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-56 overflow-hidden text-blue-50">
+        <div className="absolute -bottom-32 left-1/2 h-72 w-[145%] -translate-x-1/2 rounded-[50%] bg-blue-100" />
+        <div className="absolute -bottom-40 left-[52%] h-72 w-[155%] -translate-x-1/2 rounded-[50%] bg-cyan-100/80" />
+        <div className="absolute -bottom-48 left-[45%] h-72 w-[150%] -translate-x-1/2 rounded-[50%] bg-emerald-50/80" />
       </div>
 
       <section className="relative mx-auto flex min-h-[calc(100vh-3rem)] w-full max-w-3xl flex-col">
         <header className="flex items-start justify-between gap-4 text-sm">
-          <div className="font-black tracking-tight">
+          <div className="text-2xl font-black tracking-tight sm:text-3xl">
             <span className="text-slate-950">HomeFix</span>
             <span className="bg-gradient-to-r from-blue-700 to-emerald-500 bg-clip-text text-transparent">
               OS
@@ -203,16 +220,17 @@ export function StripeSuccessExperience({
           <div className="relative">
             {received ? (
               <>
-                <span className="absolute -left-8 top-2 h-2 w-2 rounded-full bg-blue-500" />
-                <span className="absolute -right-9 top-6 h-3 w-3 rounded-full bg-emerald-400" />
-                <span className="absolute -right-4 -top-5 h-2 w-2 rounded-full bg-cyan-400" />
+                <span className="absolute -left-10 top-3 h-2 w-2 rounded-full bg-blue-500 shadow-lg shadow-blue-500/40" />
+                <span className="absolute -right-10 top-7 h-3 w-3 rounded-full bg-emerald-400 shadow-lg shadow-emerald-400/40" />
+                <span className="absolute -right-4 -top-6 h-2 w-2 rounded-full bg-cyan-400 shadow-lg shadow-cyan-400/40" />
+                <span className="absolute -left-5 -top-5 h-3 w-3 rounded-full bg-emerald-300/80" />
               </>
             ) : null}
             <div
               className={[
-                "grid h-24 w-24 place-items-center rounded-full text-5xl font-black shadow-xl sm:h-28 sm:w-28",
+                "grid h-24 w-24 place-items-center rounded-full text-5xl font-black shadow-2xl sm:h-28 sm:w-28",
                 iconState === "success"
-                  ? "bg-emerald-500 text-white shadow-emerald-500/25"
+                  ? "bg-emerald-500 text-white shadow-emerald-500/30 ring-8 ring-emerald-100"
                   : iconState === "alert"
                     ? "bg-amber-100 text-amber-700"
                     : "bg-blue-100 text-blue-700",
@@ -246,38 +264,26 @@ export function StripeSuccessExperience({
           </p>
 
           {received && receipt ? (
-            <section className="mt-8 w-full rounded-3xl border border-slate-200 bg-white p-5 text-left shadow-2xl shadow-blue-950/10 sm:p-6">
-              <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
-                Payment Details
+            <section className="mt-8 w-full rounded-3xl border border-blue-100 bg-white p-5 text-left shadow-2xl shadow-blue-950/10 sm:p-6">
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-blue-600">
+                Payment Summary
               </p>
               <p className="mt-3 text-5xl font-black tracking-tight text-slate-950 sm:text-6xl">
                 ${receipt.amount}
               </p>
-              <dl className="mt-6 grid gap-4 text-sm sm:grid-cols-2">
-                <div className="rounded-2xl bg-slate-50 p-4">
-                  <dt className="font-bold text-slate-500">Payment Method</dt>
-                  <dd className="mt-1 font-black text-slate-950">
-                    {paymentMethod(status)}
-                  </dd>
-                </div>
-                <div className="rounded-2xl bg-slate-50 p-4">
-                  <dt className="font-bold text-slate-500">Job Number</dt>
-                  <dd className="mt-1 font-black text-slate-950">
-                    {receipt.jobNumber ? `#${receipt.jobNumber}` : "Unavailable"}
-                  </dd>
-                </div>
-                <div className="rounded-2xl bg-slate-50 p-4">
-                  <dt className="font-bold text-slate-500">Date & Time</dt>
-                  <dd className="mt-1 font-black text-slate-950">
-                    {formatDate(receipt.paidAt)}
-                  </dd>
-                </div>
-                <div className="rounded-2xl bg-slate-50 p-4">
-                  <dt className="font-bold text-slate-500">Receipt Number</dt>
-                  <dd className="mt-1 font-black text-slate-950">
-                    {receipt.receiptNumber}
-                  </dd>
-                </div>
+              <dl className="mt-6 grid gap-3 text-sm">
+                {detailRows.map(([icon, label, value]) => (
+                  <div
+                    className="flex items-center gap-3 rounded-2xl bg-slate-50 p-4"
+                    key={label}
+                  >
+                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-blue-100 text-sm font-black text-blue-700">
+                      {icon}
+                    </span>
+                    <dt className="font-bold text-slate-500">{label}</dt>
+                    <dd className="ml-auto text-right font-black text-slate-950">{value}</dd>
+                  </div>
+                ))}
               </dl>
             </section>
           ) : pending ? (
@@ -301,7 +307,7 @@ export function StripeSuccessExperience({
 
           {received ? (
             <Link
-              className="mt-7 inline-flex min-h-12 w-full items-center justify-center rounded-2xl bg-blue-700 px-5 text-center text-sm font-black text-white shadow-lg shadow-blue-700/20 transition hover:bg-blue-800 sm:w-auto sm:min-w-56"
+              className="mt-7 inline-flex min-h-12 w-full items-center justify-center rounded-2xl bg-blue-700 px-5 text-center text-sm font-black text-white shadow-lg shadow-blue-700/20 transition hover:bg-blue-800"
               href={receipt?.href ?? status.documentHref}
             >
               View Receipt

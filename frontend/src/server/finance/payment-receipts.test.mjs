@@ -40,7 +40,7 @@ function formatReceiptPaidAt(value) {
   if (Number.isNaN(date.getTime())) {
     return "Pending";
   }
-  return new Intl.DateTimeFormat("en-US", {
+  const parts = new Intl.DateTimeFormat("en-US", {
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
@@ -48,7 +48,13 @@ function formatReceiptPaidAt(value) {
     timeZone: "America/Chicago",
     timeZoneName: "short",
     year: "numeric",
-  }).format(date);
+  }).formatToParts(date);
+  const part = (type) => parts.find((entry) => entry.type === type)?.value ?? "";
+  const dayPeriod = part("dayPeriod");
+
+  return `${part("month")} ${part("day")}, ${part("year")} at ${part("hour")}:${part("minute")}${
+    dayPeriod ? ` ${dayPeriod}` : ""
+  } ${part("timeZoneName")}`.trim();
 }
 
 test("0140 creates one hashed-token receipt per canonical successful payment", () => {
@@ -189,11 +195,16 @@ test("success page waits for receipt-backed verified payment", () => {
   assert.match(successExperience, /api\/payments\/stripe-return-status/);
   assert.match(successExperience, /Authorization/);
   assert.match(successExperience, /Payment Successful!/);
+  assert.match(successExperience, /Payment Summary/);
+  assert.match(successExperience, /Reliable Appliances\. Happier Homes\./);
   assert.match(successExperience, /View Receipt/);
   assert.match(successExperience, /paidAt/);
   assert.doesNotMatch(successExperience, /dateStyle[\s\S]*timeZoneName/);
   assert.doesNotThrow(() => formatReceiptPaidAt("2026-10-12T23:58:06.523232+00:00"));
-  assert.notEqual(formatReceiptPaidAt("2026-10-12T23:58:06.523232+00:00"), "Pending");
+  assert.equal(
+    formatReceiptPaidAt("2026-10-12T23:58:06.523232+00:00"),
+    "Oct 12, 2026 at 6:58 PM CDT",
+  );
   assert.match(statusRoute, /requireHomeFixPrivateAccess/);
   assert.match(statusRoute, /loadDashboardStripeReturnStatus/);
   assert.match(returnStatus, /target_service_request_id: serviceRequestId/);
@@ -206,7 +217,10 @@ test("public receipt page is token scoped, noindex, and avoids internal identifi
   assert.match(publicReceiptPage, /robots/);
   assert.match(publicReceiptPage, /index: false/);
   assert.match(publicReceiptPage, /fetchCache = "force-no-store"/);
-  assert.match(publicReceiptPage, /HomeFix Appliance Repair/);
-  assert.match(publicReceiptPage, /Payment Receipt/);
+  assert.match(publicReceiptPage, /HomeFix/);
+  assert.match(publicReceiptPage, /Reliable Appliances\. Happier Homes\./);
+  assert.match(publicReceiptPage, /Payment Confirmed/);
+  assert.match(publicReceiptPage, /America\/Chicago/);
+  assert.doesNotMatch(publicReceiptPage, /dateStyle[\s\S]*timeZoneName/);
   assert.doesNotMatch(publicReceiptPage, /provider_payment|payment_id|service_request_id|company_id|stripe/i);
 });
