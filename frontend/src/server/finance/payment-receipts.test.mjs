@@ -35,6 +35,22 @@ const serviceRequestDetail = read(
   "frontend/src/components/dashboard/ServiceRequestDetail.tsx",
 );
 
+function formatReceiptPaidAt(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "Pending";
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    month: "short",
+    timeZone: "America/Chicago",
+    timeZoneName: "short",
+    year: "numeric",
+  }).format(date);
+}
+
 test("0140 creates one hashed-token receipt per canonical successful payment", () => {
   assert.match(migration, /create table if not exists public\.service_request_payment_receipts/);
   assert.match(migration, /create table if not exists public\.service_request_payment_receipt_tokens/);
@@ -174,6 +190,10 @@ test("success page waits for receipt-backed verified payment", () => {
   assert.match(successExperience, /Authorization/);
   assert.match(successExperience, /Payment Successful!/);
   assert.match(successExperience, /View Receipt/);
+  assert.match(successExperience, /paidAt/);
+  assert.doesNotMatch(successExperience, /dateStyle[\s\S]*timeZoneName/);
+  assert.doesNotThrow(() => formatReceiptPaidAt("2026-10-12T23:58:06.523232+00:00"));
+  assert.notEqual(formatReceiptPaidAt("2026-10-12T23:58:06.523232+00:00"), "Pending");
   assert.match(statusRoute, /requireHomeFixPrivateAccess/);
   assert.match(statusRoute, /loadDashboardStripeReturnStatus/);
   assert.match(returnStatus, /target_service_request_id: serviceRequestId/);

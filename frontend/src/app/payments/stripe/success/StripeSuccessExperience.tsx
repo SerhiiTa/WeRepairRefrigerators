@@ -21,12 +21,21 @@ function formatDate(value: string | null | undefined) {
     return "Pending";
   }
 
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Pending";
+  }
+
   return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    month: "short",
     timeZone: "America/Chicago",
     timeZoneName: "short",
-  }).format(new Date(value));
+    year: "numeric",
+  }).format(date);
 }
 
 function paymentMethod(status: Extract<StripeReturnStatus, { authorized: true }>) {
