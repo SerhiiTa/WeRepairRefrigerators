@@ -141,6 +141,8 @@ test("webhook creates receipt only after canonical ledger posting", () => {
 test("receipt delivery is manual staff action only", () => {
   assert.match(receiptRoute, /requireHomeFixPrivateAccess/);
   assert.match(receiptRoute, /can_view_service_request/);
+  assert.match(receiptRoute, /target_service_request_id: serviceRequestId/);
+  assert.doesNotMatch(receiptRoute, /p_service_request_id: serviceRequestId/);
   assert.match(receiptRoute, /Receipt SMS must use the authorized Job conversation recipient/);
   assert.match(receiptRoute, /sendConversationSms/);
   assert.match(receiptRoute, /deliveryOptions/);
@@ -223,6 +225,9 @@ test("success page waits for receipt-backed verified payment", () => {
   assert.doesNotMatch(successExperience, /\["◆", "Receipt Number"/);
   assert.match(successExperience, /View Receipt/);
   assert.match(successExperience, /Send Receipt/);
+  assert.match(successExperience, /status\.staffReceiptDelivery/);
+  assert.match(successExperience, /setReceiptDeliveryModal/);
+  assert.match(successExperience, /api\/service-requests\/\$\{serviceRequestId\}\/payments\/\$\{paymentId\}\/receipt/);
   assert.match(successExperience, /Receipt email delivery is not configured yet/);
   assert.match(successExperience, /Preview only\. No receipt was sent\./);
   assert.match(successExperience, /Message Preview/);

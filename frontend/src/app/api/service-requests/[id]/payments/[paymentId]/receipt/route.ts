@@ -261,7 +261,7 @@ async function assertCanAccessPaymentReceipt({
   const { data: canView, error: canViewError } =
     await privateAccess.context.supabase.rpc(
       "can_view_service_request" as never,
-      { p_service_request_id: serviceRequestId } as never,
+      { target_service_request_id: serviceRequestId } as never,
     );
 
   if (canViewError || canView !== true) {
