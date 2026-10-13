@@ -212,6 +212,7 @@ includesAll(detail, [
   "onCollectPayment={(estimate) =>",
   "openPaymentWorkflow(target)",
   "depositPaid={",
+  "invoiceCoverageSummary={getEstimateInvoiceCoverageSummary(manualEstimate)}",
   "estimateUsesJobLevelPaidCredit(manualEstimate)",
   "getEstimateLogicalPaidCreditCents(manualEstimate)",
   "const approvedEstimateId = isPersistedEstimateUuid(payload.estimate?.id ?? \"\")",
@@ -241,6 +242,31 @@ assert.match(
   detail,
   /if \(\s*!options\.allowWorkspaceClose &&[\s\S]*?financeEstimateMode === "manual"[\s\S]*?financeEstimateMode === "saved"[\s\S]*?return;[\s\S]*?setManualEstimateId\(null\);[\s\S]*?setFinanceEstimateMode\("home"\);/,
   "Route synchronization must not immediately close a newly opened Estimate editor when the URL has no finance query state.",
+);
+assert.match(
+  detail,
+  /const getEstimateInvoiceCoverageSummary =[\s\S]*?invoicesByEstimateId\.get\(estimate\.id\)[\s\S]*?linkedInvoice\.invoiceLifecycleStatus !== "current"[\s\S]*?financeBalanceDueCents === 0[\s\S]*?fully_paid[\s\S]*?partially_paid/,
+  "Estimate invoice coverage presentation must use current Invoice membership and Job balance, not inferred per-Estimate allocations.",
+);
+assert.match(
+  editor,
+  /invoiceCoverageSummary\?:[\s\S]*?status: "fully_paid" \| "partially_paid"[\s\S]*?invoiceNumber: string[\s\S]*?directPaid: number[\s\S]*?currentBalanceDue: number/,
+  "Manual Estimate editor should receive explicit presentation-only Invoice coverage state.",
+);
+assert.match(
+  editor,
+  /isFullyCoveredByInvoice[\s\S]*?financialSummaryPaid = isFullyCoveredByInvoice[\s\S]*?estimateTotalForDisplay[\s\S]*?depositPaid/,
+  "Fully paid linked Estimates should display effective Paid as the Estimate total without changing allocations.",
+);
+assert.match(
+  editor,
+  /Paid through Invoice[\s\S]*?Paid in Full[\s\S]*?Direct Estimate deposit:[\s\S]*?Remaining obligation settled through the consolidated Invoice/,
+  "Fully paid linked Estimates should explain that the remaining obligation was settled by the consolidated Invoice.",
+);
+assert.match(
+  editor,
+  /Direct Estimate Payments[\s\S]*?Direct Unallocated Remainder[\s\S]*?Partially covered by Invoice[\s\S]*?Current Invoice \/ Job Balance Due[\s\S]*?informational only/,
+  "Partially paid linked Estimates should keep direct-payment wording and avoid making the remainder separately collectible.",
 );
 assert.match(
   detail,

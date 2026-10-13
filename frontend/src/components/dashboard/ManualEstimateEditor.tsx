@@ -133,6 +133,12 @@ type ManualEstimateEditorProps = {
   onCollectPayment?: (estimate: DashboardServiceRequestEstimate) => void;
   customerHref?: string | null;
   linkedInvoiceNumber?: string | null;
+  invoiceCoverageSummary?: {
+    status: "fully_paid" | "partially_paid";
+    invoiceNumber: string;
+    directPaid: number;
+    currentBalanceDue: number;
+  } | null;
   depositPaid?: number;
   isCreatingInvoice?: boolean;
   sendingEstimateId: string | null;
@@ -681,6 +687,7 @@ export function ManualEstimateEditor({
   onCollectPayment,
   customerHref,
   linkedInvoiceNumber,
+  invoiceCoverageSummary = null,
   depositPaid = 0,
   isCreatingInvoice = false,
   sendingEstimateId,
@@ -1130,7 +1137,19 @@ export function ManualEstimateEditor({
     !linkedInvoiceNumber &&
     Boolean(onCollectPayment);
   const estimateTotalForDisplay = initialEstimate?.total ?? totals.total;
-  const remainingEstimateBalance = Math.max(0, estimateTotalForDisplay - depositPaid);
+  const isFullyCoveredByInvoice =
+    invoiceCoverageSummary?.status === "fully_paid";
+  const financialSummaryPaid = isFullyCoveredByInvoice
+    ? estimateTotalForDisplay
+    : depositPaid;
+  const remainingEstimateBalance = Math.max(
+    0,
+    estimateTotalForDisplay - financialSummaryPaid,
+  );
+  const directUnallocatedRemainder = Math.max(
+    0,
+    estimateTotalForDisplay - (invoiceCoverageSummary?.directPaid ?? depositPaid),
+  );
   const workspaceTabs: Array<{ id: EstimateWorkspaceTab; label: string }> = [
     { id: "details", label: "Details" },
     { id: "items", label: "Items" },
@@ -2772,7 +2791,13 @@ export function ManualEstimateEditor({
             </div>
           </dl>
           {estimateStatus === "approved" ? (
-            <div className="mt-4 grid gap-3 rounded-2xl border border-blue-100 bg-blue-50 p-4 sm:grid-cols-3">
+            <div
+              className={`mt-4 grid gap-3 rounded-2xl border p-4 sm:grid-cols-3 ${
+                isFullyCoveredByInvoice
+                  ? "border-emerald-200 bg-emerald-50"
+                  : "border-blue-100 bg-blue-50"
+              }`}
+            >
               <div>
                 <p className="text-xs font-black uppercase tracking-[0.12em] text-[#64748B]">
                   Estimate Total
@@ -2783,20 +2808,68 @@ export function ManualEstimateEditor({
               </div>
               <div>
                 <p className="text-xs font-black uppercase tracking-[0.12em] text-[#64748B]">
-                  Paid
+                  {invoiceCoverageSummary?.status === "partially_paid"
+                    ? "Direct Estimate Payments"
+                    : "Paid"}
                 </p>
                 <p className="mt-1 text-lg font-black text-emerald-700">
-                  {formatServiceRequestMoney(depositPaid)}
+                  {formatServiceRequestMoney(
+                    invoiceCoverageSummary?.status === "partially_paid"
+                      ? invoiceCoverageSummary.directPaid
+                      : financialSummaryPaid,
+                  )}
                 </p>
               </div>
               <div>
                 <p className="text-xs font-black uppercase tracking-[0.12em] text-[#64748B]">
-                  Remaining
+                  {invoiceCoverageSummary?.status === "partially_paid"
+                    ? "Direct Unallocated Remainder"
+                    : "Remaining"}
                 </p>
                 <p className="mt-1 text-lg font-black text-orange-600">
-                  {formatServiceRequestMoney(remainingEstimateBalance)}
+                  {formatServiceRequestMoney(
+                    invoiceCoverageSummary?.status === "partially_paid"
+                      ? directUnallocatedRemainder
+                      : remainingEstimateBalance,
+                  )}
                 </p>
               </div>
+              {invoiceCoverageSummary?.status === "fully_paid" ? (
+                <div className="sm:col-span-3 rounded-xl border border-emerald-200 bg-white px-3 py-3 text-sm font-bold text-emerald-800">
+                  <p className="flex items-center gap-2 font-black">
+                    <span
+                      aria-hidden="true"
+                      className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-600 text-xs text-white"
+                    >
+                      ✓
+                    </span>
+                    Paid through Invoice
+                  </p>
+                  <p className="mt-1 text-emerald-700">
+                    {invoiceCoverageSummary.invoiceNumber} · Paid in Full
+                  </p>
+                  <p className="mt-2 text-[#334155]">
+                    Direct Estimate deposit:{" "}
+                    {formatServiceRequestMoney(invoiceCoverageSummary.directPaid)}.
+                    Remaining obligation settled through the consolidated Invoice.
+                  </p>
+                </div>
+              ) : invoiceCoverageSummary?.status === "partially_paid" ? (
+                <div className="sm:col-span-3 rounded-xl border border-blue-100 bg-white px-3 py-3 text-sm font-bold text-[#334155]">
+                  <p className="font-black text-[#0F172A]">
+                    Partially covered by Invoice
+                  </p>
+                  <p className="mt-1 text-[#64748B]">
+                    {invoiceCoverageSummary.invoiceNumber} · Current Invoice / Job Balance Due{" "}
+                    {formatServiceRequestMoney(invoiceCoverageSummary.currentBalanceDue)}.
+                  </p>
+                  <p className="mt-2 text-[#64748B]">
+                    This linked Estimate is part of the consolidated Invoice. The direct
+                    unallocated remainder is informational only and is not a separate
+                    collectible balance.
+                  </p>
+                </div>
+              ) : null}
             </div>
           ) : null}
           {canEditFinancialFields ? (

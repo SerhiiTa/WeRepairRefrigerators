@@ -7697,6 +7697,30 @@ export function ServiceRequestDetail({
         : total;
     }, 0);
   };
+  const getEstimateInvoiceCoverageSummary = (
+    estimate: DashboardServiceRequestEstimate | null,
+  ) => {
+    if (!estimate) {
+      return null;
+    }
+
+    const linkedInvoice = invoicesByEstimateId.get(estimate.id) ?? null;
+
+    if (!linkedInvoice || linkedInvoice.invoiceLifecycleStatus !== "current") {
+      return null;
+    }
+
+    const directPaidCents = estimateAllocatedCents.get(estimate.id) ?? 0;
+    const status =
+      financeBalanceDueCents === 0 ? ("fully_paid" as const) : ("partially_paid" as const);
+
+    return {
+      status,
+      invoiceNumber: linkedInvoice.invoiceNumber,
+      directPaid: centsToMoney(directPaidCents),
+      currentBalanceDue: centsToMoney(financeBalanceDueCents),
+    };
+  };
   const financePaidTotal = centsToMoney(validPaidCreditCents);
   const financeBalanceDueTotal = Math.max(
     0,
@@ -14085,6 +14109,7 @@ export function ServiceRequestDetail({
             linkedInvoiceNumber={
               manualEstimate ? invoicesByEstimateId.get(manualEstimate.id)?.invoiceNumber ?? null : null
             }
+            invoiceCoverageSummary={getEstimateInvoiceCoverageSummary(manualEstimate)}
             onClose={closeManualEstimateEditor}
             onCreateInvoice={(estimate) => createInvoiceFromEstimate(estimate)}
             onCollectPayment={(estimate) => {
