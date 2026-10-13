@@ -228,6 +228,24 @@ test("success page waits for receipt-backed verified payment", () => {
   assert.match(successExperience, /status\.staffReceiptDelivery/);
   assert.match(successExperience, /setReceiptDeliveryModal/);
   assert.match(successExperience, /api\/service-requests\/\$\{serviceRequestId\}\/payments\/\$\{paymentId\}\/receipt/);
+  assert.match(successExperience, /const smsSelected = event\.currentTarget\.checked/);
+  assert.match(successExperience, /\? \{ \.\.\.current, smsSelected \}/);
+  assert.match(
+    successExperience,
+    /\(!receiptDeliveryModal\.smsSelected &&\s*!receiptDeliveryModal\.emailSelected\)/,
+  );
+  const smsSelectionIndex = successExperience.indexOf(
+    "const smsSelected = event.currentTarget.checked",
+  );
+  assert.ok(smsSelectionIndex > -1);
+  assert.ok(
+    smsSelectionIndex <
+      successExperience.indexOf("setReceiptDeliveryModal((current) =>", smsSelectionIndex),
+  );
+  assert.ok(
+    successExperience.indexOf("const sends: Array<Promise<Response>> = []") >
+      successExperience.indexOf("Choose SMS or Email before sending."),
+  );
   assert.match(successExperience, /Receipt email delivery is not configured yet/);
   assert.match(successExperience, /Preview only\. No receipt was sent\./);
   assert.match(successExperience, /Message Preview/);

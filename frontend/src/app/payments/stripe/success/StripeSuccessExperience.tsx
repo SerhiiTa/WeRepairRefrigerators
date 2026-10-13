@@ -957,13 +957,13 @@ export function StripeSuccessExperience({
                     receiptDeliveryState.status === "sending" ||
                     !receiptDeliveryModal.options.sms.available
                   }
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const smsSelected = event.currentTarget.checked;
+
                     setReceiptDeliveryModal((current) =>
-                      current
-                        ? { ...current, smsSelected: event.currentTarget.checked }
-                        : current,
-                    )
-                  }
+                      current ? { ...current, smsSelected } : current,
+                    );
+                  }}
                   type="checkbox"
                 />
                 <span className="min-w-0">
