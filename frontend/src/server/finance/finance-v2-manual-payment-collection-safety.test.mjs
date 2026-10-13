@@ -15,6 +15,9 @@ const migration = read(
 const customDepositMigration = read(
   "supabase/migrations/0137_technician_custom_deposit_checkout_apply_ready.sql",
 );
+const invoiceCustomDepositEligibilityMigration = read(
+  "supabase/migrations/0142_invoice_custom_deposit_payment_eligibility_apply_ready.sql",
+);
 const serviceRequestDetail = read(
   "frontend/src/components/dashboard/ServiceRequestDetail.tsx",
 );
@@ -109,6 +112,41 @@ test("technician card collection supports bounded custom deposits", () => {
   assert.match(
     customDepositMigration,
     /custom_deposit_authorized', normalized_checkout_kind = 'custom_deposit'/,
+  );
+});
+
+test("current Invoice card collection offers Pay in Full and Custom Deposit", () => {
+  assert.match(
+    serviceRequestDetail,
+    /type: "invoice" as const,[\s\S]*label: `Payment toward \$\{invoice\.invoiceNumber\}`/,
+  );
+  assert.match(
+    serviceRequestDetail,
+    /kind: "balance_due" as const,[\s\S]*label: "Pay in Full"/,
+  );
+  assert.match(
+    serviceRequestDetail,
+    /\.{3}currentLifecycleInvoices[\s\S]*kind: "custom_deposit" as const,[\s\S]*label: "Custom Deposit"[\s\S]*type: "invoice" as const/,
+  );
+  assert.match(
+    serviceRequestDetail,
+    /selectedManualPaymentTarget !== null &&[\s\S]*selectedManualPaymentTarget\.cardActions\.length > 1/,
+  );
+  assert.match(
+    serviceRequestDetail,
+    /the verified current Invoice \/ Job balance/,
+  );
+  assert.match(
+    invoiceCustomDepositEligibilityMigration,
+    /'kind', 'balance_due'[\s\S]*'label', 'Pay in Full'/,
+  );
+  assert.match(
+    invoiceCustomDepositEligibilityMigration,
+    /'kind', 'custom_deposit'[\s\S]*'label', 'Custom Deposit'/,
+  );
+  assert.match(
+    invoiceCustomDepositEligibilityMigration,
+    /Invoice payment eligibility action block did not match expected Finance V2 definition/,
   );
 });
 

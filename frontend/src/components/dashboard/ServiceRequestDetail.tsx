@@ -7859,7 +7859,13 @@ export function ServiceRequestDetail({
               amountCents: financeBalanceDueCents,
               detail: "Current Job balance",
               kind: "balance_due" as const,
-              label: "Pay Balance Due",
+              label: "Pay in Full",
+            },
+            {
+              amountCents: financeBalanceDueCents,
+              detail: "Choose amount",
+              kind: "custom_deposit" as const,
+              label: "Custom Deposit",
             },
           ],
           id: invoice.id,
@@ -17836,7 +17842,8 @@ export function ServiceRequestDetail({
                 </div>
 
                 {manualPaymentDraft.paymentMethod === "card" &&
-                selectedManualPaymentTarget?.type === "estimate" ? (
+                selectedManualPaymentTarget !== null &&
+                selectedManualPaymentTarget.cardActions.length > 1 ? (
                   <div>
                     <p className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
                       Stripe checkout action
@@ -17963,7 +17970,7 @@ export function ServiceRequestDetail({
                           Percentage is calculated from{" "}
                           {selectedManualPaymentTarget.type === "estimate"
                             ? "the approved Estimate total"
-                            : "the current collectible Job balance"}
+                            : "the verified current Invoice / Job balance"}
                           : {formatServiceRequestMoney(centsToMoney(customDepositBaseCents))}.
                         </p>
                       </div>
