@@ -239,6 +239,11 @@ assert.match(
 );
 assert.match(
   detail,
+  /if \(\s*!options\.allowWorkspaceClose &&[\s\S]*?financeEstimateMode === "manual"[\s\S]*?financeEstimateMode === "saved"[\s\S]*?return;[\s\S]*?setManualEstimateId\(null\);[\s\S]*?setFinanceEstimateMode\("home"\);/,
+  "Route synchronization must not immediately close a newly opened Estimate editor when the URL has no finance query state.",
+);
+assert.match(
+  detail,
   /setPendingManualEstimateAddItem\([\s\S]*?await loadEstimates\(\);[\s\S]*?setManualEstimateId\(payload\.estimate\.id\)/,
   "New draft revisions must refresh into estimate state before opening the editor for Add Item.",
 );

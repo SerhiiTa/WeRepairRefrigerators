@@ -2290,6 +2290,13 @@ export function ServiceRequestDetail({
         return;
       }
 
+      if (
+        !options.allowWorkspaceClose &&
+        (financeEstimateMode === "manual" || financeEstimateMode === "saved")
+      ) {
+        return;
+      }
+
       setManualEstimateId(null);
       setFinanceEstimateMode("home");
     }
