@@ -113,73 +113,119 @@ export default async function PaymentReceiptPage({ params }: ReceiptPageProps) {
 
   const documentReference =
     receipt.invoice_number ?? receipt.estimate_number ?? "HomeFixOS payment";
-  const details = [
-    ["●", "Job Number", receipt.job_number ? `#${receipt.job_number}` : "Unavailable"],
-    ["◷", "Payment Date", formatDate(receipt.paid_at)],
-    ["▣", "Payment Method", paymentMethodLabel(receipt)],
-    ["✓", "Status", receipt.payment_status === "succeeded" ? "Succeeded" : "Confirmed"],
-    ["◆", "Related Document", documentReference],
-  ];
+  const paidAt = formatDate(receipt.paid_at);
+  const statusLabel = receipt.payment_status === "succeeded" ? "PAID" : "CONFIRMED";
+  const methodLabel = paymentMethodLabel(receipt);
 
   return (
-    <main className="min-h-screen bg-gradient-to-b from-white via-slate-50 to-blue-50 px-4 py-8 text-slate-950 print:bg-white">
-      <section className="mx-auto max-w-2xl overflow-hidden rounded-3xl border border-blue-100 bg-white shadow-2xl shadow-blue-950/10 print:border-none print:shadow-none">
-        <div className="relative overflow-hidden border-b border-blue-100 bg-slate-950 px-6 py-7 text-white">
-          <div className="absolute -right-16 -top-16 h-40 w-40 rounded-full bg-blue-500/20" />
-          <div className="absolute -bottom-20 right-16 h-40 w-56 rounded-[50%] bg-emerald-400/10" />
-          <div className="relative">
-            <p className="text-2xl font-black tracking-tight">
-              <span>HomeFix</span>
-              <span className="bg-gradient-to-r from-cyan-300 to-emerald-300 bg-clip-text text-transparent">
-                OS
-              </span>
+    <main className="min-h-screen bg-[#F3F6FA] px-3 py-4 text-[#0F172A] print:bg-white print:px-0 print:py-0 sm:px-6 sm:py-8">
+      <article className="mx-auto max-w-4xl bg-white px-4 py-4 shadow-[0_18px_44px_rgba(15,23,42,0.08)] ring-1 ring-[#E5E7EB] print:shadow-none print:ring-0 sm:px-8 sm:py-7">
+        <header className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b border-[#CBD5E1] pb-3">
+          <div className="min-w-0">
+            <p className="text-base font-black leading-5 text-[#0F6BFF] sm:text-2xl">
+              HomeFix Appliance Repair
             </p>
-            <p className="mt-1 text-xs font-bold text-cyan-100">
+            <p className="mt-1 text-[0.68rem] font-black uppercase text-[#64748B]">
               Reliable Appliances. Happier Homes.
             </p>
-            <h1 className="mt-6 text-3xl font-black tracking-tight">
-              Payment Confirmed
+          </div>
+          <div className="text-right">
+            <h1 className="text-lg font-black leading-5 sm:text-3xl">
+              PAYMENT RECEIPT
             </h1>
-            <p className="mt-2 text-sm font-semibold text-slate-300">
-              Receipt {receipt.receipt_number}
+            <p className="mt-1 text-[0.68rem] font-black text-[#475569] sm:text-xs">
+              {receipt.receipt_number}
+            </p>
+            <span className="mt-1 inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-[0.68rem] font-black text-emerald-700">
+              {statusLabel}
+            </span>
+          </div>
+        </header>
+
+        <section className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b border-[#E5E7EB] py-3">
+          <div className="min-w-0">
+            <p className="text-[0.68rem] font-black uppercase text-[#64748B]">
+              Related document
+            </p>
+            <p className="mt-1 text-sm font-black leading-5 sm:text-base">
+              {documentReference}
+            </p>
+            {receipt.job_number ? (
+              <p className="mt-1 text-xs font-bold text-[#64748B]">
+                Job #{receipt.job_number}
+              </p>
+            ) : null}
+          </div>
+          <div className="text-right">
+            <p className="text-[0.68rem] font-black uppercase text-[#64748B]">
+              Payment date
+            </p>
+            <p className="mt-1 text-xs font-bold text-[#334155] sm:text-sm">
+              {paidAt}
+            </p>
+            <p className="mt-2 text-xs font-bold text-[#64748B]">{methodLabel}</p>
+          </div>
+        </section>
+
+        <section className="py-3">
+          <div className="grid grid-cols-[minmax(0,1fr)_8rem] border-b border-[#CBD5E1] pb-1 text-[0.64rem] font-black uppercase text-[#64748B] sm:grid-cols-[minmax(0,1fr)_10rem]">
+            <span>Description</span>
+            <span className="text-right">Amount</span>
+          </div>
+          <div className="grid grid-cols-[minmax(0,1fr)_8rem] gap-3 py-3 text-sm sm:grid-cols-[minmax(0,1fr)_10rem]">
+            <div className="min-w-0 pr-2">
+              <p className="font-black leading-5">Payment received</p>
+              <p className="mt-1 text-xs font-semibold leading-4 text-[#64748B]">
+                {methodLabel}
+              </p>
+            </div>
+            <p className="text-right font-black">{money(receipt.amount)}</p>
+          </div>
+        </section>
+
+        <section className="grid gap-2 border-y border-[#E5E7EB] py-3 text-sm">
+          <div className="flex items-center justify-between gap-4 font-bold">
+            <span className="text-[#475569]">Payment Status</span>
+            <span className="text-emerald-700">{statusLabel}</span>
+          </div>
+          <div className="flex items-center justify-between gap-4 font-bold">
+            <span className="text-[#475569]">Payment Method</span>
+            <span>{methodLabel}</span>
+          </div>
+          <div className="flex items-center justify-between gap-4 border-t border-[#CBD5E1] pt-3">
+            <span className="font-black">Amount Received</span>
+            <span className="text-2xl font-black text-[#0F172A]">
+              {money(receipt.amount)}
+            </span>
+          </div>
+        </section>
+
+        <section className="grid grid-cols-3 divide-x divide-[#D7DEE8] py-4">
+          <div className="min-w-0 pr-2">
+            <p className="text-[0.7rem] font-bold text-[#64748B]">Receipt</p>
+            <p className="mt-1 break-words text-sm font-black">
+              {receipt.receipt_number}
             </p>
           </div>
-        </div>
-
-        <div className="p-6 sm:p-8">
-          <div className="rounded-3xl border border-emerald-100 bg-emerald-50 p-5 text-center">
-            <p className="text-sm font-black uppercase tracking-[0.16em] text-emerald-700">
-              Payment Amount
+          <div className="min-w-0 px-2">
+            <p className="text-[0.7rem] font-bold text-[#64748B]">Job</p>
+            <p className="mt-1 whitespace-nowrap text-lg font-black tabular-nums">
+              {receipt.job_number ? `#${receipt.job_number}` : "N/A"}
             </p>
-            <p className="mt-2 text-5xl font-black tracking-tight text-emerald-800">
+          </div>
+          <div className="min-w-0 pl-2">
+            <p className="text-[0.7rem] font-bold text-[#64748B]">Received</p>
+            <p className="mt-1 whitespace-nowrap text-lg font-black text-emerald-700 tabular-nums">
               {money(receipt.amount)}
             </p>
-            <p className="mt-3 text-sm font-bold text-emerald-700">
-              This receipt confirms one completed payment.
-            </p>
           </div>
+        </section>
 
-          <dl className="mt-7 grid gap-3 text-sm">
-            {details.map(([icon, label, value]) => (
-              <div
-                className="flex items-center gap-3 rounded-2xl bg-slate-50 p-4"
-                key={label}
-              >
-                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-blue-100 text-sm font-black text-blue-700">
-                  {icon}
-                </span>
-                <dt className="font-bold text-slate-500">{label}</dt>
-                <dd className="ml-auto text-right font-black text-slate-950">{value}</dd>
-              </div>
-            ))}
-          </dl>
-
-          <p className="mt-7 rounded-2xl bg-blue-50 p-4 text-sm font-semibold leading-6 text-slate-600">
-            This receipt confirms the individual payment listed above. It does
-            not include other payments or full job history.
-          </p>
-        </div>
-      </section>
+        <p className="border-t border-[#E5E7EB] pt-3 text-xs font-semibold leading-5 text-[#64748B]">
+          This receipt confirms the individual payment listed above. It does not
+          include other payments or full job history.
+        </p>
+      </article>
     </main>
   );
 }

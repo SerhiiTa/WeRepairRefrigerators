@@ -111,6 +111,11 @@ export type StripeReturnStatus =
         paymentMethod: string;
         receiptNumber: string;
       } | null;
+      staffReceiptDelivery?: {
+        paymentId: string;
+        previewOnly?: boolean;
+        serviceRequestId: string;
+      } | null;
       targetType: "estimate" | "invoice";
       total: string | null;
     };
@@ -416,6 +421,13 @@ export async function loadDashboardStripeReturnStatus(params: {
           receiptNumber: receipt.receipt_number,
         }
       : null,
+    staffReceiptDelivery:
+      receipt && attempt.succeeded_payment_id
+        ? {
+            paymentId: attempt.succeeded_payment_id,
+            serviceRequestId: attempt.service_request_id,
+          }
+        : null,
     targetType: attempt.target_type,
     total: null,
   };

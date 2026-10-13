@@ -334,9 +334,20 @@ export async function GET(
   if (!receipt) {
     return fail("Receipt is not ready.", 503);
   }
+  const conversation = await findLatestConversation(serviceRequestId);
 
   return NextResponse.json({
     ok: true,
+    deliveryOptions: {
+      email: {
+        available: false,
+        reason: "Receipt email delivery is not configured yet.",
+      },
+      sms: {
+        available: Boolean(conversation?.customer_phone),
+        recipient: conversation?.customer_phone ?? null,
+      },
+    },
     receipt: {
       amount: receipt.receipt.amount,
       receiptNumber: receipt.receipt.receipt_number,
