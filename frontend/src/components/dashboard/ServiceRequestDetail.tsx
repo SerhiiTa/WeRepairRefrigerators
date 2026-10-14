@@ -1,9 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
+import { useMobileFinancePresentation } from "./mobile-finance-preference";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import type { EstimateItemAction } from "./estimate-item-actions";
 import { ManualEstimateEditor } from "@/components/dashboard/ManualEstimateEditor";
 import { StatusBadge } from "@/components/StatusBadge";
 import {
@@ -924,6 +927,8 @@ type JobWorkspaceTab =
   | "photos"
   | "estimate"
   | "appointment";
+
+type MobileFinanceSection = "estimates" | "invoices" | "payments" | "expenses";
 
 type FinanceEstimateMode = "home" | "manual" | "ai" | "template" | "saved";
 
@@ -2142,11 +2147,14 @@ export function ServiceRequestDetail({
   const [manualEstimateId, setManualEstimateId] = useState<string | null>(null);
   const [isManualEstimateOverlayOpen, setIsManualEstimateOverlayOpen] =
     useState(false);
+  const [pendingManualEstimateItemAction, setPendingManualEstimateItemAction] =
+    useState<{ estimateId: string; action: EstimateItemAction } | null>(null);
   const [pendingManualEstimateAddItem, setPendingManualEstimateAddItem] =
     useState<{
       estimateId: string;
       itemType: EstimateAddItemType;
     } | null>(null);
+  const [mobileFinanceSection, setMobileFinanceSection] = useState<MobileFinanceSection | null>(null);
   const [isFinanceEstimatesOpen, setIsFinanceEstimatesOpen] = useState(false);
   const [isFinanceInvoiceOpen, setIsFinanceInvoiceOpen] = useState(false);
   const [isFinancePaymentsOpen, setIsFinancePaymentsOpen] = useState(false);
@@ -2162,10 +2170,18 @@ export function ServiceRequestDetail({
   const [isInvoiceMoreActionsOpen, setIsInvoiceMoreActionsOpen] =
     useState(false);
   const [isManualPaymentOpen, setIsManualPaymentOpen] = useState(false);
+  const [mobilePaymentStep, setMobilePaymentStep] = useState<1 | 2>(1);
+  const mobilePaymentSubmissionRef = useRef(false);
   const [manualPaymentDraft, setManualPaymentDraft] =
     useState<ManualPaymentDraft | null>(null);
   const [manualPaymentState, setManualPaymentState] =
     useState<ManualPaymentState>({ status: "idle", message: null });
+  useEffect(() => {
+    setMobilePaymentStep(1);
+    setIsManualPaymentOpen(false);
+    setManualPaymentDraft(null);
+    setManualPaymentState({ status: "idle", message: null });
+  }, [requestId]);
   const [manualPaymentVoidDraft, setManualPaymentVoidDraft] =
     useState<ManualPaymentVoidDraft | null>(null);
   const [manualPaymentVoidState, setManualPaymentVoidState] =
@@ -2204,6 +2220,12 @@ export function ServiceRequestDetail({
     });
   const [calendarSyncSummary, setCalendarSyncSummary] =
     useState<CalendarSyncSummary>(null);
+  const { ready: financeVersionReady, useClassicMobileFinance } = useMobileFinancePresentation(
+    isManualEstimateOverlayOpen || isFinanceEstimateWorkflowOpen || financeEstimateMode !== "home" || viewingInvoiceId !== null ||
+    isManualPaymentOpen || manualPaymentVoidDraft !== null || paymentRefundDraft !== null ||
+    receiptDeliveryDraft !== null || invoiceDeliveryDraft !== null ||
+    (activeJobTab === "estimate" && mobileFinanceSection !== null),
+  );
   const readyRequestId = state.status === "ready" ? state.request.id : null;
   const propertyLookupAddress =
     state.status === "ready" ? getPropertyLookupAddress(state.request) : null;
@@ -2220,6 +2242,37 @@ export function ServiceRequestDetail({
       document.body.style.overflow = previousOverflow;
     };
   }, [isManualPaymentOpen]);
+
+  function navigateMobileFinance(section: MobileFinanceSection | null) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", "finance");
+    url.searchParams.delete("estimateId");
+    if (section) url.searchParams.set("financeSection", section);
+    else url.searchParams.delete("financeSection");
+    window.history.pushState({ ...window.history.state }, "", url);
+    setMobileFinanceSection(section);
+    setActiveJobTab("estimate");
+  }
+
+  useEffect(() => {
+    function syncMobileFinanceSection() {
+      const params = new URLSearchParams(window.location.search);
+      const section = params.get("financeSection");
+      setMobileFinanceSection(
+        section === "estimates" || section === "invoices" ||
+        section === "payments" || section === "expenses" ? section : null,
+      );
+    }
+    function onMobileFinancePopState() {
+      syncMobileFinanceSection();
+      if (window.matchMedia("(max-width: 1023px)").matches) {
+        setViewingInvoiceId(null);
+      }
+    }
+    syncMobileFinanceSection();
+    window.addEventListener("popstate", onMobileFinancePopState);
+    return () => window.removeEventListener("popstate", onMobileFinancePopState);
+  }, [requestId]);
 
   function getFinanceWorkspaceUrl() {
     return `/dashboard/leads/${requestId}?tab=finance`;
@@ -2251,11 +2304,14 @@ export function ServiceRequestDetail({
   }
 
   function closeEstimateWorkspaceToFinance() {
+    setMobileFinanceSection("estimates");
     if (typeof window !== "undefined") {
       window.history.replaceState(
         { wraFinanceWorkspace: true },
         "",
-        getFinanceWorkspaceUrl(),
+        !useClassicMobileFinance && window.matchMedia("(max-width: 1023px)").matches
+          ? `${getFinanceWorkspaceUrl()}&financeSection=estimates`
+          : getFinanceWorkspaceUrl(),
       );
     }
 
@@ -5364,8 +5420,9 @@ export function ServiceRequestDetail({
   async function reviseEstimateById(
     estimateId: string,
     estimateNumber: string,
-    options: { openAddItemType?: EstimateAddItemType } = {},
+    options: { openAddItemType?: EstimateAddItemType; itemAction?: EstimateItemAction } = {},
   ) {
+    setPendingManualEstimateItemAction(null);
     setEstimateSaveState({
       status: "saving",
       message: `Reopening ${estimateNumber} as a draft revision...`,
@@ -5385,6 +5442,7 @@ export function ServiceRequestDetail({
 
     if (existingDraftRevision) {
       syncEstimateWorkspaceHistory(existingDraftRevision.id, "replace");
+      setPendingManualEstimateItemAction(options.itemAction ? { estimateId: existingDraftRevision.id, action: options.itemAction } : null);
       setManualEstimateId(existingDraftRevision.id);
       setViewingEstimateId(existingDraftRevision.id);
       setViewingInvoiceId(null);
@@ -5488,6 +5546,7 @@ export function ServiceRequestDetail({
           : null,
       );
       await loadEstimates();
+      setPendingManualEstimateItemAction(options.itemAction ? { estimateId: payload.estimate.id, action: options.itemAction } : null);
       setManualEstimateId(payload.estimate.id);
       setViewingEstimateId(payload.estimate.id);
       setViewingInvoiceId(null);
@@ -7465,7 +7524,7 @@ export function ServiceRequestDetail({
     closeScheduleSheet();
   }
 
-  if (state.status === "loading") {
+  if (state.status === "loading" || !financeVersionReady) {
     return (
       <section className="rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] p-6 text-[#334155]">
         Loading job...
@@ -8089,6 +8148,12 @@ export function ServiceRequestDetail({
             target.id === manualPaymentDraft.targetId &&
             target.type === manualPaymentDraft.targetType,
         ) ?? null;
+  const paymentLinkInvoice = selectedManualPaymentTarget?.type === "invoice"
+    ? invoicesById.get(selectedManualPaymentTarget.id) ?? null
+    : null;
+  const canOpenPaymentLink = Boolean(paymentLinkInvoice &&
+    isCollectibleInvoice(paymentLinkInvoice) && paymentLinkInvoice.invoiceStatus === "draft");
+
   const selectedCardCheckoutAction =
     manualPaymentDraft === null || selectedManualPaymentTarget === null
       ? null
@@ -8130,6 +8195,18 @@ export function ServiceRequestDetail({
             )
         : customDepositFixedCents
       : selectedCardCheckoutAction?.amountCents ?? null;
+  // Presentation validation mirrors the existing submission checks; amounts stay canonical.
+  const mobilePaymentAmountCents = manualPaymentDraft?.paymentMethod === "card"
+    ? selectedCardAmountCents
+    : parseMoneyInputToCents(manualPaymentDraft?.amount ?? "");
+  const isMobilePaymentAmountValid = Boolean(
+    selectedManualPaymentTarget && mobilePaymentAmountCents !== null &&
+    mobilePaymentAmountCents > 0 && mobilePaymentAmountCents <= customDepositMaxCents &&
+    !(manualPaymentDraft?.paymentMethod === "card" &&
+      manualPaymentDraft.checkoutKind === "custom_deposit" &&
+      manualPaymentDraft.customDepositMode === "percent" &&
+      (customDepositPercent === null || customDepositPercent <= 0 || customDepositPercent > 100)),
+  );
   const selectedCardRemainingAfterCents =
     selectedCardAmountCents === null
       ? null
@@ -9561,6 +9638,7 @@ export function ServiceRequestDetail({
   }
 
   function openManualPayment(target?: ManualPaymentTarget) {
+    setMobilePaymentStep(1);
     const nextTarget = target ?? manualPaymentTargets[0] ?? null;
 
     if (!nextTarget) {
@@ -9620,6 +9698,19 @@ export function ServiceRequestDetail({
       idempotencyKey: current?.idempotencyKey ?? buildPaymentIdempotencyKey(),
     }));
     setManualPaymentState({ status: "idle", message: null });
+  }
+
+  async function submitMobilePayment() {
+    if (mobilePaymentStep !== 2 || !isMobilePaymentAmountValid ||
+        mobilePaymentSubmissionRef.current || manualPaymentState.status === "saving" ||
+        manualPaymentState.status === "success") return;
+    mobilePaymentSubmissionRef.current = true;
+    setManualPaymentState({ status: "saving", message: null });
+    try {
+      await saveManualPayment();
+    } finally {
+      mobilePaymentSubmissionRef.current = false;
+    }
   }
 
   async function saveManualPayment() {
@@ -9771,7 +9862,7 @@ export function ServiceRequestDetail({
     if (!supabase) {
       setManualPaymentState({
         status: "error",
-        message: "Stripe Checkout is not available for this workspace.",
+        message: "Payment checkout is not available for this workspace.",
       });
       return;
     }
@@ -9792,7 +9883,7 @@ export function ServiceRequestDetail({
     if (sessionError || !accessToken) {
       setManualPaymentState({
         status: "error",
-        message: "Log in again before starting Stripe Checkout.",
+        message: "Log in again before starting payment checkout.",
       });
       return;
     }
@@ -9834,7 +9925,7 @@ export function ServiceRequestDetail({
 
     setManualPaymentState({
       status: "saving",
-      message: "Opening Stripe Checkout...",
+      message: "Opening payment checkout...",
     });
 
     let response: Response;
@@ -9872,7 +9963,7 @@ export function ServiceRequestDetail({
     } catch {
       setManualPaymentState({
         status: "error",
-        message: "Stripe Checkout request could not reach the server. Try again.",
+        message: "Payment checkout request could not reach the server. Try again.",
       });
       return;
     }
@@ -9880,7 +9971,7 @@ export function ServiceRequestDetail({
     if (!response.ok || !payload?.ok || !payload.checkoutUrl) {
       setManualPaymentState({
         status: "error",
-        message: payload?.message ?? "Stripe Checkout could not be started.",
+        message: payload?.message ?? "Payment checkout could not be started.",
       });
       return;
     }
@@ -10222,7 +10313,8 @@ export function ServiceRequestDetail({
     const paymentActionLabel = depositAction ? "Collect Deposit" : "Collect Payment";
     const paymentSummaryLabel = "Net Paid";
 
-    return (
+    // Classic presentation only; current shared state and handlers remain authoritative.
+    if (useClassicMobileFinance) return (
       <article
         className="cursor-pointer border-b border-[#E5E7EB] bg-transparent px-0 py-2.5 transition last:border-b-0 hover:bg-blue-50/40 sm:py-3"
         key={estimate.id}
@@ -10308,6 +10400,156 @@ export function ServiceRequestDetail({
           </div>
         ) : null}
       </article>
+    );
+
+    return (
+      <article
+        className="mb-3 cursor-pointer rounded-2xl bg-white p-4 lg:mb-0 lg:rounded-none lg:border-b lg:border-[#E5E7EB] lg:bg-transparent lg:px-0 lg:py-3 lg:transition lg:last:border-b-0 lg:hover:bg-blue-50/40"
+        key={estimate.id}
+        onClick={() => openEstimateFromList(estimate)}
+      >
+        <div data-testid="mobile-estimate-card" className="lg:hidden">
+          <button
+            type="button"
+            aria-label={`Open Estimate ${estimate.estimateNumber}`}
+            className="block min-h-11 w-full min-w-0 text-left"
+            onClick={(event) => {
+              event.stopPropagation();
+              openEstimateFromList(estimate);
+            }}
+          >
+            <span className="flex min-w-0 items-start justify-between gap-2">
+              <span className="min-w-0 truncate text-sm font-semibold text-[#0F172A]">{estimate.estimateNumber}</span>
+              <span className="max-w-[45%] shrink-0 break-words rounded-full bg-[#F5F5F7] px-2 py-1 text-xs font-medium text-[#64748B]">{formatServiceRequestSource(estimate.estimateStatus)}</span>
+            </span>
+            <span className="mt-3 block break-words text-xl font-bold text-[#0F172A]">{formatServiceRequestMoney(estimate.total)}</span>
+            <span className="mt-2 block text-xs text-[#64748B]">{estimate.items.length} {estimate.items.length === 1 ? "item" : "items"} · {formatServiceRequestDate(estimate.createdAt)}</span>
+          </button>
+          {linkedInvoice ? (
+            <button
+              type="button"
+              aria-label={`Open linked Invoice ${linkedInvoice.invoiceNumber}`}
+              className="mt-3 flex min-h-11 w-full min-w-0 items-center justify-between gap-2 border-t border-[#E5E7EB] pt-2 text-left text-sm"
+              onClick={(event) => {
+                event.stopPropagation();
+                navigateMobileFinance("invoices");
+                openInvoiceWorkspace(linkedInvoice.id);
+              }}
+            >
+              <span className="min-w-0"><span className="block text-xs text-[#64748B]">Linked invoice</span><span className="mt-1 block truncate font-medium text-[#007AFF]">{linkedInvoice.invoiceNumber}</span></span>
+              <span aria-hidden="true" className="shrink-0 text-xl text-[#007AFF]">›</span>
+            </button>
+          ) : null}
+        </div>
+        <div className="hidden px-1.5 sm:px-2 lg:block">
+          <div className="flex items-start justify-between gap-3">
+            <p className="min-w-0 truncate text-sm font-black leading-5 text-[#0F172A]">
+              {estimate.estimateNumber}
+            </p>
+            <div className="flex shrink-0 items-center gap-2">
+              <p className="whitespace-nowrap text-sm font-black text-[#0F6BFF] sm:text-base">
+                {formatServiceRequestMoney(estimate.total)}
+              </p>
+              <span className="text-lg font-semibold leading-none text-[#64748B]">
+                ›
+              </span>
+            </div>
+          </div>
+          <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[0.68rem] font-bold text-[#64748B]">
+            <span className="rounded-full border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[0.65rem] font-black text-[#0F6BFF]">
+              {formatServiceRequestSource(estimate.estimateStatus)}
+            </span>
+            <span>
+              {isImportedWorkiz
+                ? "Historical Workiz estimate"
+                : `${estimate.items.length} line${estimate.items.length === 1 ? "" : "s"}`}
+            </span>
+            <span aria-hidden="true">·</span>
+            <span className="min-w-0 truncate">
+              {formatServiceRequestDate(estimate.createdAt)}
+            </span>
+            {linkedInvoice ? (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="min-w-0 truncate text-emerald-700">
+                  Invoice {linkedInvoice.invoiceNumber}
+                </span>
+              </>
+            ) : null}
+          </div>
+          {estimate.estimateStatus === "approved" && coverage ? (
+            <p className="mt-2 text-xs font-bold text-[#64748B]">
+              Direct Estimate Payments {formatServiceRequestMoney(coverage.directOriginalPaid)} · Direct Net Paid {formatServiceRequestMoney(coverage.directPaid)} · Current Invoice / Job Balance Due {formatServiceRequestMoney(coverage.currentBalanceDue)}
+              {coverage.status === "fully_paid" ? " · Paid through Invoice" : " · Partially covered by Invoice"}
+            </p>
+          ) : null}
+          {estimate.estimateStatus === "approved" && !linkedInvoice ? (
+            <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-xs font-bold text-[#64748B]">
+                {paymentSummaryLabel} {formatServiceRequestMoney(depositPaid)} · Remaining{" "}
+                {formatServiceRequestMoney(remainingDeposit)}
+              </p>
+              <button
+                className="self-start rounded-full border border-[#D7E4FF] px-3 py-1.5 text-xs font-black text-[#0F6BFF] transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 sm:self-auto"
+                disabled={!paymentTarget}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (paymentTarget) {
+                    openPaymentWorkflow(paymentTarget);
+                  }
+                }}
+                type="button"
+              >
+                {paymentActionLabel}
+              </button>
+            </div>
+          ) : null}
+        </div>
+        {isImportedWorkiz && viewingEstimateId === estimate.id ? (
+          <div className="mx-1.5 mt-3 rounded-md border border-blue-100 bg-blue-50 p-3 text-sm leading-6 text-[#334155] sm:mx-2">
+            <p className="font-black text-[#0F172A]">Historical Estimate Summary</p>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <p><span className="font-black">Estimate #:</span> {estimate.estimateNumber}</p>
+              <p><span className="font-black">Status:</span> {formatServiceRequestSource(estimate.estimateStatus)}</p>
+              <p><span className="font-black">Created:</span> {formatServiceRequestDate(estimate.createdAt)}</p>
+              <p><span className="font-black">Subtotal:</span> {formatServiceRequestMoney(estimate.subtotal)}</p>
+              <p><span className="font-black">Discount:</span> {formatServiceRequestMoney(estimate.discountAmount)}</p>
+              <p><span className="font-black">Tax:</span> {formatServiceRequestMoney(estimate.tax ?? 0)}</p>
+              <p><span className="font-black">Total:</span> {formatServiceRequestMoney(estimate.total)}</p>
+              <p><span className="font-black">Workiz ID:</span> {estimate.externalEstimateId ?? "—"}</p>
+            </div>
+          </div>
+        ) : null}
+      </article>
+    );
+  }
+
+  function renderMobileInvoiceCard(invoice: DashboardServiceRequestInvoice) {
+    const allocatedPaid = centsToMoney(getInvoiceAllocatedCents(invoice));
+    const balanceDue = Math.max(0, getInvoiceBalanceDue(invoice));
+
+    return (
+      <button
+        data-testid="mobile-invoice-card"
+        key={invoice.id}
+        type="button"
+        aria-label={`Open Invoice ${invoice.invoiceNumber}`}
+        onClick={() => openInvoiceWorkspace(invoice.id)}
+        className="mb-3 block min-h-11 w-full min-w-0 rounded-2xl bg-white p-4 text-left lg:hidden"
+      >
+        <span className="flex min-w-0 items-start justify-between gap-2">
+          <span className="min-w-0 truncate text-sm font-semibold text-[#0F172A]">{invoice.invoiceNumber}</span>
+          <span className="max-w-[45%] shrink-0 break-words rounded-full bg-[#F5F5F7] px-2 py-1 text-xs font-medium text-[#64748B]">{formatServiceRequestSource(invoice.invoiceStatus)}</span>
+        </span>
+        <span className="mt-3 grid grid-cols-2 gap-3">
+          <span className="min-w-0"><span className="block text-xs text-[#64748B]">Invoice total</span><span className="mt-1 block break-words text-base font-semibold text-[#0F172A]">{formatServiceRequestMoney(invoice.total)}</span></span>
+          <span className="min-w-0"><span className="block text-xs text-[#64748B]">Net paid</span><span className="mt-1 block break-words text-base font-semibold text-[#0F172A]">{formatServiceRequestMoney(allocatedPaid)}</span></span>
+        </span>
+        <span className="mt-3 block border-t border-[#E5E7EB] pt-2">
+          <span className="block text-xs text-[#64748B]">{isCollectibleInvoice(invoice) ? "Balance due" : "Not collectible"}</span>
+          {isCollectibleInvoice(invoice) ? <span className="mt-1 block break-words text-xl font-bold text-[#0F172A]">{formatServiceRequestMoney(balanceDue)}</span> : null}
+        </span>
+      </button>
     );
   }
 
@@ -10817,7 +11059,8 @@ export function ServiceRequestDetail({
     const showDetails =
       invoiceWorkspaceTab === "overview" || invoiceWorkspaceTab === "details";
 
-    return (
+    // Classic presentation only; current shared state and handlers remain authoritative.
+    if (useClassicMobileFinance) return (
       <section className="relative mx-auto mt-2 max-w-5xl bg-white pb-[calc(5.25rem+env(safe-area-inset-bottom))] sm:mt-3 sm:rounded-2xl sm:border sm:border-[#E1E7F0] sm:px-8 sm:py-6 sm:shadow-sm">
         <div className="px-1 sm:px-0">
           <div className="grid grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-start gap-2 sm:grid-cols-[3rem_minmax(0,1fr)_3rem]">
@@ -11045,6 +11288,260 @@ export function ServiceRequestDetail({
         </div>
       </section>
     );
+
+    return (
+      <section className="relative mx-auto mt-2 max-w-5xl bg-white pb-[calc(5.25rem+env(safe-area-inset-bottom))] sm:mt-3 sm:rounded-2xl sm:border sm:border-[#E1E7F0] sm:px-8 sm:py-6 sm:shadow-sm">
+        <div className="px-1 sm:px-0">
+          <div className="grid grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-start gap-2 sm:grid-cols-[3rem_minmax(0,1fr)_3rem]">
+            <button
+              aria-label="Back to Job Finance"
+              className="flex h-10 w-10 items-center justify-center rounded-full border border-[#DCE4EF] text-xl leading-none text-[#1F2A44] transition hover:bg-[#F8FAFC] sm:h-11 sm:w-11 sm:text-2xl"
+              onClick={closeInvoiceWorkspace}
+              type="button"
+            >
+              ←
+            </button>
+            <div className="min-w-0 text-center">
+              <h2 className="break-words text-[clamp(1rem,4.3vw,1.25rem)] font-black leading-tight text-[#0B1A33] sm:text-2xl">
+                Invoice #{invoice.invoiceNumber.replace(/^INV-/, "")}
+              </h2>
+              <span className="mt-1 inline-flex rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-black text-emerald-700 sm:mt-2 sm:px-3 sm:py-1 sm:text-sm">
+                {formatServiceRequestSource(invoice.invoiceStatus)}
+              </span>
+              <button
+                className="mt-1 block w-full break-words text-xs font-semibold leading-5 text-[#657089] hover:text-[#0F6BFF] sm:mt-2 sm:text-base"
+                disabled={!sourceEstimate}
+                onClick={() => {
+                  if (sourceEstimate) {
+                    openEstimateFromList(sourceEstimate);
+                  }
+                }}
+                type="button"
+              >
+                From Estimate {sourceEstimate?.estimateNumber ?? "Unknown"}
+              </button>
+            </div>
+            <div className="relative flex justify-end">
+              <button
+                aria-label="More invoice actions"
+                className="flex h-10 w-10 items-center justify-center rounded-full border border-[#DCE4EF] text-[#1F2A44] transition hover:bg-[#F8FAFC] sm:h-11 sm:w-11"
+                onClick={() => setIsInvoiceMoreActionsOpen((current) => !current)}
+                type="button"
+              >
+                <FinanceHomeIcon className="h-5 w-5" name="more" />
+              </button>
+              {isInvoiceMoreActionsOpen ? (
+                <div className="absolute right-0 top-12 z-20 w-48 rounded-xl border border-[#E1E7F0] bg-white p-2 text-sm font-bold shadow-xl">
+                  {canVoidInvoice ? (
+                    <button
+                      className="block w-full rounded-lg px-3 py-2 text-left text-amber-800 hover:bg-amber-50 disabled:opacity-50"
+                      disabled={invoiceActionState.status === "saving"}
+                      onClick={() => {
+                        setIsInvoiceMoreActionsOpen(false);
+                        void updateInvoice(invoice, "void");
+                      }}
+                      type="button"
+                    >
+                      Void Invoice
+                    </button>
+                  ) : null}
+                  {canDeleteInvoice ? (
+                    <button
+                      className="block w-full rounded-lg px-3 py-2 text-left text-red-600 hover:bg-red-50 disabled:opacity-50"
+                      disabled={invoiceActionState.status === "saving"}
+                      onClick={() => {
+                        setIsInvoiceMoreActionsOpen(false);
+                        void deleteInvoice(invoice);
+                      }}
+                      type="button"
+                    >
+                      Delete Invoice
+                    </button>
+                  ) : null}
+                  {!canVoidInvoice && !canDeleteInvoice ? (
+                    <p className="px-3 py-2 text-[#657089]">No actions available</p>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="mt-3 border-b border-[#D7DEE8] sm:mt-5">
+            <div className="grid grid-cols-5 text-center text-xs font-black text-[#52627A] sm:flex sm:justify-center sm:gap-12 sm:text-base">
+              {tabs.map((tab) => (
+                <button
+                  className={`min-w-0 border-b-4 px-1 pb-2 transition sm:px-0 sm:pb-3 ${
+                    invoiceWorkspaceTab === tab.id
+                      ? "border-[#0F6BFF] text-[#0F6BFF]"
+                      : "border-transparent hover:text-[#0F6BFF]"
+                  }`}
+                  key={tab.id}
+                  onClick={() => setInvoiceWorkspaceTab(tab.id)}
+                  type="button"
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <p className="text-xs font-semibold text-[#657089]">
+            {isCollectibleInvoice(invoice) ? "Current Invoice · Job payment credit" : "Historical Invoice · payments allocated to this Invoice · not collectible"}
+          </p>
+          <section data-testid="mobile-invoice-financial-summary" className="py-3 lg:hidden">
+            <dl className="grid grid-cols-2 gap-4 text-sm">
+              <div className="min-w-0"><dt className="text-[#657089]">Invoice Total</dt><dd className="mt-1 break-words text-lg font-semibold text-[#0B1228]">{formatServiceRequestMoney(invoice.total)}</dd></div>
+              <div className="min-w-0"><dt className="text-[#657089]">Net Paid</dt><dd className="mt-1 break-words text-lg font-semibold text-[#0B1228]">{formatServiceRequestMoney(allocatedPaid)}</dd></div>
+            </dl>
+            <div className="mt-3 border-t border-[#D7DEE8] pt-3">
+              <p className="text-sm text-[#657089]">{isCollectibleInvoice(invoice) ? "Balance Due" : "Not collectible"}</p>
+              {isCollectibleInvoice(invoice) ? <p className="mt-1 break-words text-2xl font-bold text-[#0B1228]">{formatServiceRequestMoney(balanceDue)}</p> : null}
+            </div>
+            <details key={invoice.id} className="group mt-3 border-t border-[#D7DEE8] text-sm">
+              <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 py-2 text-[#657089] [&::-webkit-details-marker]:hidden">
+                Payment breakdown
+                <span aria-hidden="true" className="text-lg transition-transform group-open:rotate-90">›</span>
+              </summary>
+              <dl className="space-y-2 pb-2">
+                <div className="grid grid-cols-2 gap-3"><dt>Original Paid</dt><dd className="min-w-0 break-words text-right font-semibold">{formatServiceRequestMoney(invoiceOriginalPayments)}</dd></div>
+                {invoiceRefunds > 0 ? <div className="grid grid-cols-2 gap-3"><dt>Refunds</dt><dd className="min-w-0 break-words text-right font-semibold">-{formatServiceRequestMoney(invoiceRefunds)}</dd></div> : null}
+                <div className="grid grid-cols-2 gap-3"><dt>Net Paid</dt><dd className="min-w-0 break-words text-right font-semibold">{formatServiceRequestMoney(allocatedPaid)}</dd></div>
+              </dl>
+            </details>
+          </section>
+          <div className="hidden grid-cols-2 divide-x divide-y divide-[#D7DEE8] py-3 sm:grid-cols-4 sm:divide-y-0 sm:py-5 lg:grid">
+            <div className="min-w-0 pr-2 sm:pr-3">
+              <p className="text-[0.75rem] font-semibold leading-4 text-[#657089] sm:text-sm">Total</p>
+              <p className="mt-1 whitespace-nowrap break-keep text-[clamp(1.05rem,4.7vw,1.25rem)] font-bold leading-tight text-[#0B1228] tabular-nums sm:mt-2 sm:text-3xl">
+                {formatServiceRequestMoney(invoice.total)}
+              </p>
+            </div>
+            <div className="min-w-0 px-2 sm:px-3">
+              <p className="text-[0.75rem] font-semibold leading-4 text-[#657089] sm:text-sm">Original Paid</p>
+              <p className="mt-1 whitespace-nowrap break-keep text-[clamp(1.05rem,4.7vw,1.25rem)] font-bold leading-tight text-emerald-700 tabular-nums sm:mt-2 sm:text-3xl">
+                {formatServiceRequestMoney(invoiceOriginalPayments)}
+              </p>
+            </div>
+            <div className="min-w-0 pr-2 pt-3 sm:px-3 sm:pt-0">
+              <p className="text-[0.75rem] font-semibold leading-4 text-[#657089] sm:text-sm">Refunds</p>
+              <p className="mt-1 whitespace-nowrap break-keep text-[clamp(1.05rem,4.7vw,1.25rem)] font-bold leading-tight text-red-700 tabular-nums sm:mt-2 sm:text-3xl">
+                -{formatServiceRequestMoney(invoiceRefunds)}
+              </p>
+            </div>
+            <div className="min-w-0 px-2 pt-3 sm:px-3 sm:pt-0">
+              <p className="text-[0.75rem] font-semibold leading-4 text-[#657089] sm:text-sm">Net Paid</p>
+              <p className="mt-1 whitespace-nowrap break-keep text-[clamp(1.05rem,4.7vw,1.25rem)] font-bold leading-tight text-emerald-700 tabular-nums sm:mt-2 sm:text-3xl">
+                {formatServiceRequestMoney(allocatedPaid)}
+              </p>
+            </div>
+          </div>
+          <div className="hidden border-t border-[#D7DEE8] py-3 sm:py-4 lg:block">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[0.75rem] font-semibold leading-4 text-[#657089] sm:text-sm">{isCollectibleInvoice(invoice) ? "Balance Due" : "Not collectible"}</p>
+              <p className="mt-1 whitespace-nowrap break-keep text-[clamp(1.1rem,5vw,1.375rem)] font-bold leading-tight text-[#0F6BFF] tabular-nums sm:mt-2 sm:text-3xl">
+                {formatServiceRequestMoney(balanceDue)}
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-6">
+            {showItems ? renderItems() : null}
+            {showPayments ? renderPayments() : null}
+            {showDetails ? (
+              <div className={invoiceWorkspaceTab === "overview" ? "hidden lg:block" : undefined}>
+                {renderDetails()}
+              </div>
+            ) : null}
+            {invoiceWorkspaceTab === "history" ? (
+              <section className="border-t border-[#D7DEE8] pt-5">
+                <h3 className="text-lg font-black text-[#0B1228]">History</h3>
+                <div className="mt-3 divide-y divide-[#E1E7F0] text-sm">
+                  <div className="py-3">
+                    <p className="font-bold text-[#0B1228]">Invoice created</p>
+                    <p className="mt-1 text-[#52627A]">
+                      {formatServiceRequestDate(invoice.createdAt)}
+                    </p>
+                  </div>
+                  {invoice.sentAt ? (
+                    <div className="py-3">
+                      <p className="font-bold text-[#0B1228]">Invoice sent</p>
+                      <p className="mt-1 text-[#52627A]">
+                        {formatServiceRequestDate(invoice.sentAt)}
+                      </p>
+                    </div>
+                  ) : null}
+                  {invoice.paidAt ? (
+                    <div className="py-3">
+                      <p className="font-bold text-[#0B1228]">Invoice paid</p>
+                      <p className="mt-1 text-[#52627A]">
+                        {formatServiceRequestDate(invoice.paidAt)}
+                      </p>
+                    </div>
+                  ) : null}
+                  {invoice.voidedAt ? (
+                    <div className="py-3">
+                      <p className="font-bold text-[#0B1228]">Invoice voided</p>
+                      <p className="mt-1 text-[#52627A]">
+                        {formatServiceRequestDate(invoice.voidedAt)}
+                      </p>
+                    </div>
+                  ) : null}
+                </div>
+              </section>
+            ) : null}
+          </div>
+        </div>
+
+        {invoiceActionState.message ? (
+          <p
+            className={`mt-4 px-1 text-sm font-semibold ${
+              invoiceActionState.status === "error"
+                ? "text-amber-800"
+                : "text-emerald-700"
+            }`}
+          >
+            {invoiceActionState.message}
+          </p>
+        ) : null}
+
+        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-[#E1E7F0] bg-white/95 px-3 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(15,23,42,0.08)] backdrop-blur sm:absolute sm:rounded-b-2xl sm:px-4 sm:py-3 sm:pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
+          <div className="mx-auto grid max-w-5xl grid-cols-[0.82fr_0.9fr_1.28fr] gap-2 sm:grid-cols-3 sm:gap-3">
+            <button
+              className="inline-flex h-11 min-w-0 items-center justify-center rounded-xl border border-[#D7DEE8] px-2 text-xs font-bold text-[#0B1228] transition hover:bg-[#F8FAFC] sm:h-12 sm:text-sm"
+              onClick={() => {
+                setInvoiceActionState({ status: "idle", message: null });
+                setInvoicePreviewId(invoice.id);
+              }}
+              type="button"
+            >
+              <span className="hidden sm:inline">Preview Invoice</span>
+              <span className="sm:hidden">Preview</span>
+            </button>
+            <button
+              className="inline-flex h-11 min-w-0 items-center justify-center rounded-xl border border-[#D7DEE8] px-2 text-xs font-bold text-[#0B1228] transition hover:bg-[#F8FAFC] disabled:cursor-not-allowed disabled:opacity-50 sm:h-12 sm:text-sm"
+              disabled={!canSendInvoice || invoiceActionState.status === "saving"}
+              onClick={() => openInvoiceDelivery(invoice)}
+              type="button"
+            >
+              <span className="hidden sm:inline">Send Invoice</span>
+              <span className="sm:hidden">Send</span>
+            </button>
+            <button
+              className="inline-flex h-11 min-w-0 items-center justify-center rounded-xl bg-[#0F6BFF] px-2 text-[0.72rem] font-bold text-white shadow-sm transition hover:bg-[#0959D9] disabled:cursor-not-allowed disabled:opacity-50 sm:h-12 sm:text-sm"
+              disabled={!canCollectPayment}
+              onClick={() => {
+                if (paymentTarget) {
+                  openPaymentWorkflow(paymentTarget);
+                }
+              }}
+              type="button"
+            >
+              <span className="whitespace-nowrap">Collect Payment</span>
+            </button>
+          </div>
+        </div>
+      </section>
+    );
   }
 
   function renderPaymentHistoryItem(entry: (typeof paymentHistory)[number]) {
@@ -11062,7 +11559,21 @@ export function ServiceRequestDetail({
     const succeededRefundCents = getSucceededRefundCentsForPayment(entry.payment.id);
     const netPaymentCents = getPaymentNetCents(entry.payment);
 
-    return (
+    const mobileMethod = entry.payment.paymentMethod?.toLowerCase() ?? "";
+    const mobileIcon = ["zelle", "venmo"].includes(mobileMethod)
+      ? `${mobileMethod}.png`
+      : mobileMethod === "cash_app" ? "cash-app.svg"
+      : mobileMethod === "cash" || mobileMethod === "check" ? `${mobileMethod}.svg`
+      : "card.svg";
+    const mobileStatus = paymentIsVoid ? "Void"
+      : succeededRefundCents > 0
+        ? netPaymentCents === 0
+          ? `Refunded ${formatServiceRequestMoney(centsToMoney(succeededRefundCents))}`
+          : "Partially refunded"
+        : formatServiceRequestSource(entry.payment.paymentStatus);
+
+    // Classic presentation only; current shared state and handlers remain authoritative.
+    if (useClassicMobileFinance) return (
       <article
         className="border-b border-[#E5E7EB] bg-transparent last:border-b-0"
         key={entry.payment.id}
@@ -11262,29 +11773,253 @@ export function ServiceRequestDetail({
         ) : null}
       </article>
     );
+
+    return (
+      <article
+        className="border-b border-[#E5E7EB] bg-transparent last:border-b-0"
+        key={entry.payment.id}
+      >
+        <button
+          data-testid="mobile-payment-history-row"
+          aria-expanded={isExpanded}
+          aria-controls={`payment-history-${entry.payment.id}`}
+          className="grid min-h-[76px] w-full grid-cols-[2rem_minmax(0,1fr)_minmax(0,1fr)_0.75rem] items-center gap-2 px-3 py-3 text-left lg:hidden"
+          onClick={() => setExpandedPaymentHistoryId((current) => current === entry.payment.id ? null : entry.payment.id)}
+          type="button"
+        >
+          <Image alt="" aria-hidden="true" unoptimized src={`/images/payment-methods/${mobileIcon}`} width={32} height={32} className="h-8 w-8 object-contain" />
+          <span className="min-w-0">
+            <span className="block truncate text-sm font-semibold text-[#0F172A]">{getPaymentDisplayLabel(entry.payment)}</span>
+            <span className="mt-1 block text-[0.7rem] leading-4 text-[#737B8E]">{formatServiceRequestDate(paidAt)}</span>
+          </span>
+          <span className="min-w-0 text-right">
+            <span data-testid="mobile-payment-net" className="block break-all text-sm font-semibold text-[#0F172A]">{netPaymentCents > 0 ? "+" : ""}{formatServiceRequestMoney(centsToMoney(netPaymentCents))}</span>
+            <span className="mt-1 block break-words text-[0.7rem] leading-4 text-[#737B8E]">{mobileStatus}</span>
+          </span>
+          <span className="text-[#9299A7]"><FinanceChevron open={isExpanded} /></span>
+        </button>
+        <button
+          className="hidden lg:grid min-h-16 w-full grid-cols-[2rem_1fr_auto_1rem] items-center gap-2 py-2.5 text-left transition hover:bg-[#F8FAFC] sm:grid-cols-[2.25rem_1fr_auto_1rem]"
+          onClick={() =>
+            setExpandedPaymentHistoryId((current) =>
+              current === entry.payment.id ? null : entry.payment.id,
+            )
+          }
+          type="button"
+        >
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-xs font-black text-emerald-700 sm:h-9 sm:w-9">
+            {getPaymentDisplayIcon(entry.payment)}
+          </span>
+          <span className="min-w-0">
+            <span className="block truncate text-sm font-black leading-5 text-[#0F172A]">
+              {getPaymentDisplayLabel(entry.payment)}
+            </span>
+            <span className="mt-0.5 block truncate text-xs font-bold text-[#64748B]">
+              {formatServiceRequestDate(paidAt)}
+            </span>
+          </span>
+          <span className="text-right">
+            <span
+              className={`block whitespace-nowrap text-sm font-black sm:text-base ${
+                netPaymentCents > 0 ? "text-emerald-700" : "text-[#64748B]"
+              }`}
+            >
+              +{formatServiceRequestMoney(centsToMoney(netPaymentCents))}
+            </span>
+            {succeededRefundCents > 0 ? (
+              <span className="mt-0.5 block whitespace-nowrap text-[0.65rem] font-black text-red-700">
+                refunded -{formatServiceRequestMoney(centsToMoney(succeededRefundCents))}
+              </span>
+            ) : null}
+            <span className="mt-0.5 block text-[0.65rem] font-black uppercase tracking-[0.12em] text-[#64748B]">
+              {formatServiceRequestSource(entry.payment.paymentStatus)}
+            </span>
+          </span>
+          <span className="text-[#64748B]">
+            <FinanceChevron open={isExpanded} />
+          </span>
+        </button>
+        {isExpanded ? (
+          <div id={`payment-history-${entry.payment.id}`} data-testid="payment-history-details" className="min-w-0 break-words border-t border-[#EEF2F7] bg-transparent px-3 py-3 text-xs leading-5 text-[#475569] lg:pt-0 lg:pl-11 lg:pr-1">
+            <div className="flex flex-wrap gap-2 lg:grid lg:grid-cols-2">
+              <div data-testid="desktop-payment-summary" className="hidden lg:contents">
+              <p>
+                <span className="font-black text-[#0F172A]">Applied to: </span>
+                {targetType} {targetLabel}
+              </p>
+              <p>
+                <span className="font-black text-[#0F172A]">Method: </span>
+                {getPaymentDisplayLabel(entry.payment)}
+              </p>
+              <p>
+                <span className="font-black text-[#0F172A]">Date: </span>
+                {formatServiceRequestDate(paidAt)}
+              </p>
+              <p>
+                <span className="font-black text-[#0F172A]">Status: </span>
+                {formatServiceRequestSource(entry.payment.paymentStatus)}
+              </p>
+              <p>
+                <span className="font-black text-[#0F172A]">Original Payment: </span>
+                {formatServiceRequestMoney(entry.payment.amount)}
+              </p>
+              <p>
+                <span className="font-black text-[#0F172A]">Refunded: </span>
+                -{formatServiceRequestMoney(centsToMoney(succeededRefundCents))}
+              </p>
+              <p>
+                <span className="font-black text-[#0F172A]">Net Payment: </span>
+                {formatServiceRequestMoney(centsToMoney(netPaymentCents))}
+              </p>
+              </div>
+              {paymentIsVoid ? (
+                <p className="order-2 w-full lg:order-none lg:col-span-2">
+                  <span className="font-black text-[#0F172A]">Void reason: </span>
+                  {getManualPaymentVoidReasonLabel(entry.payment.voidReason)}
+                  {entry.payment.voidReasonNote
+                    ? ` · ${entry.payment.voidReasonNote}`
+                    : ""}
+                </p>
+              ) : null}
+              {entry.refunds.length > 0 ? (
+                <div className="order-3 w-full lg:order-none space-y-1 border-t border-[#EEF2F7] pt-2 sm:col-span-2 lg:border-0 lg:rounded-2xl lg:bg-red-50 lg:p-3">
+                  <p className="text-xs font-semibold text-[#64748B] lg:font-black lg:uppercase lg:tracking-[0.12em] lg:text-red-700">
+                    Refund History
+                  </p>
+                  {entry.refunds.map((refund) => (
+                    <p className="text-xs text-[#475569] lg:font-semibold lg:text-red-900" key={refund.id}>
+                      -{formatServiceRequestMoney(refund.amount)} ·{" "}
+                      {formatServiceRequestSource(refund.status)} ·{" "}
+                      {formatServiceRequestDate(refund.updatedAt ?? refund.createdAt)}
+                      {refund.reason ? ` · ${refund.reason}` : ""}
+                      {refund.providerRefundId ? ` · ${refund.providerRefundId}` : ""}
+                    </p>
+                  ))}
+                </div>
+              ) : null}
+              {paymentCanBeVoided ? (
+                <div className="order-1 lg:order-none lg:col-span-2">
+                  <button
+                    className="min-h-11 max-w-full lg:min-h-0 rounded-full border border-red-200 px-3 py-1.5 text-xs font-black text-red-700 transition hover:bg-red-50"
+                    onClick={() => {
+                      setManualPaymentVoidDraft({
+                        paymentId: entry.payment.id,
+                        reason: "entered_by_mistake",
+                        reasonNote: "",
+                      });
+                      setManualPaymentVoidState({ status: "idle", message: null });
+                    }}
+                    type="button"
+                  >
+                    Void Payment
+                  </button>
+                </div>
+              ) : null}
+              {canRefundPayment(entry.payment) ? (
+                <div className="order-1 lg:order-none lg:col-span-2">
+                  <button
+                    className="min-h-11 max-w-full lg:min-h-0 rounded-full border border-blue-200 px-3 py-1.5 text-xs font-black text-[#0F6BFF] transition hover:bg-blue-50"
+                    onClick={() => {
+                      const refundableAmount = centsToMoney(
+                        getRefundableCentsForPayment(entry.payment),
+                      );
+                      setPaymentRefundDraft({
+                        paymentId: entry.payment.id,
+                        mode: "partial",
+                        amount: formatPlainMoney(refundableAmount),
+                        reason: "",
+                        moneyReturnedConfirmed: false,
+                        idempotencyKey: buildPaymentIdempotencyKey(),
+                      });
+                      setPaymentRefundState({ status: "idle", message: null });
+                    }}
+                    type="button"
+                  >
+                    Refund Payment
+                  </button>
+                </div>
+              ) : null}
+              {paymentCanShowReceiptActions ? (
+                <div className="order-1 w-full space-y-2 lg:order-none lg:col-span-2">
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      className="min-h-11 max-w-full lg:min-h-0 rounded-full border border-[#D7E4FF] px-3 py-1.5 text-xs font-black text-[#0F6BFF] transition hover:bg-blue-50"
+                      onClick={() => void viewPaymentReceipt(entry.payment.id)}
+                      type="button"
+                    >
+                      View Receipt
+                    </button>
+                    <button
+                      className="min-h-11 max-w-full lg:min-h-0 rounded-full border border-[#D7E4FF] px-3 py-1.5 text-xs font-black text-[#0F6BFF] transition hover:bg-blue-50"
+                      onClick={() => void openReceiptDelivery(entry.payment.id, "sms")}
+                      type="button"
+                    >
+                      Send Receipt via SMS
+                    </button>
+                    <button
+                      className="min-h-11 max-w-full lg:min-h-0 rounded-full border border-[#E5E7EB] px-3 py-1.5 text-xs font-black text-[#94A3B8] opacity-80"
+                      disabled
+                      title="Email delivery coming soon"
+                      type="button"
+                    >
+                      Send Receipt via Email (Coming Soon)
+                    </button>
+                  </div>
+                  <div data-testid="payment-receipt-details" className={`${entry.receipt || entry.receiptDeliveries.length > 0 ? "block" : "hidden"} border-t border-[#EEF2F7] pt-2 lg:block lg:border-0 lg:rounded-2xl lg:bg-[#F8FAFC] lg:p-3`}>
+                    <p className="text-xs font-black uppercase tracking-[0.12em] text-[#64748B]">
+                      Receipt
+                    </p>
+                    <p className={`${entry.receipt ? "block" : "hidden"} mt-1 text-sm font-bold text-[#0F172A] lg:block`}>
+                      {entry.receipt?.receiptNumber ?? "Receipt will be created on first view/send."}
+                    </p>
+                    {entry.receiptDeliveries.length > 0 ? (
+                      <div className="mt-2 space-y-1">
+                        {entry.receiptDeliveries.map((delivery) => (
+                          <p className="text-xs font-semibold text-[#475569]" key={delivery.id}>
+                            {delivery.channel.toUpperCase()} to {delivery.recipient}:{" "}
+                            {formatServiceRequestSource(delivery.status)}
+                            {delivery.providerError ? ` · ${delivery.providerError}` : ""}
+                          </p>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-1 hidden text-xs font-semibold text-[#64748B] lg:block">
+                        No receipt delivery attempts yet.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+      </article>
+    );
   }
 
   return (
-    <article className="rounded-2xl border border-[#E5E7EB] bg-white p-4 text-[#0F172A] shadow-[0_8px_24px_rgba(15,23,42,0.06)] sm:p-5">
+    <article className={!useClassicMobileFinance && activeJobTab === "estimate"
+      ? "min-w-0 rounded-2xl border border-transparent bg-[#F5F5F7] p-4 text-black sm:p-5 lg:border-[#E5E7EB] lg:bg-white lg:text-[#0F172A] lg:shadow-[0_8px_24px_rgba(15,23,42,0.06)]"
+      : "rounded-2xl border border-[#E5E7EB] bg-white p-4 text-[#0F172A] shadow-[0_8px_24px_rgba(15,23,42,0.06)] sm:p-5"}>
       <header className="lg:hidden">
-        <div className="grid grid-cols-[44px_1fr_44px] items-center gap-2">
+        <div className={!useClassicMobileFinance && activeJobTab === "estimate" ? "grid grid-cols-[76px_minmax(0,1fr)_76px] items-center gap-2" : "grid grid-cols-[44px_1fr_44px] items-center gap-2"}>
           <Link
             aria-label="Back to jobs"
-            className="flex h-10 w-10 items-center justify-center rounded-full border border-[#E5E7EB] bg-[#F8FAFC] text-xl font-black text-[#0F172A] transition hover:border-[#0F6BFF] hover:text-[#0F6BFF]"
+            className={!useClassicMobileFinance && activeJobTab === "estimate" ? "flex min-h-11 items-center gap-1 text-lg font-medium text-[#007AFF]" : "flex h-10 w-10 items-center justify-center rounded-full border border-[#E5E7EB] bg-[#F8FAFC] text-xl font-black text-[#0F172A] transition hover:border-[#0F6BFF] hover:text-[#0F6BFF]"}
             href={returnTo}
           >
-            ←
+            {!useClassicMobileFinance && activeJobTab === "estimate" ? <><span aria-hidden="true" className="text-3xl leading-none">‹</span> Jobs</> : "←"}
           </Link>
           <div className="min-w-0 text-center">
-            <p className="truncate text-sm font-semibold text-[#334155]">
+            <p className={!useClassicMobileFinance && activeJobTab === "estimate" ? "truncate text-lg font-bold text-black" : "truncate text-sm font-semibold text-[#334155]"}>
               Job #{jobNumber}
             </p>
-            <p className="mt-0.5 truncate text-xs font-bold text-[#64748B]">
+            <p className={!useClassicMobileFinance && activeJobTab === "estimate" ? "hidden" : "mt-0.5 truncate text-xs font-bold text-[#64748B]"}>
               {statusLabel}
             </p>
           </div>
-          <details className="relative">
-            <summary className="flex h-10 w-10 cursor-pointer list-none items-center justify-center rounded-full border border-[#E5E7EB] bg-[#F8FAFC] text-xl font-black text-[#0F172A] transition hover:border-[#0F6BFF] hover:text-[#0F6BFF] [&::-webkit-details-marker]:hidden">
+          <details className={useClassicMobileFinance ? "relative" : "relative justify-self-end"}>
+            <summary aria-label="More job actions" className={`flex ${useClassicMobileFinance ? "h-10 w-10" : "h-11 w-11"} cursor-pointer list-none items-center justify-center rounded-full border border-[#E5E7EB] bg-[#F8FAFC] text-xl font-black text-[#0F172A] transition hover:border-[#0F6BFF] hover:text-[#0F6BFF] [&::-webkit-details-marker]:hidden`}>
               ⋯
             </summary>
             <div className="absolute right-0 z-20 mt-2 w-44 rounded-2xl border border-[#E5E7EB] bg-white p-2 shadow-[0_16px_40px_rgba(15,23,42,0.16)]">
@@ -11334,13 +12069,22 @@ export function ServiceRequestDetail({
             { id: "timeline", label: "Timeline" },
           ].map((tab) => (
             <button
+              aria-current={activeJobTab === tab.id ? "page" : undefined}
               className={`border-b-2 px-3 py-2 text-sm font-black transition ${
                 activeJobTab === tab.id
                   ? "border-[#2563EB] text-[#2563EB]"
                   : "border-transparent text-[#475569] hover:text-[#0F172A]"
               }`}
               key={tab.id}
-              onClick={() => setActiveJobTab(tab.id as JobWorkspaceTab)}
+              onClick={() => {
+                const url = new URL(window.location.href);
+                url.searchParams.set("tab", tab.id === "estimate" ? "finance" : tab.id);
+                url.searchParams.delete("estimateId");
+                url.searchParams.delete("financeSection");
+                window.history.pushState({ ...window.history.state }, "", url);
+                setMobileFinanceSection(null);
+                setActiveJobTab(tab.id as JobWorkspaceTab);
+              }}
               type="button"
             >
               {tab.label}
@@ -14567,6 +15311,23 @@ export function ServiceRequestDetail({
             linkedInvoiceNumber={
               manualEstimate ? invoicesByEstimateId.get(manualEstimate.id)?.invoiceNumber ?? null : null
             }
+            useClassicMobileFinance={useClassicMobileFinance}
+            onOpenLinkedInvoice={() => {
+              const linkedInvoice = manualEstimate
+                ? invoicesByEstimateId.get(manualEstimate.id)
+                : null;
+              if (linkedInvoice) {
+                navigateMobileFinance("invoices");
+                setFinanceEstimateMode("home");
+                openInvoiceWorkspace(linkedInvoice.id);
+              }
+            }}
+            directEstimateNetPaid={manualEstimate
+              ? centsToMoney(estimateNetAllocatedCents.get(manualEstimate.id) ?? 0)
+              : 0}
+            hasDirectEstimatePayments={Boolean(manualEstimate && paymentsState.allocations.some(
+              (allocation) => allocation.estimateId === manualEstimate.id,
+            ))}
             invoiceCoverageSummary={getEstimateInvoiceCoverageSummary(manualEstimate)}
             onClose={closeManualEstimateEditor}
             onCreateInvoice={(estimate) => createInvoiceFromEstimate(estimate)}
@@ -14615,6 +15376,7 @@ export function ServiceRequestDetail({
             onReviseEstimate={(estimate) =>
               reviseEstimateById(estimate.id, estimate.estimateNumber, {
                 openAddItemType: estimate.openAddItemType,
+                itemAction: estimate.itemAction,
               })
             }
             autoOpenAddItemType={
@@ -14623,6 +15385,8 @@ export function ServiceRequestDetail({
                 : null
             }
             onAutoOpenAddItemConsumed={() => setPendingManualEstimateAddItem(null)}
+            autoOpenItemAction={pendingManualEstimateItemAction?.estimateId === manualEstimateId ? pendingManualEstimateItemAction.action : null}
+            onAutoOpenItemActionConsumed={() => setPendingManualEstimateItemAction(null)}
             onOverlayStateChange={setIsManualEstimateOverlayOpen}
             onDeleteEstimate={(estimate) =>
               deleteDraftEstimateById(estimate.id, estimate.estimateNumber)
@@ -14637,6 +15401,7 @@ export function ServiceRequestDetail({
           renderInvoiceWorkspace(viewingInvoice)
         ) : (
       <section className="mt-4 bg-transparent px-0 pb-5 pt-2">
+{useClassicMobileFinance ? (<>
         <div
           className={`grid border-y border-[#E3E8F0] ${
             financeOverpaymentTotal > 0 ? "grid-cols-4" : "grid-cols-3"
@@ -14949,7 +15714,385 @@ export function ServiceRequestDetail({
           </div>
         </div>
 
-        {isFinanceEstimateWorkflowOpen ? (
+        </>) : (<>
+        {mobileFinanceSection === null ? (
+          <div data-testid="mobile-finance-overview" className="pb-[calc(10rem+env(safe-area-inset-bottom))] lg:hidden">
+            <h2 className="text-[1.64rem] font-extrabold leading-tight tracking-tight">Finance</h2>
+            <p className="mt-2 text-sm text-[#737B8E]">Balance due</p>
+            <p className="mt-1 break-words font-bold leading-none tracking-tight" style={{ fontSize: `clamp(1.275rem, ${Math.min(9.35, 97.75 / formatServiceRequestMoney(financeBalanceDueTotal).length)}vw, 2.3375rem)` }}>
+              {formatServiceRequestMoney(financeBalanceDueTotal)}
+            </p>
+            <p className="mt-1 text-sm font-medium text-[#687083]">
+              {financeApprovedEstimates.length > 0 ? "Estimate approved" : statusLabel}
+            </p>
+            <div className="mt-5 grid grid-cols-2 gap-5 border-t border-[#DDE0E7] pt-4">
+              <div className="min-w-0"><p className="text-sm text-[#737B8E]">Approved</p><p className="mt-1 break-words text-lg font-bold">{formatServiceRequestMoney(financeApprovedTotal)}</p></div>
+              <div className="min-w-0"><p className="text-sm text-[#737B8E]">Net paid</p><p className="mt-1 break-words text-lg font-bold">{formatServiceRequestMoney(financePaidTotal)}</p></div>
+            </div>
+            <nav aria-label="Finance sections" className="mt-7 overflow-hidden rounded-2xl bg-white px-3">
+              {([
+                { id: "estimates", icon: "invoice", title: "Estimates", subtitle: `${financeEstimates.length} total · Approved first` },
+                { id: "invoices", icon: "invoice", title: "Invoices", subtitle: currentInvoices.length > 0 ? `${currentInvoices.length} open · ${invoiceHistory.length} in history` : `${invoiceHistory.length} in history · No current invoice` },
+                { id: "payments", icon: "payments", title: "Payments", subtitle: `${paymentHistory.length} recorded payment${paymentHistory.length === 1 ? "" : "s"}` },
+                { id: "expenses", icon: "expenses", title: "Technician expenses", subtitle: "Track job expenses" },
+              ] as const).map((row) => (
+                <div key={row.id} className="relative flex min-h-16 items-center border-b border-[#DDE0E7] last:border-0">
+                  <button type="button" onClick={() => navigateMobileFinance(row.id)} className={`flex min-h-16 w-full min-w-0 items-center gap-3 py-3 text-left ${row.id === "estimates" ? "pr-14" : "pr-5"}`}>
+                    <FinanceHomeIcon className="h-7 w-7 shrink-0 text-[#687083]" name={row.icon} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-base font-bold leading-tight">{row.title}</span>
+                      <span className="mt-1 block text-xs leading-snug text-[#737B8E]">{row.subtitle}</span>
+                    </span>
+                    {row.id === "invoices" && currentInvoices[0] ? <span className="max-w-[40%] break-words text-right text-sm font-bold">{formatServiceRequestMoney(currentInvoices[0].total)}</span> : null}
+                    <span aria-hidden="true" className="absolute right-0 text-2xl font-light text-[#A2A8B6]">›</span>
+                  </button>
+                  {row.id === "estimates" ? <button aria-label="New estimate" type="button" onClick={openNewManualEstimateEditor} className="absolute right-4 flex h-11 w-11 items-center justify-center text-[#007AFF]"><span aria-hidden="true" className="flex h-6 w-6 items-center justify-center rounded-full border-2 border-current text-xl leading-none">+</span></button> : null}
+                </div>
+              ))}
+            </nav>
+            <div data-testid="mobile-finance-actions" className="fixed inset-x-0 bottom-0 z-30 grid gap-2 rounded-t-2xl bg-white px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
+              <button type="button" onClick={openNewManualEstimateEditor} className="flex min-h-11 items-center justify-center gap-3 rounded-xl border border-[#B5D2FF] bg-white px-3 py-3 text-base font-semibold text-[#007AFF]"><span aria-hidden="true" className="text-2xl leading-none">+</span> New estimate</button>
+              <button type="button" onClick={() => openPaymentWorkflow()} className="flex min-h-11 items-center justify-center gap-3 rounded-xl bg-[#007AFF] px-3 py-3 text-base font-semibold text-white"><FinanceHomeIcon name="payments" className="h-5 w-5" />Collect payment</button>
+            </div>
+          </div>
+        ) : (
+          <div className="mb-4 lg:hidden">
+            <button type="button" onClick={() => navigateMobileFinance(null)} className="flex min-h-11 items-center gap-2 text-base font-medium text-[#007AFF]"><span aria-hidden="true">‹</span> {mobileFinanceSection !== "expenses" ? "Finance" : "Finance Overview"}</button>
+            <div className={mobileFinanceSection !== "expenses" ? "mt-2 flex min-h-11 items-center justify-between gap-3" : "mt-2"}>
+              <h2 className="min-w-0 text-2xl font-bold">{{ estimates: "Estimates", invoices: "Invoices", payments: "Payments", expenses: "Technician expenses" }[mobileFinanceSection]}</h2>
+              {mobileFinanceSection === "payments" ? <button data-testid="mobile-history-collect" type="button" onClick={() => openPaymentWorkflow()} className="min-h-11 shrink-0 px-2 text-base font-semibold text-[#007AFF]">+ Collect</button> : null}
+              {mobileFinanceSection === "estimates" ? <button aria-label="New estimate" type="button" onClick={openNewManualEstimateEditor} className="min-h-11 shrink-0 px-2 text-base font-semibold text-[#007AFF]">+ New</button> : null}
+            </div>
+          </div>
+        )}
+        <div
+          className={`hidden lg:grid border-y border-[#E3E8F0] ${
+            financeOverpaymentTotal > 0 ? "grid-cols-4" : "grid-cols-3"
+          }`}
+        >
+          {[
+            {
+              label: "Approved",
+              value: formatServiceRequestMoney(financeApprovedTotal),
+              detail:
+                financePayableEstimates.length + invoicesState.invoices.length > 0
+                  ? "Live obligation"
+                  : "No approved work",
+              valueTone: "text-emerald-700",
+            },
+            {
+              label: "Net Paid",
+              value: formatServiceRequestMoney(financePaidTotal),
+              detail:
+                paymentHistory.length > 0
+                  ? `${paymentHistory.length} payment${
+                      paymentHistory.length === 1 ? "" : "s"
+                    }`
+                  : "No payments",
+              valueTone: "text-[#0F6BFF]",
+            },
+            {
+              label: "Balance Due",
+              value: formatServiceRequestMoney(financeBalanceDueTotal),
+              detail:
+                financeBalanceDueTotal > 0
+                  ? "Collectable balance"
+                  : "No open invoices",
+              valueTone: "text-orange-700",
+            },
+            ...(financeOverpaymentTotal > 0
+              ? [
+                  {
+                    label: "Overpayment",
+                    value: formatServiceRequestMoney(financeOverpaymentTotal),
+                    detail: "Credit on job",
+                    valueTone: "text-purple-700",
+                  },
+                ]
+              : []),
+          ].map((card) => (
+            <div
+              className="flex min-h-[70px] min-w-0 flex-col justify-start gap-1.5 border-r border-[#E3E8F0] px-2.5 py-2.5 last:border-r-0 sm:min-h-[76px] sm:px-3.5"
+              key={card.label}
+            >
+              <span className="block truncate text-[0.68rem] font-bold text-[#657089] sm:text-xs">
+                {card.label}
+              </span>
+              <span
+                className={`block whitespace-nowrap text-[clamp(0.82rem,3.25vw,1rem)] font-black leading-[1.08] sm:text-lg ${card.valueTone}`}
+              >
+                {card.value}
+              </span>
+              <span className="block truncate text-[0.6rem] font-bold text-[#657089] sm:text-xs">
+                {card.detail}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-2 lg:border-b lg:border-[#E3E8F0]">
+          <div className={`lg:border-b lg:border-[#E3E8F0] bg-transparent last:border-b-0 ${mobileFinanceSection === "estimates" ? "block" : "hidden"} lg:block`}>
+            <div className="hidden items-center justify-between gap-3 py-3.5 sm:py-4 lg:flex">
+              <button
+                className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                onClick={() => setIsFinanceEstimatesOpen((current) => !current)}
+                type="button"
+              >
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[0.7rem] bg-blue-50 text-[#0F6BFF] sm:h-10 sm:w-10">
+                  <FinanceHomeIcon className="h-5 w-5" name="estimates" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-lg font-black text-[#0B1228]">
+                    Estimates
+                  </span>
+                  <span className="mt-0.5 block truncate text-[0.82rem] font-semibold text-[#657089]">
+                    {financeEstimates.length > 0
+                      ? `${financeEstimates.length} total · Approved first`
+                      : "No estimates yet"}
+                  </span>
+                </span>
+              </button>
+              <button
+                className="shrink-0 rounded-full border border-[#D7E4FF] px-3 py-1.5 text-xs font-black text-[#0F6BFF] transition hover:bg-blue-50"
+                onClick={openNewManualEstimateEditor}
+                type="button"
+              >
+                {financeEstimates.length > 0 ? "New Estimate" : "Create Estimate"}
+              </button>
+              <button
+                aria-label={isFinanceEstimatesOpen ? "Collapse estimates" : "Expand estimates"}
+                className="shrink-0 text-[#0B1A33]"
+                onClick={() => setIsFinanceEstimatesOpen((current) => !current)}
+                type="button"
+              >
+                <FinanceChevron open={isFinanceEstimatesOpen} />
+              </button>
+            </div>
+            {isFinanceEstimatesOpen || mobileFinanceSection === "estimates" ? (
+              <div className={`${isFinanceEstimatesOpen ? "" : "lg:hidden"} lg:border-t lg:border-[#EEF2F7] lg:px-2 lg:py-1.5`}>
+                {estimatesState.status === "loading" ? (
+                  <p className="text-sm font-semibold text-[#64748B]">
+                    Loading estimates...
+                  </p>
+                ) : null}
+                {estimatesState.status === "error" ? (
+                  <p className="py-2 text-sm font-semibold text-amber-800">
+                    {estimatesState.error}
+                  </p>
+                ) : null}
+                {estimatesState.status === "ready" && financeEstimates.length === 0 ? (
+                  <div>
+                    <p className="rounded-2xl bg-white p-4 text-sm text-[#64748B] lg:hidden">No estimates yet</p>
+                    <p className="hidden py-2 text-sm font-semibold text-[#64748B] lg:block">No estimates yet.</p>
+                  </div>
+                ) : null}
+                {financeEstimates.map(renderEstimateCard)}
+              </div>
+            ) : null}
+          </div>
+
+          <div className={`lg:border-b lg:border-[#E3E8F0] bg-transparent last:border-b-0 ${mobileFinanceSection === "invoices" ? "block" : "hidden"} lg:block`}>
+            <button
+              className="hidden w-full items-center justify-between gap-3 py-3.5 text-left sm:py-4 lg:flex"
+              onClick={() => setIsFinanceInvoiceOpen((current) => !current)}
+              type="button"
+            >
+              <span className="flex min-w-0 items-center gap-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[0.7rem] bg-emerald-50 text-emerald-700 sm:h-10 sm:w-10">
+                  <FinanceHomeIcon className="h-5 w-5" name="invoice" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-lg font-black text-[#0B1228]">
+                    Invoice
+                  </span>
+                  <span className="mt-0.5 block truncate text-[0.82rem] font-semibold text-[#657089]">
+                    {financePrimaryInvoice
+                      ? `${currentInvoices.length} open · ${invoiceHistory.length} history`
+                      : "No invoice yet"}
+                  </span>
+                </span>
+              </span>
+              <span className="flex shrink-0 items-center gap-3">
+                {financePrimaryInvoice ? (
+                  <span className="whitespace-nowrap text-sm font-black text-emerald-700 sm:text-base">
+                    {formatServiceRequestMoney(financePrimaryInvoice.total)}
+                  </span>
+                ) : null}
+                <span className="text-[#0B1A33]">
+                  <FinanceChevron open={isFinanceInvoiceOpen} />
+                </span>
+              </span>
+            </button>
+            {isFinanceInvoiceOpen || mobileFinanceSection === "invoices" ? (
+            <div className={`${isFinanceInvoiceOpen ? "" : "lg:hidden"} lg:border-t lg:border-[#EEF2F7] lg:px-2 lg:py-2.5`}>
+              {invoicesState.status === "loading" ? (
+                <p className="text-sm font-semibold text-[#64748B]">
+                  Loading invoices...
+                </p>
+              ) : null}
+              {invoicesState.status === "error" ? (
+                <p className="py-2 text-sm font-semibold text-amber-800">
+                  {invoicesState.error}
+                </p>
+              ) : null}
+              {financeInvoiceSyncRequired ? (
+                <div className="mb-3 rounded-2xl border border-amber-200 bg-amber-50 p-3">
+                  <p className="text-sm font-black text-amber-900">
+                    Invoice Update Required
+                  </p>
+                  <div className="mt-2 grid gap-2 text-xs font-bold text-amber-900 sm:grid-cols-3">
+                    <p>
+                      Approved Job Scope:{" "}
+                      {formatServiceRequestMoney(financeApprovedTotal)}
+                    </p>
+                    <p>
+                      Current Invoice:{" "}
+                      {formatServiceRequestMoney(financePrimaryInvoice?.total ?? 0)}
+                    </p>
+                    <p>
+                      Difference: {formatServiceRequestMoney(financeInvoiceSyncDifference)}
+                    </p>
+                  </div>
+                  <button
+                    className="mt-3 rounded-full bg-amber-700 px-4 py-2 text-xs font-black text-white transition hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={
+                      invoiceActionState.status === "saving" ||
+                      !financeInvoiceSyncEstimate
+                    }
+                    onClick={() => {
+                      if (financeInvoiceSyncEstimate) {
+                        void createInvoiceFromEstimate(financeInvoiceSyncEstimate);
+                      }
+                    }}
+                    type="button"
+                  >
+                    {invoiceActionState.status === "saving"
+                      ? "Updating Invoice..."
+                      : "Update Invoice"}
+                  </button>
+                </div>
+              ) : null}
+              {financePrimaryInvoice ? (
+                <>
+                  {renderMobileInvoiceCard(financePrimaryInvoice)}
+                  <div className="hidden lg:block">{renderInvoiceSummaryCard(financePrimaryInvoice)}</div>
+                </>
+              ) : invoicesState.status === "ready" ? (
+                <>
+                  <p className="rounded-2xl bg-white p-4 text-sm text-[#64748B] lg:hidden">No invoices yet</p>
+                  <p className="hidden py-2 text-sm font-semibold text-[#64748B] lg:block">No invoice yet. Create one from an approved estimate.</p>
+                </>
+              ) : null}
+              <div className="lg:hidden">
+                {currentInvoices.filter((invoice) => invoice.id !== financePrimaryInvoice?.id).map(renderMobileInvoiceCard)}
+                {invoiceHistory.length > 0 ? (
+                  <div className="mt-4">
+                    <h3 className="text-lg font-bold">Invoice history</h3>
+                    {invoiceHistory.filter((invoice) => invoice.id !== financePrimaryInvoice?.id).map(renderMobileInvoiceCard)}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+            ) : null}
+          </div>
+
+          <div className={`border-b border-[#E3E8F0] bg-transparent last:border-b-0 ${mobileFinanceSection === "payments" ? "block" : "hidden"} lg:block`}>
+            <button
+              className="hidden w-full items-center justify-between gap-3 py-3.5 text-left sm:py-4 lg:flex"
+              onClick={() => setIsFinancePaymentsOpen((current) => !current)}
+              type="button"
+            >
+              <span className="flex min-w-0 items-center gap-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[0.7rem] bg-purple-50 text-purple-700 sm:h-10 sm:w-10">
+                  <FinanceHomeIcon className="h-5 w-5" name="payments" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-lg font-black text-[#0B1228]">
+                    Payments
+                  </span>
+                  <span className="mt-0.5 block truncate text-[0.82rem] font-semibold text-[#657089]">
+                    {paymentHistory.length > 0
+                      ? `${paymentHistory.length} recorded payment${paymentHistory.length === 1 ? "" : "s"}`
+                      : "No payments yet"}
+                  </span>
+                </span>
+              </span>
+              <span className="flex shrink-0 items-center gap-3">
+                <FinanceChevron open={isFinancePaymentsOpen} />
+              </span>
+            </button>
+            {isFinancePaymentsOpen || mobileFinanceSection === "payments" ? (
+              <div className={`${isFinancePaymentsOpen ? "" : "lg:hidden"} lg:border-t lg:border-[#EEF2F7] lg:px-2 lg:py-2.5`}>
+                <div className="mb-1 hidden lg:flex items-center justify-between gap-3">
+                  <p className="text-sm font-black text-[#0F172A]">
+                    Payment History
+                  </p>
+                  <button
+                    className="rounded-full border border-[#D7E4FF] px-3 py-1.5 text-xs font-black text-[#0F6BFF] transition hover:bg-blue-50"
+                    onClick={() => openPaymentWorkflow()}
+                    type="button"
+                  >
+                    Collect Payment
+                  </button>
+                </div>
+                {paymentsState.status === "loading" ? (
+                  <p className="text-sm font-semibold text-[#64748B]">
+                    Loading payments...
+                  </p>
+                ) : null}
+                {paymentsState.error ? (
+                  <p className="rounded-2xl bg-amber-50 p-3 text-sm font-semibold text-amber-800">
+                    {paymentsState.error}
+                  </p>
+                ) : null}
+                {paymentHistory.length > 0 ? (
+                  <div data-testid="payment-history-list" className="overflow-hidden rounded-2xl bg-white lg:overflow-visible lg:rounded-none lg:bg-transparent">
+                    {paymentHistory.map(renderPaymentHistoryItem)}
+                  </div>
+                ) : (
+                  <p className="py-2 text-sm font-semibold text-[#64748B]">
+                    No payments recorded yet.
+                  </p>
+                )}
+              </div>
+            ) : null}
+          </div>
+
+          <div className={`border-b border-[#E3E8F0] bg-transparent last:border-b-0 ${mobileFinanceSection === "expenses" ? "block" : "hidden"} lg:block`}>
+            <button
+              className="hidden w-full items-center justify-between gap-3 py-3.5 text-left sm:py-4 lg:flex"
+              onClick={() => setIsFinanceExpensesOpen((current) => !current)}
+              type="button"
+            >
+              <span className="flex min-w-0 items-center gap-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[0.7rem] bg-orange-50 text-orange-700 sm:h-10 sm:w-10">
+                  <FinanceHomeIcon className="h-5 w-5" name="expenses" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-lg font-black text-[#0B1228]">
+                    Technician Expenses
+                  </span>
+                  <span className="mt-0.5 block truncate text-[0.82rem] font-semibold text-[#657089]">
+                    Track expenses for this job
+                  </span>
+                </span>
+              </span>
+              <span className="shrink-0 text-[#0B1A33]">
+                <FinanceChevron open={isFinanceExpensesOpen} />
+              </span>
+            </button>
+            {isFinanceExpensesOpen || mobileFinanceSection === "expenses" ? (
+              <div className={`${isFinanceExpensesOpen ? "" : "lg:hidden"} border-t border-[#EEF2F7] px-1.5 py-2.5 sm:px-2`}>
+                <p className="py-2 text-sm font-semibold text-[#64748B]">
+                  No technician expenses yet.
+                </p>
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        </>)}
+{isFinanceEstimateWorkflowOpen ? (
           <div className="mt-6">
 
         {catalogState.status === "loading" ? (
@@ -18315,7 +19458,7 @@ export function ServiceRequestDetail({
         </div>
       ) : null}
 
-      {isManualPaymentOpen ? (
+      {isManualPaymentOpen ? (useClassicMobileFinance ? (
         <div className="fixed inset-0 z-[130] flex items-end justify-center overflow-hidden bg-[#0F172A]/55 backdrop-blur-sm sm:px-3 sm:py-4 sm:items-center">
           <div className="flex h-[100dvh] w-full flex-col overflow-hidden rounded-none bg-white shadow-2xl sm:max-h-[92vh] sm:max-w-2xl sm:rounded-3xl">
             <div className="flex shrink-0 items-center justify-between gap-4 border-b border-[#E5E7EB] px-4 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))] sm:items-start sm:border-b-0 sm:p-6 sm:pb-0">
@@ -18435,7 +19578,7 @@ export function ServiceRequestDetail({
                     htmlFor="manual-payment-amount"
                   >
                     {manualPaymentDraft.paymentMethod === "card"
-                      ? "Stripe checkout amount"
+                      ? "Payment amount"
                       : "Amount"}
                   </label>
                   <div className="mt-2 flex overflow-hidden rounded-xl border border-[#D7DEE8] bg-white focus-within:border-[#0F6BFF] focus-within:ring-4 focus-within:ring-blue-100 sm:max-w-sm">
@@ -18474,8 +19617,7 @@ export function ServiceRequestDetail({
                   {manualPaymentDraft.paymentMethod === "card" &&
                   manualPaymentDraft.checkoutKind !== "custom_deposit" ? (
                     <p className="mt-2 text-xs font-bold leading-5 text-[#64748B]">
-                      Card amounts are calculated by HomeFixOS from the current approved
-                      Job balance and cannot be edited here.
+                      Choose an available payment option below.
                     </p>
                   ) : null}
                 </div>
@@ -18553,7 +19695,7 @@ export function ServiceRequestDetail({
                   </div>
                   {manualPaymentDraft.paymentMethod === "card" ? (
                     <p className="mt-3 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold leading-5 text-blue-800">
-                      Card details are entered in Stripe secure checkout. HomeFixOS never stores
+                      Card details are entered in secure checkout. HomeFixOS never stores
                       card numbers.
                     </p>
                   ) : null}
@@ -18564,7 +19706,7 @@ export function ServiceRequestDetail({
                 selectedManualPaymentTarget.cardActions.length > 1 ? (
                   <div>
                     <p className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
-                      Stripe checkout action
+                      Payment options
                     </p>
                     <div className="mt-2 grid gap-2 sm:grid-cols-2">
                       {selectedManualPaymentTarget.cardActions.map((action) => {
@@ -18874,7 +20016,7 @@ export function ServiceRequestDetail({
                         ? "Opening..."
                         : "Saving..."
                       : manualPaymentDraft.paymentMethod === "card"
-                        ? "Continue to Stripe"
+                        ? "Continue to payment"
                         : "Save Payment"}
                   </button>
                 </div>
@@ -18882,7 +20024,634 @@ export function ServiceRequestDetail({
             )}
           </div>
         </div>
-      ) : null}
+      ) : (
+        <div className="fixed inset-0 z-[130] flex items-end justify-center overflow-hidden bg-[#0F172A]/55 backdrop-blur-sm sm:px-3 sm:py-4 sm:items-center">
+          <div role="dialog" aria-modal="true" aria-label="Collect payment" className="flex h-[100dvh] w-full flex-col overflow-hidden rounded-none bg-[#F5F5F7] sm:bg-white sm:shadow-2xl sm:max-h-[92vh] sm:max-w-2xl sm:rounded-3xl">
+            <div className="relative flex min-h-16 shrink-0 items-center justify-end gap-4 px-4 pb-2 pt-[calc(0.75rem+env(safe-area-inset-top))] sm:min-h-0 sm:justify-between sm:items-start sm:p-6 sm:pb-0">
+              {mobilePaymentStep === 2 ? <button data-testid="mobile-payment-back" type="button" disabled={manualPaymentState.status === "saving"} onClick={() => setMobilePaymentStep(1)} className="mr-auto min-h-11 text-sm font-medium text-[#007AFF] sm:hidden">‹ Back</button> : null}
+              <p className="pointer-events-none absolute inset-x-16 text-center text-sm font-semibold text-[#737B8E] sm:hidden">Job #{jobNumber}</p>
+              <div className="hidden sm:block">
+                <p className="hidden text-xs font-black uppercase tracking-[0.18em] text-[#0F6BFF] sm:block">
+                  Manual Payment
+                </p>
+                <h3 className="text-xl font-black text-[#0F172A] sm:mt-1 sm:text-2xl">
+                  Collect Payment
+                </h3>
+                <p className="mt-0.5 text-xs font-bold text-[#64748B] sm:hidden">
+                  {selectedManualPaymentTarget?.label ?? "Estimate / Invoice"}
+                </p>
+                <p className="mt-1 hidden text-sm font-semibold leading-6 text-[#64748B] sm:block">
+                  Record cash, check, or app payments against this job&apos;s Estimate or Invoice.
+                </p>
+              </div>
+              <button
+                aria-label="Close payment form"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#E7E8EC] text-xl font-medium text-[#64748B] transition hover:text-[#0F6BFF] sm:h-10 sm:w-10 sm:border sm:border-[#E5E7EB] sm:bg-transparent sm:font-black"
+                disabled={manualPaymentState.status === "saving"}
+                onClick={() => {
+                  setIsManualPaymentOpen(false);
+                  setManualPaymentState({ status: "idle", message: null });
+                }}
+                type="button"
+              >
+                <span className="sm:hidden">×</span><span className="hidden sm:inline">x</span>
+              </button>
+            </div>
+
+            {manualPaymentTargets.length === 0 || !manualPaymentDraft ? (
+              <div className="flex-1 overflow-y-auto px-4 py-4 sm:mt-5 sm:p-6 sm:pt-5">
+              <h3 className="mb-4 text-[1.6rem] font-bold text-black sm:hidden">Collect payment</h3>
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                <p className="text-sm font-black text-amber-900">
+                  No payable Estimate or Invoice is available.
+                </p>
+                <p className="mt-1 text-sm font-semibold leading-6 text-amber-800">
+                  Approve an Estimate or create an Invoice before recording a manual payment.
+                </p>
+                <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                  <button
+                    className="rounded-xl bg-[#0F6BFF] px-4 py-3 text-sm font-black text-white transition hover:bg-[#0057D9]"
+                    onClick={() => {
+                      setIsManualPaymentOpen(false);
+                      setManualPaymentState({ status: "idle", message: null });
+                      setIsFinanceEstimatesOpen(true);
+                      openNewManualEstimateEditor();
+                    }}
+                    type="button"
+                  >
+                    Create Estimate
+                  </button>
+                  <button
+                    className="rounded-xl border border-amber-300 bg-white px-4 py-3 text-sm font-black text-amber-900"
+                    onClick={() => {
+                      setIsManualPaymentOpen(false);
+                      setManualPaymentState({ status: "idle", message: null });
+                    }}
+                    type="button"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+              </div>
+            ) : (
+              <>
+              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 sm:mt-5 sm:flex sm:flex-col sm:gap-5 sm:space-y-0 sm:p-6 sm:pt-5 sm:pb-6">
+                <div data-testid="mobile-collect-payment-hero" className="sm:hidden">
+                  <h3 className="text-[1.6rem] font-bold leading-tight tracking-tight text-black">Collect payment</h3>
+                  <p className="mt-5 text-sm text-[#737B8E]">Amount due</p>
+                  <p className="mt-1 break-words font-bold leading-tight tracking-tight text-black" style={{ fontSize: `clamp(1.5rem, ${Math.min(9.4, 100 / formatServiceRequestMoney(selectedManualPaymentTarget?.remaining ?? 0).length)}vw, 2.35rem)` }}>{formatServiceRequestMoney(selectedManualPaymentTarget?.remaining ?? 0)}</p>
+                  <p className="mt-2 break-words text-sm text-[#737B8E]">Payment toward {selectedManualPaymentTarget?.label}</p>
+                </div>
+                {selectedManualPaymentTarget ? (
+                  <div className="hidden rounded-2xl bg-blue-50/70 p-3 ring-1 ring-blue-100 sm:block sm:bg-gradient-to-br sm:from-blue-50 sm:to-[#F8FAFC] sm:p-4">
+                    <div className="flex items-center gap-2.5 sm:gap-3">
+                      <span className="hidden h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white text-[#0F6BFF] shadow-sm sm:flex">
+                        <FinanceHomeIcon className="h-6 w-6" name="invoice" />
+                      </span>
+                      <div className="grid min-w-0 flex-1 grid-cols-3 gap-2 text-center sm:block sm:text-left">
+                        <div>
+                          <p className="text-[0.65rem] font-black uppercase tracking-[0.12em] text-[#64748B] sm:text-sm sm:normal-case sm:tracking-normal sm:text-[#0F172A]">
+                            Total
+                          </p>
+                          <p className="mt-0.5 text-sm font-black text-[#0F172A] sm:hidden">
+                            {formatServiceRequestMoney(selectedManualPaymentTarget.total)}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[0.65rem] font-black uppercase tracking-[0.12em] text-[#64748B] sm:hidden">
+                            Paid
+                          </p>
+                          <p className="mt-0.5 text-sm font-black text-emerald-700 sm:hidden">
+                            {formatServiceRequestMoney(selectedManualPaymentTarget.paid)}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[0.65rem] font-black uppercase tracking-[0.12em] text-[#64748B] sm:hidden">
+                            Remaining
+                          </p>
+                          <p className="mt-0.5 text-sm font-black text-[#0F6BFF] sm:hidden">
+                            {formatServiceRequestMoney(selectedManualPaymentTarget.remaining)}
+                          </p>
+                        </div>
+                        <p className="mt-1 hidden text-xs font-bold leading-5 text-[#64748B] sm:block">
+                          Total {formatServiceRequestMoney(selectedManualPaymentTarget.total)}
+                          <span aria-hidden="true"> · </span>
+                          Paid {formatServiceRequestMoney(selectedManualPaymentTarget.paid)}
+                          <span aria-hidden="true"> · </span>
+                          Balance{" "}
+                          {formatServiceRequestMoney(selectedManualPaymentTarget.remaining)}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className={`sm:order-2 sm:block ${mobilePaymentStep === 1 ? "block" : "hidden"}`}>
+                  <p className="text-lg font-bold text-black sm:text-xs sm:font-black sm:uppercase sm:tracking-[0.14em] sm:text-[#64748B]">
+                    Payment method
+                  </p>
+                  <div data-testid="collect-payment-methods" role="group" aria-label="Payment method" className="mt-3 overflow-hidden rounded-2xl bg-white sm:mt-2 sm:grid sm:grid-cols-6 sm:gap-2 sm:overflow-visible sm:rounded-none sm:bg-transparent">
+                    {(["card", "cash", "check", "zelle", "venmo", "cash_app"] as const).map(
+                      (method) => {
+                        const methodIcon =
+                          method === "card"
+                            ? "Card"
+                            : method === "cash"
+                            ? "$"
+                            : method === "check"
+                              ? "Ck"
+                              : method === "zelle"
+                                ? "Z"
+                                : method === "venmo"
+                                  ? "V"
+                                  : "$";
+                        const iconClass =
+                          method === "card"
+                            ? "bg-blue-50 text-blue-700"
+                            : method === "zelle"
+                            ? "bg-violet-50 text-violet-700"
+                            : method === "venmo"
+                              ? "bg-blue-50 text-blue-700"
+                              : "bg-emerald-50 text-emerald-700";
+
+                        return (
+                        <button
+                          aria-pressed={manualPaymentDraft.paymentMethod === method}
+                          className={`flex min-h-14 w-full items-center gap-3 border-b border-[#E5E7EB] px-4 py-3 text-left text-base font-semibold text-black last:border-b-0 sm:min-h-20 sm:flex-col sm:justify-center sm:gap-2 sm:rounded-xl sm:border sm:px-3 sm:py-3 sm:text-center sm:text-sm sm:font-black sm:last:border-b ${
+                            manualPaymentDraft.paymentMethod === method
+                              ? "bg-[#EDF5FF] sm:border-[#0F6BFF] sm:bg-blue-50 sm:text-[#0F6BFF] sm:shadow-[0_10px_24px_rgba(15,107,255,0.12)]"
+                              : "bg-white sm:text-[#334155] sm:hover:border-blue-200"
+                          }`}
+                          disabled={manualPaymentState.status === "saving"}
+                          key={method}
+                          onClick={() => {
+                            setManualPaymentDraft((current) =>
+                              current
+                                ? {
+                                    ...current,
+                                    amount:
+                                      method === "card"
+                                        ? formatCentsAsInput(
+                                            selectedCardAmountCents ??
+                                              selectedCardCheckoutAction?.amountCents ??
+                                              moneyToCents(
+                                                selectedManualPaymentTarget?.remaining ?? 0,
+                                              ),
+                                          )
+                                        : current.amount,
+                                    paymentMethod: method,
+                                  }
+                                : current,
+                            );
+                            setManualPaymentState({ status: "idle", message: null });
+                          }}
+                          type="button"
+                        >
+                          <Image alt="" aria-hidden="true" unoptimized width={48} height={32}
+                            src={`/images/payment-methods/${method === "cash_app" ? "cash-app.svg" : method === "zelle" || method === "venmo" ? `${method}.png` : `${method}.svg`}`}
+                            className={`h-8 w-12 shrink-0 object-contain sm:hidden ${method === "card" || method === "cash" || method === "check" ? "opacity-50" : ""}`}
+                          />
+                          <span
+                            className={`hidden h-7 w-7 items-center justify-center rounded-lg text-sm font-black sm:flex sm:h-8 sm:w-8 sm:text-base ${iconClass}`}
+                          >
+                            {methodIcon}
+                          </span>
+                          <span className="min-w-0 flex-1 sm:flex-none">{getManualPaymentMethodLabel(method)}</span>
+                          <span aria-hidden="true" className={`ml-auto flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 sm:hidden ${manualPaymentDraft.paymentMethod === method ? "border-[#007AFF] bg-[#007AFF] text-white" : "border-[#BDC3CE]"}`}>
+                            {manualPaymentDraft.paymentMethod === method ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="h-4 w-4"><path d="m5 12 4 4 10-10" /></svg> : null}
+                          </span>
+                        </button>
+                        );
+                      },
+                    )}
+                  </div>
+                  {manualPaymentDraft.paymentMethod === "card" ? (
+                    <p className="mt-3 hidden rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold leading-5 text-blue-800 sm:block">
+                      Card details are entered in secure checkout. HomeFixOS never stores
+                      card numbers.
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className={mobilePaymentStep === 1 ? "space-y-2 sm:hidden" : "hidden"}>
+                <button
+                  data-testid="mobile-send-payment-link"
+                  type="button"
+                  disabled={!canOpenPaymentLink || manualPaymentState.status === "saving"}
+                  onClick={() => {
+                    if (canOpenPaymentLink && paymentLinkInvoice) {
+                      setIsManualPaymentOpen(false);
+                      openInvoiceDelivery(paymentLinkInvoice);
+                    }
+                  }}
+                  className="flex min-h-14 w-full items-center gap-3 rounded-2xl bg-white px-4 py-3 text-left text-base text-black disabled:opacity-50 sm:hidden"
+                >
+                  <Image alt="" aria-hidden="true" unoptimized src="/images/payment-methods/link.svg" width={32} height={32} className="h-7 w-7 shrink-0 opacity-50" />
+                  <span className="min-w-0 flex-1">Send payment link</span><span aria-hidden="true" className="text-xl text-[#9299A7]">›</span>
+                </button>
+                {!canOpenPaymentLink ? <p className="text-xs text-[#737B8E] sm:hidden">Payment links are available through Send Invoice for a draft invoice.</p> : null}
+                </div>
+                {mobilePaymentStep === 2 ? (
+                  <div data-testid="mobile-payment-selected-method" className="flex items-center gap-3 rounded-2xl bg-white px-4 py-3 sm:hidden">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-semibold text-black">{getManualPaymentMethodLabel(manualPaymentDraft.paymentMethod)} payment</p>
+                      <p className="text-xs text-[#737B8E]">{manualPaymentDraft.paymentMethod === "card" ? "Pay with credit or debit card" : "Record a received payment"}</p>
+                    </div>
+                    <button data-testid="mobile-payment-change" type="button" disabled={manualPaymentState.status === "saving"} onClick={() => setMobilePaymentStep(1)} className="min-h-11 text-sm font-medium text-[#007AFF]">Change</button>
+                  </div>
+                ) : null}
+                <div id="payment-amount-options" className={`space-y-4 sm:contents sm:space-y-0 ${mobilePaymentStep === 2 ? "block" : "hidden"}`}>
+                <div className="sm:order-1">
+                  <label
+                    className="text-sm font-black text-[#0F172A]"
+                    htmlFor="manual-payment-amount"
+                  >
+                    {manualPaymentDraft.paymentMethod === "card"
+                      ? "Payment amount"
+                      : "Amount"}
+                  </label>
+                  <div className="mt-2 flex overflow-hidden rounded-xl border border-[#D7DEE8] bg-white focus-within:border-[#0F6BFF] focus-within:ring-4 focus-within:ring-blue-100 sm:max-w-sm">
+                    <span className="flex w-11 shrink-0 items-center justify-center border-r border-[#D7DEE8] bg-[#F8FAFC] text-base font-black text-[#334155] sm:w-12">
+                      $
+                    </span>
+                    <input
+                      className="min-w-0 flex-1 px-3 py-3 text-xl font-black text-[#0F172A] outline-none sm:text-lg"
+                      disabled={
+                        manualPaymentState.status === "saving" ||
+                        (manualPaymentDraft.paymentMethod === "card" &&
+                          (manualPaymentDraft.checkoutKind !== "custom_deposit" ||
+                            manualPaymentDraft.customDepositMode === "percent"))
+                      }
+                      id="manual-payment-amount"
+                      inputMode="decimal"
+                      onChange={(event) => {
+                        const nextAmount = event.currentTarget.value;
+                        setManualPaymentDraft((current) =>
+                          current ? { ...current, amount: nextAmount } : current,
+                        );
+                        setManualPaymentState({ status: "idle", message: null });
+                      }}
+                      placeholder="0.00"
+                      value={
+                        manualPaymentDraft.paymentMethod === "card" &&
+                        manualPaymentDraft.checkoutKind === "custom_deposit" &&
+                        manualPaymentDraft.customDepositMode === "percent"
+                          ? selectedCardAmountCents === null
+                            ? ""
+                            : formatCentsAsInput(selectedCardAmountCents)
+                          : manualPaymentDraft.amount
+                      }
+                    />
+                  </div>
+                  {manualPaymentDraft.paymentMethod === "card" &&
+                  manualPaymentDraft.checkoutKind !== "custom_deposit" ? (
+                    <p className="mt-2 text-xs font-bold leading-5 text-[#64748B]">
+                      Choose an available payment option below.
+                    </p>
+                  ) : null}
+                </div>
+
+                {manualPaymentDraft.paymentMethod === "card" &&
+                selectedManualPaymentTarget !== null &&
+                selectedManualPaymentTarget.cardActions.length > 1 ? (
+                  <div className="sm:order-3">
+                    <p className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
+                      Payment options
+                    </p>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      {selectedManualPaymentTarget.cardActions.map((action) => {
+                        const isSelected =
+                          manualPaymentDraft.checkoutKind === action.kind;
+
+                        return (
+                          <button
+                            className={`rounded-xl border px-4 py-3 text-left transition ${
+                              isSelected
+                                ? "border-[#0F6BFF] bg-blue-50 text-[#0F6BFF]"
+                                : "border-[#E5E7EB] bg-white text-[#334155]"
+                            }`}
+                            disabled={manualPaymentState.status === "saving"}
+                            key={action.kind}
+                            onClick={() => {
+                              setManualPaymentDraft((current) =>
+                                current
+                                  ? {
+                                      ...current,
+                                      amount: formatCentsAsInput(
+                                        action.kind === "custom_deposit" &&
+                                          selectedManualPaymentTarget.depositSuggestionCents > 0
+                                          ? selectedManualPaymentTarget.depositSuggestionCents
+                                          : action.amountCents,
+                                      ),
+                                      checkoutKind: action.kind,
+                                    }
+                                  : current,
+                              );
+                              setManualPaymentState({ status: "idle", message: null });
+                            }}
+                            type="button"
+                          >
+                            <span className="block text-sm font-black">
+                              {action.label}
+                            </span>
+                            <span className="mt-1 block text-xs font-bold text-[#64748B]">
+                              {action.detail}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+
+                {manualPaymentDraft.paymentMethod === "card" &&
+                manualPaymentDraft.checkoutKind === "custom_deposit" &&
+                selectedManualPaymentTarget ? (
+                  <div className="rounded-xl border border-[#D7DEE8] bg-[#F8FAFC] p-3 sm:order-4 sm:p-4">
+                    <p className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
+                      Custom Deposit
+                    </p>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      {(["fixed", "percent"] as const).map((mode) => (
+                        <button
+                          className={`rounded-xl border px-3 py-2 text-sm font-black transition ${
+                            manualPaymentDraft.customDepositMode === mode
+                              ? "border-[#0F6BFF] bg-blue-50 text-[#0F6BFF]"
+                              : "border-[#E5E7EB] bg-white text-[#334155]"
+                          }`}
+                          disabled={manualPaymentState.status === "saving"}
+                          key={mode}
+                          onClick={() => {
+                            setManualPaymentDraft((current) =>
+                              current
+                                ? {
+                                    ...current,
+                                    customDepositMode: mode,
+                                    amount:
+                                      mode === "fixed"
+                                        ? current.amount
+                                        : formatCentsAsInput(
+                                            selectedCardAmountCents ??
+                                              selectedManualPaymentTarget.depositSuggestionCents ??
+                                              0,
+                                          ),
+                                  }
+                                : current,
+                            );
+                            setManualPaymentState({ status: "idle", message: null });
+                          }}
+                          type="button"
+                        >
+                          {mode === "fixed" ? "Fixed Amount" : "Percentage"}
+                        </button>
+                      ))}
+                    </div>
+                    {manualPaymentDraft.customDepositMode === "percent" ? (
+                      <div className="mt-3">
+                        <label
+                          className="text-sm font-black text-[#0F172A]"
+                          htmlFor="manual-payment-percent"
+                        >
+                          Percent
+                        </label>
+                        <div className="mt-2 flex overflow-hidden rounded-xl border border-[#D7DEE8] bg-white focus-within:border-[#0F6BFF] focus-within:ring-4 focus-within:ring-blue-100 sm:max-w-sm">
+                          <input
+                            className="min-w-0 flex-1 px-3 py-3 text-xl font-black text-[#0F172A] outline-none sm:text-lg"
+                            disabled={manualPaymentState.status === "saving"}
+                            id="manual-payment-percent"
+                            inputMode="decimal"
+                            onChange={(event) => {
+                              const nextPercent = event.currentTarget.value;
+                              setManualPaymentDraft((current) =>
+                                current
+                                  ? { ...current, customDepositPercent: nextPercent }
+                                  : current,
+                              );
+                              setManualPaymentState({ status: "idle", message: null });
+                            }}
+                            placeholder="30"
+                            value={manualPaymentDraft.customDepositPercent}
+                          />
+                          <span className="flex w-11 shrink-0 items-center justify-center border-l border-[#D7DEE8] bg-[#F8FAFC] text-base font-black text-[#334155] sm:w-12">
+                            %
+                          </span>
+                        </div>
+                        <p className="mt-2 text-xs font-bold leading-5 text-[#64748B]">
+                          Percentage is calculated from{" "}
+                          {selectedManualPaymentTarget.type === "estimate"
+                            ? "the approved Estimate total"
+                            : "the verified current Invoice / Job balance"}
+                          : {formatServiceRequestMoney(centsToMoney(customDepositBaseCents))}.
+                        </p>
+                      </div>
+                    ) : null}
+                    <div className="mt-3 grid gap-2 text-sm font-bold text-[#334155] sm:grid-cols-3">
+                      <p>
+                        <span className="block text-xs uppercase tracking-[0.12em] text-[#64748B]">
+                          Collectible
+                        </span>
+                        {formatServiceRequestMoney(centsToMoney(customDepositMaxCents))}
+                      </p>
+                      <p>
+                        <span className="block text-xs uppercase tracking-[0.12em] text-[#64748B]">
+                          Selected
+                        </span>
+                        {selectedCardAmountCents === null
+                          ? "Enter amount"
+                          : formatServiceRequestMoney(centsToMoney(selectedCardAmountCents))}
+                      </p>
+                      <p>
+                        <span className="block text-xs uppercase tracking-[0.12em] text-[#64748B]">
+                          Remaining
+                        </span>
+                        {selectedCardRemainingAfterCents === null
+                          ? "—"
+                          : formatServiceRequestMoney(centsToMoney(selectedCardRemainingAfterCents))}
+                      </p>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="sm:order-5">
+                  <p className="text-sm font-black text-[#0F172A]">Apply payment to</p>
+                  <div className="mt-2 overflow-hidden rounded-xl border border-[#D7DEE8] bg-white">
+                    {manualPaymentTargets.map((target) => {
+                      const isSelected =
+                        manualPaymentDraft.targetType === target.type &&
+                        manualPaymentDraft.targetId === target.id;
+
+                      return (
+                        <button
+                          className={`flex w-full items-start gap-3 border-b border-[#E5E7EB] px-3 py-3 text-left last:border-b-0 sm:px-4 ${
+                            isSelected ? "bg-blue-50/60" : "bg-white hover:bg-[#F8FAFC]"
+                          }`}
+                          disabled={manualPaymentState.status === "saving"}
+                          key={`${target.type}:${target.id}`}
+                          onClick={() => updateManualPaymentTarget(target)}
+                          type="button"
+                        >
+                          <span
+                            className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
+                              isSelected
+                                ? "border-[#0F6BFF] bg-[#0F6BFF]"
+                                : "border-[#94A3B8] bg-white"
+                            }`}
+                          >
+                            {isSelected ? (
+                              <span className="h-2 w-2 rounded-full bg-white" />
+                            ) : null}
+                          </span>
+                          <span className="min-w-0">
+                            <span className="block text-sm font-black text-[#0F172A]">
+                              {target.label}
+                            </span>
+                            <span className="mt-1 block text-xs font-semibold leading-5 text-[#64748B]">
+                              {target.detail} · {formatServiceRequestMoney(target.remaining)} available
+                            </span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {manualPaymentDraft.paymentMethod !== "card" ? (
+                <div className="rounded-xl border border-[#E5E7EB] bg-white sm:order-6 sm:border-0">
+                  <button
+                    className="flex w-full items-center justify-between px-3 py-3 text-left text-sm font-black text-[#0F172A] sm:hidden"
+                    onClick={() =>
+                      setIsManualPaymentDetailsOpen((current) => !current)
+                    }
+                    type="button"
+                  >
+                    Additional Details
+                    <span className="text-lg text-[#64748B]">
+                      {isManualPaymentDetailsOpen ? "−" : "+"}
+                    </span>
+                  </button>
+                  <div
+                    className={`grid gap-4 px-3 pb-3 sm:grid sm:px-0 sm:pb-0 ${
+                      isManualPaymentDetailsOpen ? "grid" : "hidden"
+                    }`}
+                  >
+                    <div>
+                      <label
+                        className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]"
+                        htmlFor="manual-payment-reference"
+                      >
+                        Reference
+                      </label>
+                      <input
+                        className="mt-2 w-full rounded-xl border border-[#D7DEE8] bg-white px-3 py-3 text-sm font-bold text-[#0F172A] outline-none transition focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
+                        disabled={manualPaymentState.status === "saving"}
+                        id="manual-payment-reference"
+                        onChange={(event) => {
+                          const nextReferenceCode = event.currentTarget.value;
+                          setManualPaymentDraft((current) =>
+                            current
+                              ? { ...current, referenceCode: nextReferenceCode }
+                              : current,
+                          );
+                          setManualPaymentState({ status: "idle", message: null });
+                        }}
+                        placeholder={
+                          manualPaymentDraft.paymentMethod === "check"
+                            ? "Check number"
+                            : "Confirmation code"
+                        }
+                        value={manualPaymentDraft.referenceCode}
+                      />
+                    </div>
+
+                    <div>
+                      <label
+                        className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]"
+                        htmlFor="manual-payment-note"
+                      >
+                        Internal note
+                      </label>
+                      <textarea
+                        className="mt-2 min-h-24 w-full rounded-xl border border-[#D7DEE8] bg-white px-3 py-3 text-sm font-semibold leading-6 text-[#0F172A] outline-none transition focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
+                        disabled={manualPaymentState.status === "saving"}
+                        id="manual-payment-note"
+                        onChange={(event) => {
+                          const nextNote = event.currentTarget.value;
+                          setManualPaymentDraft((current) =>
+                            current ? { ...current, note: nextNote } : current,
+                          );
+                          setManualPaymentState({ status: "idle", message: null });
+                        }}
+                        placeholder="Optional note for the payment record"
+                        value={manualPaymentDraft.note}
+                      />
+                    </div>
+                  </div>
+                </div>
+                ) : null}
+
+                </div>
+                {manualPaymentState.message ? (
+                  <p
+                    className={`rounded-xl border px-3 py-2 text-sm font-bold sm:order-7 ${
+                      manualPaymentState.status === "error"
+                        ? "border-red-200 bg-red-50 text-red-700"
+                        : manualPaymentState.status === "success"
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                          : "border-blue-200 bg-blue-50 text-[#0F6BFF]"
+                    }`}
+                  >
+                    {manualPaymentState.message}
+                  </p>
+                ) : null}
+              </div>
+                <div className="grid shrink-0 grid-cols-1 gap-2 bg-[#F5F5F7] px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 sm:grid-cols-2 sm:bg-white sm:px-6 sm:pb-6">
+                  <button
+                    className="hidden rounded-xl border border-[#E5E7EB] px-4 py-3 text-sm font-black text-[#0F172A] disabled:cursor-not-allowed disabled:opacity-50 sm:block"
+                    disabled={manualPaymentState.status === "saving"}
+                    onClick={() => {
+                      setIsManualPaymentOpen(false);
+                      setManualPaymentState({ status: "idle", message: null });
+                    }}
+                    type="button"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="hidden rounded-xl bg-[#0F6BFF] px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50 sm:block"
+                    disabled={manualPaymentState.status === "saving"}
+                    data-testid="collect-payment-submit"
+                    onClick={() => void saveManualPayment()}
+                    type="button"
+                  >
+                    {manualPaymentState.status === "saving"
+                      ? manualPaymentDraft.paymentMethod === "card"
+                        ? "Opening..."
+                        : "Saving..."
+                      : manualPaymentDraft.paymentMethod === "card"
+                        ? "Continue to payment"
+                        : "Save Payment"}
+                  </button>
+                  {mobilePaymentStep === 1 ? (
+                    <button data-testid="mobile-payment-continue" type="button" disabled={!selectedManualPaymentTarget || manualPaymentState.status === "saving"} onClick={() => setMobilePaymentStep(2)} className="min-h-12 rounded-xl bg-[#0F6BFF] px-4 py-3 text-sm font-bold text-white disabled:opacity-50 sm:hidden">Continue to payment</button>
+                  ) : (
+                    <div className="space-y-3 sm:hidden">
+                      <div data-testid="mobile-payment-final-amount" className="flex flex-wrap items-center justify-between gap-2 text-sm text-[#737B8E]">
+                        <span>You will pay</span>
+                        <span className="break-all text-lg font-semibold text-black">{isMobilePaymentAmountValid && mobilePaymentAmountCents !== null ? formatServiceRequestMoney(centsToMoney(mobilePaymentAmountCents)) : "Enter a valid amount"}</span>
+                      </div>
+                      <button data-testid="mobile-payment-submit" type="button" disabled={!isMobilePaymentAmountValid || manualPaymentState.status === "saving" || manualPaymentState.status === "success"} onClick={() => void submitMobilePayment()} className="min-h-12 w-full rounded-xl bg-[#0F6BFF] px-4 py-3 text-sm font-bold text-white disabled:opacity-50">
+                        {manualPaymentState.status === "saving" ? "Processing..." : manualPaymentDraft.paymentMethod === "card" ? "Collect payment" : "Record payment"}
+                      </button>
+                    </div>
+                  )}
+                  {manualPaymentDraft.paymentMethod === "card" ? <p className="text-center text-xs text-[#737B8E] sm:hidden">Secure and encrypted</p> : null}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )) : null}
 
       {jobDeleteState.status !== "idle" ? (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#0F172A]/55 px-3 py-4 backdrop-blur-sm sm:items-center">
@@ -18918,7 +20687,7 @@ export function ServiceRequestDetail({
         </div>
       ) : null}
 
-      <Link className="mt-6 inline-flex text-sm font-bold text-[#0F6BFF]" href={returnTo}>
+      <Link className={`mt-6 text-sm font-bold text-[#0F6BFF] ${!useClassicMobileFinance && activeJobTab === "estimate" && financeEstimateMode === "home" && !viewingInvoice && (mobileFinanceSection === "estimates" || mobileFinanceSection === "invoices" || mobileFinanceSection === "payments") ? "hidden lg:inline-flex" : "inline-flex"}`} href={returnTo}>
         Back to jobs
       </Link>
     </article>

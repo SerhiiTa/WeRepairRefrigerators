@@ -1,0 +1,17 @@
+{
+  "zelle.png": "https://www.zelle.com/sites/default/files/2026-02/Zelle-logo-no-tagline-RGB-purple.png",
+  "venmo.png": {
+    "page": "https://venmo.com/about/brand",
+    "archive": "https://assets.ctfassets.net/gkyt4bl1j2fs/4ISc4O1Qcp1WJOrLiFci9O/f4e6c7495cd1018024c62cc804e6aca1/Venmo_Logos_and_Guidelines.zip",
+    "file": "Venmo Logos and Guidelines/Venmo_Logo_Blue.png"
+  },
+  "cash-app.svg": {
+    "page": "https://developers.cash.app/cash-app-pay-partner-api/guides/resources/cash-app-pay-assets",
+    "url": "https://static.afterpaycdn.com/en-US/integration/logo/icon/color.svg"
+  },
+  "card.svg": "https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/credit-card.svg",
+  "cash.svg": "https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/banknote.svg",
+  "check.svg": "https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/file-pen-line.svg",
+  "link.svg": "https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/link.svg",
+  "LUCIDE-LICENSE.txt": "https://raw.githubusercontent.com/lucide-icons/lucide/main/LICENSE"
+}

@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { SwipeableEstimateItem } from "./SwipeableEstimateItem";
+import { estimateItemSignature, resolveRevisedEstimateItem, type EstimateItemAction } from "./estimate-item-actions";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent, ReactNode } from "react";
@@ -112,10 +114,13 @@ type ManualEstimateEditorProps = {
     id: string;
     estimateNumber: string;
     openAddItemType?: ManualEstimateLineType;
+    itemAction?: EstimateItemAction;
   }) =>
     | Promise<{ ok: true } | { ok: false; message: string }>
     | { ok: true }
     | { ok: false; message: string };
+  autoOpenItemAction?: EstimateItemAction | null;
+  onAutoOpenItemActionConsumed?: () => void;
   autoOpenAddItemType?: ManualEstimateLineType | null;
   onAutoOpenAddItemConsumed?: () => void;
   onDeleteEstimate?: (estimate: {
@@ -133,6 +138,10 @@ type ManualEstimateEditorProps = {
   onCollectPayment?: (estimate: DashboardServiceRequestEstimate) => void;
   customerHref?: string | null;
   linkedInvoiceNumber?: string | null;
+  useClassicMobileFinance?: boolean;
+  onOpenLinkedInvoice?: () => void;
+  hasDirectEstimatePayments?: boolean;
+  directEstimateNetPaid?: number;
   invoiceCoverageSummary?: {
     status: "fully_paid" | "partially_paid";
     invoiceNumber: string;
@@ -680,6 +689,8 @@ export function ManualEstimateEditor({
   onApproveForCustomer,
   onSendEstimate,
   onReviseEstimate,
+  autoOpenItemAction,
+  onAutoOpenItemActionConsumed,
   autoOpenAddItemType,
   onAutoOpenAddItemConsumed,
   onDeleteEstimate,
@@ -688,8 +699,12 @@ export function ManualEstimateEditor({
   onCollectPayment,
   customerHref,
   linkedInvoiceNumber,
+  useClassicMobileFinance = false,
+  onOpenLinkedInvoice,
+  hasDirectEstimatePayments = false,
   invoiceCoverageSummary = null,
   depositPaid = 0,
+  directEstimateNetPaid = depositPaid,
   isCreatingInvoice = false,
   sendingEstimateId,
   onOverlayStateChange,
@@ -736,6 +751,11 @@ export function ManualEstimateEditor({
   );
   const [itemDraft, setItemDraft] = useState<ItemDraftState>(null);
   const [openLineMenuId, setOpenLineMenuId] = useState<string | null>(null);
+  const [swipedLineId, setSwipedLineId] = useState<string | null>(null);
+  const [deleteLineId, setDeleteLineId] = useState<string | null>(null);
+  const [isItemMutating, setIsItemMutating] = useState(false);
+  const itemMutationRef = useRef(false);
+  const consumedItemActionRef = useRef<EstimateItemAction | null>(null);
   const [saveState, setSaveState] = useState<SaveState>({
     status: "idle",
     message: null,
@@ -778,6 +798,7 @@ export function ManualEstimateEditor({
   });
   const hasOpenEstimateOverlay =
     Boolean(itemDraft) ||
+    deleteLineId !== null ||
     isSendEstimateOpen ||
     isApproveConfirmOpen ||
     isUndoApprovalConfirmOpen ||
@@ -1210,6 +1231,8 @@ export function ManualEstimateEditor({
     if (
       !initialEstimate ||
       itemDraft ||
+      deleteLineId !== null ||
+      itemMutationRef.current ||
       activeSavePromiseRef.current ||
       hasUnsavedChanges
     ) {
@@ -1239,6 +1262,7 @@ export function ManualEstimateEditor({
     hasUnsavedChanges,
     initialEstimate,
     itemDraft,
+    deleteLineId,
   ]);
 
   function resetFeedback() {
@@ -1347,17 +1371,57 @@ export function ManualEstimateEditor({
     resetFeedback();
   }
 
+  async function reviseForItem(action: EstimateItemAction) {
+    if (itemMutationRef.current || saveState.status === "saving" || !canReviseEstimate ||
+        estimateStatus !== "approved" || !savedEstimateId || !savedEstimateNumber || !onReviseEstimate) return;
+    itemMutationRef.current = true;
+    setIsItemMutating(true);
+    setOpenLineMenuId(null);
+    setSwipedLineId(null);
+    setItemDraft(null);
+    setDeleteLineId(null);
+    setPendingAction("revise");
+    setSaveState({ status: "saving", message: null });
+    try {
+      const result = await onReviseEstimate({ id: savedEstimateId, estimateNumber: savedEstimateNumber, itemAction: action });
+      if (!result.ok) setSaveState({ status: "error", message: result.message });
+      else setSaveState({ status: "success", message: "Draft revision opened. Review and save your changes before approving again." });
+    } catch {
+      setSaveState({ status: "error", message: "Estimate could not be reopened for revision. No item was changed." });
+    } finally {
+      itemMutationRef.current = false;
+      setIsItemMutating(false);
+      setPendingAction(null);
+    }
+  }
+
+  function itemAction(lineId: string, type: EstimateItemAction["type"]): EstimateItemAction | null {
+    const lineIndex = lines.findIndex((line) => line.id === lineId);
+    if (lineIndex < 0) {
+      setSaveState({ status: "error", message: "This item is no longer available. Reopen the Estimate and try again." });
+      return null;
+    }
+    return { type, lineIndex, signatures: lines.map(estimateItemSignature) };
+  }
+
   function openEditItem(line: ManualEstimateLine) {
+    if (itemMutationRef.current || saveState.status === "saving") return;
+    const action = itemAction(line.id, "edit");
+    if (!action) return;
     if (!canEditFinancialFields) {
+      void reviseForItem(action);
       return;
     }
-
     setOpenLineMenuId(null);
-    setItemDraft({
-      mode: "edit",
-      lineId: line.id,
-      line: { ...line },
-    });
+    setSwipedLineId(null);
+    setItemDraft({ mode: "edit", lineId: line.id, line: { ...line } });
+  }
+
+  function requestDeleteLine(lineId: string) {
+    if (itemMutationRef.current || saveState.status === "saving" || !canStartAddItem || !itemAction(lineId, "delete")) return;
+    setOpenLineMenuId(null);
+    setSwipedLineId(null);
+    setDeleteLineId(lineId);
   }
 
   async function saveItemDraft() {
@@ -1388,16 +1452,34 @@ export function ManualEstimateEditor({
   }
 
   async function deleteLine(lineId: string) {
-    if (!canEditFinancialFields) {
+    if (itemMutationRef.current || activeSavePromiseRef.current || saveState.status === "saving") return;
+    const action = itemAction(lineId, "delete");
+    if (!action) return;
+    if (lines.length <= 1) {
+      setSaveState({ status: "error", message: "An Estimate must contain at least one item. Add another item before deleting this one." });
       return;
     }
-
+    if (!canEditFinancialFields) {
+      await reviseForItem(action);
+      return;
+    }
+    itemMutationRef.current = true;
+    setIsItemMutating(true);
     const nextLines = lines.filter((line) => line.id !== lineId);
-
-    setLines(nextLines);
-    setOpenLineMenuId(null);
-    resetFeedback();
-    await saveDraft({ source: "manual", linesOverride: nextLines });
+    try {
+      const saved = await saveDraft({ source: "manual", linesOverride: nextLines });
+      if (!saved) return;
+      setLines(nextLines);
+      setItemDraft(null);
+      setDeleteLineId(null);
+      setOpenLineMenuId(null);
+      setSwipedLineId(null);
+    } catch {
+      setSaveState({ status: "error", message: "Item could not be deleted. Reopen the Estimate to verify its latest state before retrying." });
+    } finally {
+      itemMutationRef.current = false;
+      setIsItemMutating(false);
+    }
   }
 
   function copyLine(line: ManualEstimateLine) {
@@ -1686,6 +1768,28 @@ export function ManualEstimateEditor({
     return result;
   }
 
+  useEffect(() => {
+    if (!autoOpenItemAction || !canEditFinancialFields || consumedItemActionRef.current === autoOpenItemAction) return;
+    const timer = window.setTimeout(() => {
+      consumedItemActionRef.current = autoOpenItemAction;
+      onAutoOpenItemActionConsumed?.();
+      const line = resolveRevisedEstimateItem(lines, autoOpenItemAction);
+      if (!line) {
+        setSaveState({ status: "error", message: "Draft items have changed. Select the item again; no item was changed." });
+        return;
+      }
+      setActiveWorkspaceTab("items");
+      if (autoOpenItemAction.type === "edit") openEditItem(line);
+      else {
+        setDeleteLineId(line.id);
+        void deleteLine(line.id);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+    // Continuation is consumed once after the existing revision workflow provides editable Draft items.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOpenItemAction, canEditFinancialFields, lines, onAutoOpenItemActionConsumed]);
+
   async function flushPendingChangesBeforeNavigation() {
     if (activeSavePromiseRef.current) {
       const activePromise = activeSavePromiseRef.current;
@@ -1736,6 +1840,7 @@ export function ManualEstimateEditor({
   useEffect(() => {
     if (
       !canEditFinancialFields ||
+      deleteLineId !== null || isItemMutating ||
       !hasUnsavedChanges ||
       saveErrors.length > 0 ||
       saveState.status === "saving"
@@ -1752,6 +1857,8 @@ export function ManualEstimateEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     canEditFinancialFields,
+    deleteLineId,
+    isItemMutating,
     editableSignature,
     hasUnsavedChanges,
     saveErrors.length,
@@ -2659,7 +2766,7 @@ export function ManualEstimateEditor({
                           </button>
                           <button
                             className="block w-full px-3 py-2 text-left text-red-700 hover:bg-red-50"
-                            onClick={() => void deleteLine(line.id)}
+                            onClick={() => requestDeleteLine(line.id)}
                             type="button"
                           >
                             Delete
@@ -2680,16 +2787,43 @@ export function ManualEstimateEditor({
                 const errors = itemErrors.get(line.id) ?? [];
 
                 return (
-                  <article
-                    className="relative bg-white px-4 py-3"
-                    key={line.id}
-                  >
+                  <SwipeableEstimateItem key={line.id} open={swipedLineId === line.id}
+                    disabled={!canStartAddItem || isItemMutating || saveState.status === "saving"}
+                    onOpenChange={(open) => { setSwipedLineId(open ? line.id : null); setOpenLineMenuId(null); }}
+                    onDelete={() => requestDeleteLine(line.id)}
+                    menu={canStartAddItem && openLineMenuId === line.id ? (
+                      <div className="absolute right-2 top-16 z-20 w-32 overflow-hidden rounded-xl border border-[#E5E7EB] bg-white py-1 text-sm font-bold shadow-lg">
+                        <button
+                          className="block min-h-11 w-full px-3 py-2 text-left text-[#0F172A] hover:bg-[#F8FAFC]"
+                          onClick={() => openEditItem(line)}
+                          type="button"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="block min-h-11 w-full px-3 py-2 text-left text-[#0F172A] hover:bg-[#F8FAFC]"
+                          disabled={!canEditFinancialFields || isItemMutating}
+                          onClick={() => copyLine(line)}
+                          type="button"
+                        >
+                          Copy
+                        </button>
+                        <button
+                          className="block min-h-11 w-full px-3 py-2 text-left text-red-700 hover:bg-red-50"
+                          onClick={() => requestDeleteLine(line.id)}
+                          type="button"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    ) : null}>
+                  <article className="relative bg-white px-4 py-3">
                     <button
-                      className={`block min-h-11 w-full text-left ${
-                        canEditFinancialFields ? "" : "cursor-default"
+                      className={`block min-h-11 w-full pr-10 text-left ${
+                        canStartAddItem ? "" : "cursor-default"
                       }`}
                       onClick={() => {
-                        if (canEditFinancialFields) {
+                        if (canStartAddItem) {
                           openEditItem(line);
                         }
                       }}
@@ -2714,12 +2848,15 @@ export function ManualEstimateEditor({
                         </p>
                       </div>
                     </button>
-                    {canEditFinancialFields ? (
+                    {canStartAddItem ? (
                     <button
                       aria-label={`Actions for ${line.name || "item"}`}
-                      className="absolute right-2 top-9 flex h-10 w-10 items-center justify-center rounded-lg text-[#64748B]"
+                      data-item-menu
+                      disabled={isItemMutating || saveState.status === "saving"}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 flex h-11 w-11 items-center justify-center rounded-lg text-[#64748B]"
                       onClick={(event) => {
                         event.stopPropagation();
+                        setSwipedLineId(null);
                         setOpenLineMenuId((current) =>
                           current === line.id ? null : line.id,
                         );
@@ -2729,37 +2866,13 @@ export function ManualEstimateEditor({
                       <EstimateIcon className="h-4 w-4" name="more" />
                     </button>
                     ) : null}
-                    {canEditFinancialFields && openLineMenuId === line.id ? (
-                      <div className="absolute right-2 top-16 z-20 w-32 overflow-hidden rounded-xl border border-[#E5E7EB] bg-white py-1 text-sm font-bold shadow-lg">
-                        <button
-                          className="block w-full px-3 py-2 text-left text-[#0F172A] hover:bg-[#F8FAFC]"
-                          onClick={() => openEditItem(line)}
-                          type="button"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          className="block w-full px-3 py-2 text-left text-[#0F172A] hover:bg-[#F8FAFC]"
-                          onClick={() => copyLine(line)}
-                          type="button"
-                        >
-                          Copy
-                        </button>
-                        <button
-                          className="block w-full px-3 py-2 text-left text-red-700 hover:bg-red-50"
-                          onClick={() => void deleteLine(line.id)}
-                          type="button"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    ) : null}
                     {validationAttempted && errors.length > 0 ? (
                       <p className="mt-2 text-xs font-bold text-amber-800">
                         {errors.join(" · ")}
                       </p>
                     ) : null}
                   </article>
+                  </SwipeableEstimateItem>
                 );
               })}
             </div>
@@ -2791,9 +2904,30 @@ export function ManualEstimateEditor({
               </dd>
             </div>
           </dl>
+          <div data-testid="mobile-estimate-payment-summary" className={useClassicMobileFinance ? "hidden" : "lg:hidden"}>
+            {linkedInvoiceNumber ? (
+              <button
+                type="button"
+                onClick={onOpenLinkedInvoice}
+                disabled={!onOpenLinkedInvoice}
+                className="mt-3 flex min-h-11 w-full items-center justify-between gap-3 border-t border-[#E5E7EB] py-3 text-left text-sm"
+              >
+                <span className="min-w-0">
+                  <span className="block text-[#64748B]">Linked to Invoice</span>
+                  <span className="mt-1 block break-words font-semibold text-[#0F6BFF]">{linkedInvoiceNumber}</span>
+                </span>
+                <span aria-hidden="true" className="shrink-0 text-xl text-[#64748B]">›</span>
+              </button>
+            ) : directEstimateNetPaid > 0 || hasDirectEstimatePayments ? (
+              <dl className="mt-3 grid grid-cols-2 gap-3 border-t border-[#E5E7EB] pt-3 text-sm">
+                <div className="min-w-0"><dt className="text-[#64748B]">Direct Net Paid</dt><dd className="mt-1 break-words font-semibold">{formatServiceRequestMoney(directEstimateNetPaid)}</dd></div>
+                <div className="min-w-0"><dt className="text-[#64748B]">Remaining</dt><dd className="mt-1 break-words font-semibold">{formatServiceRequestMoney(remainingEstimateBalance)}</dd></div>
+              </dl>
+            ) : null}
+          </div>
           {estimateStatus === "approved" ? (
             <div
-              className={`mt-4 grid gap-3 rounded-2xl border p-4 sm:grid-cols-3 ${
+              className={`mt-4 ${useClassicMobileFinance ? "grid" : "hidden lg:grid"} gap-3 rounded-2xl border p-4 sm:grid-cols-3 ${
                 isFullyCoveredByInvoice
                   ? "border-emerald-200 bg-emerald-50"
                   : "border-blue-100 bg-blue-50"
@@ -3102,7 +3236,26 @@ export function ManualEstimateEditor({
               setItemDraft((current) => (current ? { ...current, line } : null))
             }
             onSave={saveItemDraft}
+            onDelete={itemDraft.mode === "edit" && itemDraft.lineId ? () => requestDeleteLine(itemDraft.lineId!) : undefined}
+            busy={isItemMutating || saveState.status === "saving"}
           />
+        </EstimateWorkspacePortal>
+      ) : null}
+
+      {deleteLineId !== null ? (
+        <EstimateWorkspacePortal>
+          <div className="fixed inset-0 z-[140] flex items-center justify-center bg-[#0F172A]/55 px-4">
+            <div role="alertdialog" aria-modal="true" aria-labelledby="delete-item-title" className="w-full max-w-sm rounded-2xl bg-white p-5">
+              <h3 id="delete-item-title" className="text-lg font-bold">Delete Item?</h3>
+              <p className="mt-2 break-words text-sm text-[#64748B]">{lines.find((line) => line.id === deleteLineId)?.name ?? "This item"}</p>
+              {estimateStatus === "approved" ? <p className="mt-2 text-sm text-[#64748B]">A Draft revision will be opened before deleting this item. Approve it again when ready.</p> : null}
+              {saveState.status === "error" ? <p role="alert" className="mt-2 text-sm text-red-700">{saveState.message}</p> : null}
+              <div className="mt-4 flex gap-2">
+                <button type="button" disabled={isItemMutating} onClick={() => setDeleteLineId(null)} className="min-h-11 flex-1 rounded-xl border border-[#E5E7EB] px-3">Cancel</button>
+                <button type="button" disabled={isItemMutating || saveState.status === "saving"} onClick={() => void deleteLine(deleteLineId)} className="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-red-600 px-3 font-semibold text-white disabled:opacity-50"><EstimateIcon name="trash" className="h-4 w-4" />{isItemMutating ? "Deleting..." : "Delete Item"}</button>
+              </div>
+            </div>
+          </div>
         </EstimateWorkspacePortal>
       ) : null}
 
@@ -3436,11 +3589,15 @@ function ManualEstimateItemSheet({
   onCancel,
   onChange,
   onSave,
+  onDelete,
+  busy = false,
 }: {
   draft: NonNullable<ItemDraftState>;
   onCancel: () => void;
   onChange: (line: ManualEstimateLine) => void;
   onSave: () => void;
+  onDelete?: () => void;
+  busy?: boolean;
 }) {
   const line = draft.line;
   const hasName = line.name.trim().length > 0;
@@ -3712,13 +3869,14 @@ function ManualEstimateItemSheet({
             </button>
             <button
               className="rounded-xl bg-[#0F6BFF] px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-45"
-              disabled={!hasName || !hasValidQuantity}
+              disabled={busy || !hasName || !hasValidQuantity}
               onClick={onSave}
               type="button"
             >
               Save Item
             </button>
           </div>
+          {onDelete ? <div className="border-t border-[#E5E7EB] pt-3 lg:hidden"><button type="button" disabled={busy} onClick={onDelete} className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl text-sm font-semibold text-red-600 disabled:opacity-50"><EstimateIcon name="trash" className="h-5 w-5" />Delete Item</button></div> : null}
         </div>
       </div>
     </div>

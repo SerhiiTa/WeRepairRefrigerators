@@ -95,7 +95,7 @@ test("technician card collection supports bounded custom deposits", () => {
   assert.match(serviceRequestDetail, /customDepositPercent/);
   assert.match(serviceRequestDetail, /requestedAmountCents/);
   assert.match(serviceRequestDetail, /window\.location\.assign\(payload\.checkoutUrl\)/);
-  assert.match(serviceRequestDetail, /Card details are entered in Stripe secure checkout/);
+  assert.match(serviceRequestDetail, /Card details are entered in secure checkout/);
   assert.match(serviceRequestDetail, /Never silently substitute a different amount|Custom deposit exceeds the current collectible balance|Selected/);
   assert.doesNotMatch(
     serviceRequestDetail,
