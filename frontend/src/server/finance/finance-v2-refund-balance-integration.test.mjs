@@ -35,6 +35,31 @@ function netPaid({ paid, refunds }) {
   );
 }
 
+function reconcileJobFinance({ approved, payments, refunds }) {
+  const toCents = (amount) => Math.round(amount * 100);
+  const toMoney = (cents) => cents / 100;
+  const grossPaid = payments
+    .filter(
+      (payment) =>
+        payment.voidedAt === null &&
+        ["paid", "succeeded", "imported", "partially_refunded", "refunded"].includes(
+          payment.status,
+        ),
+    )
+    .reduce((total, payment) => total + toCents(payment.amount), 0);
+  const succeededRefunds = refunds
+    .filter((refund) => refund.status === "succeeded")
+    .reduce((total, refund) => total + toCents(refund.amount), 0);
+  const net = Math.max(0, grossPaid - succeededRefunds);
+
+  return {
+    grossPaid: toMoney(grossPaid),
+    succeededRefunds: toMoney(succeededRefunds),
+    net: toMoney(net),
+    balanceDue: toMoney(Math.max(0, toCents(approved) - net)),
+  };
+}
+
 test("0144 preserves existing paid-credit entry point while delegating to refund-adjusted net paid", () => {
   assert.match(migration0144, /create or replace function public\.active_service_request_paid_credit/);
   assert.match(migration0144, /public\.active_service_request_net_paid_credit\(p_service_request_id\)/);
@@ -97,11 +122,42 @@ test("Dashboard finance presentation reads refund history and uses net paid for 
   assert.match(serviceRequestDetail, /refund_status/);
   assert.match(serviceRequestDetail, /succeededRefunds/);
   assert.match(serviceRequestDetail, /netPaidCreditCents/);
-  assert.match(serviceRequestDetail, /validPaidCreditCents - succeededRefundCents/);
+  assert.match(serviceRequestDetail, /grossPaidCreditCents - succeededRefundCents/);
+  assert.match(
+    serviceRequestDetail,
+    /\["paid", "succeeded", "imported", "partially_refunded", "refunded"\]/,
+  );
   assert.match(serviceRequestDetail, /Refund History/);
   assert.match(serviceRequestDetail, /Original Paid/);
   assert.match(serviceRequestDetail, /Net Paid/);
   assert.match(serviceRequestDetail, /invoiceRefunds/);
+});
+
+test("Job #1034 refund reconciliation keeps refunded originals in gross and subtracts refunds once", () => {
+  const result = reconcileJobFinance({
+    approved: 4507.25,
+    payments: [
+      { amount: 1000, status: "refunded", voidedAt: null },
+      { amount: 1193.96, status: "refunded", voidedAt: null },
+      { amount: 12.99, status: "refunded", voidedAt: null },
+      { amount: 1293.01, status: "succeeded", voidedAt: null },
+      { amount: 1060.54, status: "refunded", voidedAt: null },
+    ],
+    refunds: [
+      { amount: 1000, status: "succeeded" },
+      { amount: 1193.96, status: "succeeded" },
+      { amount: 12.99, status: "succeeded" },
+      { amount: 1060.54, status: "succeeded" },
+      { amount: 500, status: "pending" },
+      { amount: 500, status: "failed" },
+      { amount: 500, status: "canceled" },
+    ],
+  });
+
+  assert.equal(result.grossPaid, 4560.5);
+  assert.equal(result.succeededRefunds, 3267.49);
+  assert.equal(result.net, 1293.01);
+  assert.equal(result.balanceDue, 3214.24);
 });
 
 test("Payment History exposes a guarded refund modal for eligible confirmed payments", () => {

@@ -62,7 +62,7 @@ test("manual collection UI uses current Job balance and combined Invoice provena
   assert.match(serviceRequestDetail, /activeInvoicesByEstimateId\.set\(estimateId, invoice\)/);
   assert.match(serviceRequestDetail, /const financeBalanceDueCents = Math\.max\(/);
   assert.match(serviceRequestDetail, /const remainingCents = Math\.min\(totalCents, financeBalanceDueCents\)/);
-  assert.match(serviceRequestDetail, /paid: centsToMoney\(validPaidCreditCents\)/);
+  assert.match(serviceRequestDetail, /paid: centsToMoney\(netPaidCreditCents\)/);
   assert.match(serviceRequestDetail, /remaining: centsToMoney\(financeBalanceDueCents\)/);
   assert.match(serviceRequestDetail, /const financeOverpaymentTotal = Math\.max\(/);
   assert.match(serviceRequestDetail, /label: "Overpayment"/);
@@ -153,7 +153,7 @@ test("current Invoice card collection offers Pay in Full and Custom Deposit", ()
 test("current Invoice payment history shows valid Job-level credited payments", () => {
   assert.match(
     serviceRequestDetail,
-    /invoice\.invoiceLifecycleStatus === "current"[\s\S]*validPaidPaymentIds\.has\(entry\.payment\.id\)/,
+    /isCollectibleInvoice\(invoice\)\s*\? allocation\.allocationStatus === "active"\s*: allocation\.invoiceId === invoice\.id[\s\S]*grossPaidPaymentIds\.has\(allocation\.paymentId\)/,
   );
   assert.match(serviceRequestDetail, /Credited from \{entry\.invoiceTarget\.invoiceNumber\}/);
 });

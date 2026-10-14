@@ -137,6 +137,7 @@ type ManualEstimateEditorProps = {
     status: "fully_paid" | "partially_paid";
     invoiceNumber: string;
     directPaid: number;
+    directOriginalPaid: number;
     currentBalanceDue: number;
   } | null;
   depositPaid?: number;
@@ -2809,8 +2810,8 @@ export function ManualEstimateEditor({
               <div>
                 <p className="text-xs font-black uppercase tracking-[0.12em] text-[#64748B]">
                   {invoiceCoverageSummary?.status === "partially_paid"
-                    ? "Direct Estimate Payments"
-                    : "Paid"}
+                    ? "Direct Net Paid"
+                    : isFullyCoveredByInvoice ? "Covered by Invoice" : "Net Paid"}
                 </p>
                 <p className="mt-1 text-lg font-black text-emerald-700">
                   {formatServiceRequestMoney(
@@ -2834,6 +2835,11 @@ export function ManualEstimateEditor({
                   )}
                 </p>
               </div>
+              {invoiceCoverageSummary ? (
+                <p className="sm:col-span-3 text-sm font-semibold text-[#64748B]">
+                  Direct Estimate Payments: {formatServiceRequestMoney(invoiceCoverageSummary.directOriginalPaid)} · Direct Net Paid: {formatServiceRequestMoney(invoiceCoverageSummary.directPaid)}
+                </p>
+              ) : null}
               {invoiceCoverageSummary?.status === "fully_paid" ? (
                 <div className="sm:col-span-3 rounded-xl border border-emerald-200 bg-white px-3 py-3 text-sm font-bold text-emerald-800">
                   <p className="flex items-center gap-2 font-black">
@@ -2849,7 +2855,7 @@ export function ManualEstimateEditor({
                     {invoiceCoverageSummary.invoiceNumber} · Paid in Full
                   </p>
                   <p className="mt-2 text-[#334155]">
-                    Direct Estimate deposit:{" "}
+                    Direct Net Paid:{" "}
                     {formatServiceRequestMoney(invoiceCoverageSummary.directPaid)}.
                     Remaining obligation settled through the consolidated Invoice.
                   </p>

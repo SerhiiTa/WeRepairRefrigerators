@@ -21,6 +21,9 @@ const createEstimateRepair = read(
 const jobInvoiceAuthorizationRepair = read(
   "supabase/migrations/0133_finance_v2_job_invoice_sync_authorization_repair_apply_ready.sql",
 );
+const jobInvoiceUniqueRepair = read(
+  "supabase/migrations/0139_finance_v2_job_invoice_sync_unique_repair_apply_ready.sql",
+);
 const records = read("frontend/src/lib/service-request-records.ts");
 const serviceRequestDetail = read(
   "frontend/src/components/dashboard/ServiceRequestDetail.tsx",
@@ -88,9 +91,9 @@ test("Finance V2 payment display uses job-level valid paid credit for current sc
   assert.match(records, /logicalEstimateId/);
   assert.match(records, /revisionNumber/);
   assert.match(records, /invoiceLifecycleStatus/);
-  assert.match(serviceRequestDetail, /validPaidCreditCents/);
+  assert.match(serviceRequestDetail, /netPaidCreditCents/);
   assert.match(serviceRequestDetail, /financeBalanceDueTotal = Math\.max\(\s*0,\s*financeApprovedTotal - financePaidTotal/s);
-  assert.match(serviceRequestDetail, /invoice\.invoiceLifecycleStatus === "current"[\s\S]*validPaidCreditCents/);
+  assert.match(serviceRequestDetail, /isCollectibleInvoice\(invoice\)\s*\? allocation\.allocationStatus === "active"\s*: allocation\.invoiceId === invoice\.id/);
 });
 
 test("Finance V2 Job summary sums effective current approved Estimates instead of stale Invoice snapshots", () => {
@@ -167,6 +170,28 @@ test("Finance V2 Job Invoice sync uses internal Finance write authorization", ()
     jobInvoiceAuthorizationRepair,
     /grant execute on function public\.sync_job_invoice_from_approved_estimates_rpc\(uuid\) to authenticated/,
   );
+});
+
+test("Finance V2 Job Invoice sync preserves sent history without legacy estimate uniqueness conflicts", () => {
+  const syncRepair = jobInvoiceUniqueRepair.match(
+    /create or replace function public\.sync_job_invoice_from_approved_estimates_rpc[\s\S]*?end;\s*\$\$/i,
+  )?.[0] ?? "";
+
+  assert.match(
+    jobInvoiceUniqueRepair,
+    /drop index if exists public\.service_request_invoices_estimate_unique_idx/,
+  );
+  assert.match(syncRepair, /invoice_lifecycle_status = 'superseded'/);
+  assert.match(syncRepair, /insert into public\.service_request_invoices/);
+  assert.match(
+    syncRepair,
+    /update public\.service_request_invoices invoice[\s\S]*invoice_lifecycle_status = 'superseded'[\s\S]*insert into public\.service_request_invoices/s,
+    "Current historical Invoices must be superseded before inserting a replacement current Invoice.",
+  );
+  assert.match(syncRepair, /replaced_by_invoice_id = target_invoice\.id/);
+  assert.match(syncRepair, /public\.active_service_request_paid_credit\(request_row\.id\)/);
+  assert.doesNotMatch(syncRepair, /delete from public\.service_request_payments/i);
+  assert.doesNotMatch(syncRepair, /delete from public\.service_request_payment_allocations/i);
 });
 
 test("Finance V2 Stage 2 summary exposes sync status, balance and overpayment", () => {

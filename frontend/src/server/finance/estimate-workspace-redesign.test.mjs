@@ -213,8 +213,8 @@ includesAll(detail, [
   "openPaymentWorkflow(target)",
   "depositPaid={",
   "invoiceCoverageSummary={getEstimateInvoiceCoverageSummary(manualEstimate)}",
-  "estimateUsesJobLevelPaidCredit(manualEstimate)",
-  "getEstimateLogicalPaidCreditCents(manualEstimate)",
+  "estimateUsesJobLevelPaidCredit(estimate)",
+  "getEstimatePresentedNetPaidCents(manualEstimate)",
   "const approvedEstimateId = isPersistedEstimateUuid(payload.estimate?.id ?? \"\")",
   "const approvedLogicalEstimateId =",
   "const [loadedEstimates] = await Promise.all([loadEstimates(), loadNotes()]);",
@@ -260,12 +260,12 @@ assert.match(
 );
 assert.match(
   editor,
-  /Paid through Invoice[\s\S]*?Paid in Full[\s\S]*?Direct Estimate deposit:[\s\S]*?Remaining obligation settled through the consolidated Invoice/,
+  /Paid through Invoice[\s\S]*?Paid in Full[\s\S]*?Direct Net Paid:[\s\S]*?Remaining obligation settled through the consolidated Invoice/,
   "Fully paid linked Estimates should explain that the remaining obligation was settled by the consolidated Invoice.",
 );
 assert.match(
   editor,
-  /Direct Estimate Payments[\s\S]*?Direct Unallocated Remainder[\s\S]*?Partially covered by Invoice[\s\S]*?Current Invoice \/ Job Balance Due[\s\S]*?informational only/,
+  /Direct Net Paid[\s\S]*?Direct Unallocated Remainder[\s\S]*?Partially covered by Invoice[\s\S]*?Current Invoice \/ Job Balance Due[\s\S]*?informational only/,
   "Partially paid linked Estimates should keep direct-payment wording and avoid making the remainder separately collectible.",
 );
 assert.match(
@@ -343,14 +343,14 @@ assert.match(
   "Estimate editor overlay state must be wired to the Job workspace.",
 );
 includesAll(detail, [
-  "const getEstimateLogicalPaidCreditCents = (",
+  "const getEstimateLogicalNetPaidCreditCents = (",
   "allocatedInvoice?.logicalEstimateId",
   "allocatedEstimate?.logicalEstimateId",
   "allocationLogicalId === estimateLogicalId",
-  "getEstimateLogicalPaidCreditCents(manualEstimate)",
+  "getEstimatePresentedNetPaidCents(manualEstimate)",
   "const depositAction = paymentTarget?.cardActions.find(",
   "const paymentActionLabel = depositAction ? \"Collect Deposit\" : \"Collect Payment\"",
-  "const paymentSummaryLabel = depositAction ? \"Deposit paid\" : \"Paid\"",
+  "const paymentSummaryLabel = \"Net Paid\"",
   "fixed inset-0 z-[130] flex items-end justify-center overflow-hidden",
   "Invoice Update Required",
   "financeInvoiceSyncRequired",

@@ -534,6 +534,7 @@ type PaymentsState =
       payments: DashboardServiceRequestPayment[];
       allocations: DashboardServiceRequestPaymentAllocation[];
       refunds: DashboardPaymentRefund[];
+      refundAllocations: DashboardRefundAllocation[];
       receipts: DashboardPaymentReceipt[];
       receiptDeliveries: DashboardPaymentReceiptDelivery[];
       error: null;
@@ -543,6 +544,7 @@ type PaymentsState =
       payments: DashboardServiceRequestPayment[];
       allocations: DashboardServiceRequestPaymentAllocation[];
       refunds: DashboardPaymentRefund[];
+      refundAllocations: DashboardRefundAllocation[];
       receipts: DashboardPaymentReceipt[];
       receiptDeliveries: DashboardPaymentReceiptDelivery[];
       error: string | null;
@@ -552,10 +554,19 @@ type PaymentsState =
       payments: DashboardServiceRequestPayment[];
       allocations: DashboardServiceRequestPaymentAllocation[];
       refunds: DashboardPaymentRefund[];
+      refundAllocations: DashboardRefundAllocation[];
       receipts: DashboardPaymentReceipt[];
       receiptDeliveries: DashboardPaymentReceiptDelivery[];
       error: string;
     };
+
+type DashboardRefundAllocation = {
+  refundId: string;
+  paymentId: string;
+  paymentAllocationId: string;
+  amount: number;
+  status: string;
+};
 
 type DashboardPaymentRefund = {
   id: string;
@@ -1917,6 +1928,7 @@ export function ServiceRequestDetail({
     payments: [],
     allocations: [],
     refunds: [],
+    refundAllocations: [],
     receipts: [],
     receiptDeliveries: [],
     error: null,
@@ -3126,6 +3138,7 @@ export function ServiceRequestDetail({
         payments: [],
         allocations: [],
         refunds: [],
+        refundAllocations: [],
         receipts: [],
         receiptDeliveries: [],
         error: "Payments are not available for this workspace.",
@@ -3137,6 +3150,7 @@ export function ServiceRequestDetail({
       paymentsResult,
       allocationsResult,
       refundsResult,
+      refundAllocationsResult,
       receiptsResult,
       deliveriesResult,
     ] =
@@ -3157,6 +3171,10 @@ export function ServiceRequestDetail({
           .eq("service_request_id", requestId)
           .order("created_at", { ascending: false }),
         supabase
+          .from("service_request_payment_refund_allocations" as never)
+          .select("refund_id,payment_id,payment_allocation_id,refund_amount,refund_allocation_status")
+          .eq("service_request_id", requestId),
+        supabase
           .from("service_request_payment_receipts" as never)
           .select("id,payment_id,receipt_number,amount,created_at")
           .eq("service_request_id", requestId)
@@ -3174,6 +3192,7 @@ export function ServiceRequestDetail({
         payments: [],
         allocations: [],
         refunds: [],
+        refundAllocations: [],
         receipts: [],
         receiptDeliveries: [],
         error: paymentsResult.error.message,
@@ -3181,15 +3200,17 @@ export function ServiceRequestDetail({
       return;
     }
 
-    if (allocationsResult.error) {
+    const financialReadError = allocationsResult.error ?? refundsResult.error ?? refundAllocationsResult.error;
+    if (financialReadError) {
       setPaymentsState({
         status: "error",
         payments: [],
         allocations: [],
         refunds: [],
+        refundAllocations: [],
         receipts: [],
         receiptDeliveries: [],
-        error: allocationsResult.error.message,
+        error: financialReadError.message,
       });
       return;
     }
@@ -3228,6 +3249,15 @@ export function ServiceRequestDetail({
               updatedAt: typeof row.updated_at === "string" ? row.updated_at : null,
             }),
           ),
+      refundAllocations: ((refundAllocationsResult.data ?? []) as unknown as Array<Record<string, unknown>>).map(
+        (row) => ({
+          refundId: String(row.refund_id),
+          paymentId: String(row.payment_id),
+          paymentAllocationId: String(row.payment_allocation_id),
+          amount: Number(row.refund_amount),
+          status: String(row.refund_allocation_status),
+        }),
+      ),
       receipts: receiptsResult.error
         ? []
         : ((receiptsResult.data ?? []) as unknown as Array<Record<string, unknown>>).map(
@@ -7633,20 +7663,20 @@ export function ServiceRequestDetail({
   const activePaymentAllocations = paymentsState.allocations.filter(
     (allocation) => allocation.allocationStatus === "active",
   );
-  const validPaidPaymentIds = new Set(
+  const grossPaidPaymentIds = new Set(
     paymentsState.payments
       .filter(
         (payment) =>
           payment.voidedAt === null &&
-          ["paid", "succeeded", "imported", "partially_refunded"].includes(
+          ["paid", "succeeded", "imported", "partially_refunded", "refunded"].includes(
             String(payment.paymentStatus),
           ),
       )
       .map((payment) => payment.id),
   );
-  const validPaidCreditCents = activePaymentAllocations.reduce(
+  const grossPaidCreditCents = activePaymentAllocations.reduce(
     (total, allocation) =>
-      validPaidPaymentIds.has(allocation.paymentId)
+      grossPaidPaymentIds.has(allocation.paymentId)
         ? total + moneyToCents(allocation.allocationAmount)
         : total,
     0,
@@ -7658,9 +7688,38 @@ export function ServiceRequestDetail({
     (total, refund) => total + moneyToCents(refund.amount),
     0,
   );
-  const netPaidCreditCents = Math.max(0, validPaidCreditCents - succeededRefundCents);
-  const estimateAllocatedCents = new Map<string, number>();
-  const invoiceAllocatedCents = new Map<string, number>();
+  const succeededRefundCentsByPaymentId = new Map<string, number>();
+  succeededRefunds.forEach((refund) => {
+    succeededRefundCentsByPaymentId.set(
+      refund.paymentId,
+      (succeededRefundCentsByPaymentId.get(refund.paymentId) ?? 0) +
+        moneyToCents(refund.amount),
+    );
+  });
+  const netPaidCreditCents = Math.max(0, grossPaidCreditCents - succeededRefundCents);
+  const getPaymentSucceededRefundCents = (paymentId: string) =>
+    succeededRefundCentsByPaymentId.get(paymentId) ?? 0;
+  const getPaymentNetCents = (payment: DashboardServiceRequestPayment) =>
+    grossPaidPaymentIds.has(payment.id)
+      ? Math.max(0, moneyToCents(payment.amount) - getPaymentSucceededRefundCents(payment.id))
+      : 0;
+  const succeededRefundsById = new Map(succeededRefunds.map((refund) => [refund.id, refund]));
+  const succeededRefundCentsByAllocationId = new Map<string, number>();
+  paymentsState.refundAllocations.forEach((allocation) => {
+    const refund = succeededRefundsById.get(allocation.refundId);
+    if (allocation.status !== "succeeded" || refund?.paymentId !== allocation.paymentId) return;
+    succeededRefundCentsByAllocationId.set(
+      allocation.paymentAllocationId,
+      (succeededRefundCentsByAllocationId.get(allocation.paymentAllocationId) ?? 0) + moneyToCents(allocation.amount),
+    );
+  });
+  const getAllocationRefundCents = (allocation: DashboardServiceRequestPaymentAllocation) =>
+    succeededRefundCentsByAllocationId.get(allocation.id) ?? 0;
+  const getAllocationNetCents = (allocation: DashboardServiceRequestPaymentAllocation) =>
+    allocation.allocationStatus === "active" && grossPaidPaymentIds.has(allocation.paymentId)
+      ? Math.max(0, moneyToCents(allocation.allocationAmount) - getAllocationRefundCents(allocation))
+      : 0;
+  const estimateNetAllocatedCents = new Map<string, number>();
   const estimatesById = new Map(
     estimatesState.estimates.map((estimate) => [estimate.id, estimate]),
   );
@@ -7669,43 +7728,34 @@ export function ServiceRequestDetail({
   );
 
   activePaymentAllocations.forEach((allocation) => {
-    const cents = moneyToCents(allocation.allocationAmount);
+    const netCents = getAllocationNetCents(allocation);
 
     if (allocation.estimateId) {
-      estimateAllocatedCents.set(
+      estimateNetAllocatedCents.set(
         allocation.estimateId,
-        (estimateAllocatedCents.get(allocation.estimateId) ?? 0) + cents,
-      );
-    }
-
-    if (allocation.invoiceId) {
-      invoiceAllocatedCents.set(
-        allocation.invoiceId,
-        (invoiceAllocatedCents.get(allocation.invoiceId) ?? 0) + cents,
+        (estimateNetAllocatedCents.get(allocation.estimateId) ?? 0) + netCents,
       );
     }
   });
-  const getInvoiceAllocatedCents = (invoice: DashboardServiceRequestInvoice) =>
-    invoice.invoiceLifecycleStatus === "current"
-      ? netPaidCreditCents
-      : invoice.financialSummary
-        ? moneyToCents(invoice.financialSummary.allocatedPaid)
-        : invoiceAllocatedCents.get(invoice.id) ?? 0;
-  const getInvoiceBalanceDue = (invoice: DashboardServiceRequestInvoice) => {
-    if (invoice.invoiceLifecycleStatus === "current") {
-      return centsToMoney(
-        Math.max(0, moneyToCents(invoice.total) - netPaidCreditCents),
-      );
-    }
-
-    if (invoice.financialSummary) {
-      return invoice.financialSummary.balanceDue;
-    }
-
-    return centsToMoney(
-      Math.max(0, moneyToCents(invoice.total) - getInvoiceAllocatedCents(invoice)),
+  const isCollectibleInvoice = (invoice: DashboardServiceRequestInvoice) =>
+    invoice.invoiceLifecycleStatus === "current" && invoice.invoiceStatus !== "void" && invoice.voidedAt === null;
+  // Current consolidated Invoice shows Job credit; history shows only its own allocations.
+  const getInvoicePaymentAllocations = (invoice: DashboardServiceRequestInvoice) =>
+    paymentsState.allocations.filter((allocation) =>
+      isCollectibleInvoice(invoice)
+        ? allocation.allocationStatus === "active"
+        : allocation.invoiceId === invoice.id,
     );
-  };
+  const getInvoiceValidAllocations = (invoice: DashboardServiceRequestInvoice) =>
+    getInvoicePaymentAllocations(invoice).filter((allocation) =>
+      allocation.allocationStatus === "active" && grossPaidPaymentIds.has(allocation.paymentId),
+    );
+  const getInvoiceAllocatedCents = (invoice: DashboardServiceRequestInvoice) =>
+    getInvoiceValidAllocations(invoice).reduce((total, allocation) => total + getAllocationNetCents(allocation), 0);
+  const getInvoiceBalanceDue = (invoice: DashboardServiceRequestInvoice) =>
+    isCollectibleInvoice(invoice)
+      ? centsToMoney(Math.max(0, moneyToCents(invoice.total) - getInvoiceAllocatedCents(invoice)))
+      : 0;
 
   const financeApprovedEstimates = Array.from(
     currentEstimateByLogicalEstimateId.values(),
@@ -7748,7 +7798,7 @@ export function ServiceRequestDetail({
 
     return isCurrentApprovedEstimate;
   };
-  const getEstimateLogicalPaidCreditCents = (
+  const getEstimateLogicalNetPaidCreditCents = (
     estimate: DashboardServiceRequestEstimate | null,
   ) => {
     if (!estimate) {
@@ -7758,7 +7808,7 @@ export function ServiceRequestDetail({
     const estimateLogicalId = estimate.logicalEstimateId ?? estimate.id;
 
     return activePaymentAllocations.reduce((total, allocation) => {
-      if (!validPaidPaymentIds.has(allocation.paymentId)) {
+      if (!grossPaidPaymentIds.has(allocation.paymentId)) {
         return total;
       }
 
@@ -7776,10 +7826,12 @@ export function ServiceRequestDetail({
         null;
 
       return allocationLogicalId === estimateLogicalId
-        ? total + moneyToCents(allocation.allocationAmount)
+        ? total + getAllocationNetCents(allocation)
         : total;
     }, 0);
   };
+  const getEstimatePresentedNetPaidCents = (estimate: DashboardServiceRequestEstimate) =>
+    estimateUsesJobLevelPaidCredit(estimate) ? netPaidCreditCents : getEstimateLogicalNetPaidCreditCents(estimate);
   const getEstimateInvoiceCoverageSummary = (
     estimate: DashboardServiceRequestEstimate | null,
   ) => {
@@ -7793,7 +7845,7 @@ export function ServiceRequestDetail({
       return null;
     }
 
-    const directPaidCents = estimateAllocatedCents.get(estimate.id) ?? 0;
+    const directPaidCents = estimateNetAllocatedCents.get(estimate.id) ?? 0;
     const status =
       financeBalanceDueCents === 0 ? ("fully_paid" as const) : ("partially_paid" as const);
 
@@ -7801,6 +7853,10 @@ export function ServiceRequestDetail({
       status,
       invoiceNumber: linkedInvoice.invoiceNumber,
       directPaid: centsToMoney(directPaidCents),
+      directOriginalPaid: centsToMoney(activePaymentAllocations.reduce(
+        (total, allocation) => allocation.estimateId === estimate.id && grossPaidPaymentIds.has(allocation.paymentId)
+          ? total + moneyToCents(allocation.allocationAmount) : total, 0,
+      )),
       currentBalanceDue: centsToMoney(financeBalanceDueCents),
     };
   };
@@ -7950,7 +8006,7 @@ export function ServiceRequestDetail({
                 )
               : 0;
         const depositDueCents = Math.min(
-          Math.max(0, depositTargetCents - validPaidCreditCents),
+          Math.max(0, depositTargetCents - netPaidCreditCents),
           remainingCents,
         );
 
@@ -8020,7 +8076,7 @@ export function ServiceRequestDetail({
           detail: "Invoice",
           depositSuggestionCents: 0,
           total: centsToMoney(totalCents),
-          paid: centsToMoney(validPaidCreditCents),
+          paid: centsToMoney(netPaidCreditCents),
           remaining: centsToMoney(financeBalanceDueCents),
         };
       }),
@@ -10152,7 +10208,10 @@ export function ServiceRequestDetail({
   function renderEstimateCard(estimate: DashboardServiceRequestEstimate) {
     const linkedInvoice = invoicesByEstimateId.get(estimate.id) ?? null;
     const isImportedWorkiz = estimate.sourceSystem === "workiz";
-    const depositPaid = centsToMoney(estimateAllocatedCents.get(estimate.id) ?? 0);
+    const coverage = getEstimateInvoiceCoverageSummary(estimate);
+    const depositPaid = centsToMoney(
+      getEstimatePresentedNetPaidCents(estimate),
+    );
     const remainingDeposit = Math.max(0, estimate.total - depositPaid);
     const paymentTarget = manualPaymentTargets.find(
       (target) => target.type === "estimate" && target.id === estimate.id,
@@ -10161,7 +10220,7 @@ export function ServiceRequestDetail({
       (action) => action.kind === "deposit" && action.amountCents > 0,
     );
     const paymentActionLabel = depositAction ? "Collect Deposit" : "Collect Payment";
-    const paymentSummaryLabel = depositAction ? "Deposit paid" : "Paid";
+    const paymentSummaryLabel = "Net Paid";
 
     return (
       <article
@@ -10205,6 +10264,12 @@ export function ServiceRequestDetail({
               </>
             ) : null}
           </div>
+          {estimate.estimateStatus === "approved" && coverage ? (
+            <p className="mt-2 text-xs font-bold text-[#64748B]">
+              Direct Estimate Payments {formatServiceRequestMoney(coverage.directOriginalPaid)} · Direct Net Paid {formatServiceRequestMoney(coverage.directPaid)} · Current Invoice / Job Balance Due {formatServiceRequestMoney(coverage.currentBalanceDue)}
+              {coverage.status === "fully_paid" ? " · Paid through Invoice" : " · Partially covered by Invoice"}
+            </p>
+          ) : null}
           {estimate.estimateStatus === "approved" && !linkedInvoice ? (
             <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-xs font-bold text-[#64748B]">
@@ -10298,7 +10363,7 @@ export function ServiceRequestDetail({
               </div>
               <div className="min-w-0 pl-2">
                 <p className="truncate text-[0.65rem] font-bold text-[#657089]">
-                  Balance Due
+                  {isCollectibleInvoice(invoice) ? "Balance Due" : "Not collectible"}
                 </p>
                 <p className="mt-0.5 truncate text-sm font-black text-[#0F6BFF]">
                   {formatServiceRequestMoney(balanceDue)}
@@ -10513,35 +10578,17 @@ export function ServiceRequestDetail({
     const paymentTarget = manualPaymentTargets.find(
       (target) => target.type === "invoice" && target.id === invoice.id,
     );
-    const invoicePayments =
-      invoice.invoiceLifecycleStatus === "current"
-        ? paymentHistory.filter(
-            (entry) =>
-              validPaidPaymentIds.has(entry.payment.id) &&
-              activePaymentAllocations.some(
-                (allocation) => allocation.paymentId === entry.payment.id,
-              ),
-          )
-        : paymentHistory.filter((entry) => entry.invoiceTarget?.id === invoice.id);
-    const invoiceOriginalPayments = centsToMoney(
-      invoicePayments.reduce(
-        (total, entry) => total + moneyToCents(entry.payment.amount),
-        0,
-      ),
+    const scopedAllocations = getInvoicePaymentAllocations(invoice);
+    const validAllocations = getInvoiceValidAllocations(invoice);
+    const invoicePayments = paymentHistory.filter((entry) =>
+      scopedAllocations.some((allocation) => allocation.paymentId === entry.payment.id),
     );
-    const invoiceRefunds = centsToMoney(
-      invoicePayments.reduce(
-        (total, entry) =>
-          total +
-          entry.refunds
-            .filter((refund) => refund.status === "succeeded")
-            .reduce(
-              (refundTotal, refund) => refundTotal + moneyToCents(refund.amount),
-              0,
-            ),
-        0,
-      ),
-    );
+    const invoiceOriginalPayments = centsToMoney(validAllocations.reduce(
+      (total, allocation) => total + moneyToCents(allocation.allocationAmount), 0,
+    ));
+    const invoiceRefunds = centsToMoney(validAllocations.reduce(
+      (total, allocation) => total + getAllocationRefundCents(allocation), 0,
+    ));
     const tabs: { id: InvoiceWorkspaceTab; label: string }[] = [
       { id: "overview", label: "Overview" },
       { id: "items", label: "Items" },
@@ -10683,6 +10730,10 @@ export function ServiceRequestDetail({
                 entry.payment.paidAt ??
                 entry.payment.paymentDate ??
                 entry.payment.createdAt;
+              const paymentAllocations = scopedAllocations.filter((allocation) => allocation.paymentId === entry.payment.id);
+              const originalCents = paymentAllocations.reduce((total, allocation) => total + moneyToCents(allocation.allocationAmount), 0);
+              const succeededRefundCents = paymentAllocations.reduce((total, allocation) => total + getAllocationRefundCents(allocation), 0);
+              const netPaymentCents = paymentAllocations.reduce((total, allocation) => total + getAllocationNetCents(allocation), 0);
 
               return (
                 <div
@@ -10706,8 +10757,20 @@ export function ServiceRequestDetail({
                     ) : null}
                   </div>
                   <div className="text-right">
-                    <p className="whitespace-nowrap text-base font-black text-emerald-700">
-                      +{formatServiceRequestMoney(entry.payment.amount)}
+                    <p
+                      className={`whitespace-nowrap text-base font-black ${
+                        netPaymentCents > 0 ? "text-emerald-700" : "text-[#64748B]"
+                      }`}
+                    >
+                      +{formatServiceRequestMoney(centsToMoney(netPaymentCents))}
+                    </p>
+                    {succeededRefundCents > 0 ? (
+                      <p className="mt-1 whitespace-nowrap text-xs font-black text-red-700">
+                        refunded -{formatServiceRequestMoney(centsToMoney(succeededRefundCents))}
+                      </p>
+                    ) : null}
+                    <p className="mt-1 text-xs font-semibold text-[#64748B]">
+                      Original allocated {formatServiceRequestMoney(centsToMoney(originalCents))}
                     </p>
                     <p className="mt-1 text-sm font-semibold text-[#52627A]">
                       {formatServiceRequestSource(entry.payment.paymentStatus)}
@@ -10850,6 +10913,9 @@ export function ServiceRequestDetail({
             </div>
           </div>
 
+          <p className="text-xs font-semibold text-[#657089]">
+            {isCollectibleInvoice(invoice) ? "Current Invoice · Job payment credit" : "Historical Invoice · payments allocated to this Invoice · not collectible"}
+          </p>
           <div className="grid grid-cols-2 divide-x divide-y divide-[#D7DEE8] py-3 sm:grid-cols-4 sm:divide-y-0 sm:py-5">
             <div className="min-w-0 pr-2 sm:pr-3">
               <p className="text-[0.75rem] font-semibold leading-4 text-[#657089] sm:text-sm">Total</p>
@@ -10878,7 +10944,7 @@ export function ServiceRequestDetail({
           </div>
           <div className="border-t border-[#D7DEE8] py-3 sm:py-4">
             <div className="flex items-center justify-between gap-3">
-              <p className="text-[0.75rem] font-semibold leading-4 text-[#657089] sm:text-sm">Balance Due</p>
+              <p className="text-[0.75rem] font-semibold leading-4 text-[#657089] sm:text-sm">{isCollectibleInvoice(invoice) ? "Balance Due" : "Not collectible"}</p>
               <p className="mt-1 whitespace-nowrap break-keep text-[clamp(1.1rem,5vw,1.375rem)] font-bold leading-tight text-[#0F6BFF] tabular-nums sm:mt-2 sm:text-3xl">
                 {formatServiceRequestMoney(balanceDue)}
               </p>
@@ -10993,6 +11059,8 @@ export function ServiceRequestDetail({
     const paymentIsVoid = entry.payment.paymentStatus === "void";
     const paymentCanBeVoided = canVoidPayment(entry.payment);
     const paymentCanShowReceiptActions = canShowReceiptActions(entry.payment);
+    const succeededRefundCents = getSucceededRefundCentsForPayment(entry.payment.id);
+    const netPaymentCents = getPaymentNetCents(entry.payment);
 
     return (
       <article
@@ -11020,9 +11088,18 @@ export function ServiceRequestDetail({
             </span>
           </span>
           <span className="text-right">
-            <span className="block whitespace-nowrap text-sm font-black text-emerald-700 sm:text-base">
-              +{formatServiceRequestMoney(entry.payment.amount)}
+            <span
+              className={`block whitespace-nowrap text-sm font-black sm:text-base ${
+                netPaymentCents > 0 ? "text-emerald-700" : "text-[#64748B]"
+              }`}
+            >
+              +{formatServiceRequestMoney(centsToMoney(netPaymentCents))}
             </span>
+            {succeededRefundCents > 0 ? (
+              <span className="mt-0.5 block whitespace-nowrap text-[0.65rem] font-black text-red-700">
+                refunded -{formatServiceRequestMoney(centsToMoney(succeededRefundCents))}
+              </span>
+            ) : null}
             <span className="mt-0.5 block text-[0.65rem] font-black uppercase tracking-[0.12em] text-[#64748B]">
               {formatServiceRequestSource(entry.payment.paymentStatus)}
             </span>
@@ -11049,6 +11126,18 @@ export function ServiceRequestDetail({
               <p>
                 <span className="font-black text-[#0F172A]">Status: </span>
                 {formatServiceRequestSource(entry.payment.paymentStatus)}
+              </p>
+              <p>
+                <span className="font-black text-[#0F172A]">Original Payment: </span>
+                {formatServiceRequestMoney(entry.payment.amount)}
+              </p>
+              <p>
+                <span className="font-black text-[#0F172A]">Refunded: </span>
+                -{formatServiceRequestMoney(centsToMoney(succeededRefundCents))}
+              </p>
+              <p>
+                <span className="font-black text-[#0F172A]">Net Payment: </span>
+                {formatServiceRequestMoney(centsToMoney(netPaymentCents))}
               </p>
               {paymentIsVoid ? (
                 <p className="sm:col-span-2">
@@ -14470,9 +14559,7 @@ export function ServiceRequestDetail({
             depositPaid={
               manualEstimate
                 ? centsToMoney(
-                    estimateUsesJobLevelPaidCredit(manualEstimate)
-                      ? validPaidCreditCents
-                      : getEstimateLogicalPaidCreditCents(manualEstimate),
+                    getEstimatePresentedNetPaidCents(manualEstimate),
                   )
                 : 0
             }
@@ -14566,7 +14653,7 @@ export function ServiceRequestDetail({
               valueTone: "text-emerald-700",
             },
             {
-              label: "Paid",
+              label: "Net Paid",
               value: formatServiceRequestMoney(financePaidTotal),
               detail:
                 paymentHistory.length > 0

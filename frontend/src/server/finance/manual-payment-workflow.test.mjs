@@ -178,11 +178,11 @@ includesAll(detail, [
   "Send Invoice",
   "renderInvoiceSummaryCard(financePrimaryInvoice)",
   "renderInvoiceWorkspace(viewingInvoice)",
-  "entry.invoiceTarget?.id === invoice.id",
+  "allocation.invoiceId === invoice.id",
   "const paymentTarget = manualPaymentTargets.find(",
   "target.type === \"invoice\" && target.id === invoice.id",
   "openPaymentWorkflow(paymentTarget)",
-  "grid grid-cols-3 divide-x divide-[#D7DEE8] py-3 sm:py-5",
+  "grid grid-cols-2 divide-x divide-y divide-[#D7DEE8] py-3 sm:grid-cols-4 sm:divide-y-0 sm:py-5",
   "whitespace-nowrap break-keep text-[clamp(1.05rem,4.7vw,1.25rem)] font-bold leading-tight text-[#0B1228] tabular-nums",
   "whitespace-nowrap break-keep text-[clamp(1.05rem,4.7vw,1.25rem)] font-bold leading-tight text-emerald-700 tabular-nums",
   "whitespace-nowrap break-keep text-[clamp(1.1rem,5vw,1.375rem)] font-bold leading-tight text-[#0F6BFF] tabular-nums",
@@ -197,7 +197,7 @@ includesAll(detail, [
   "setExpandedPaymentHistoryId",
   "Manual Payment",
   "Save Payment",
-  "\"Card - Stripe\", \"Apple Pay / Google Pay\"",
+  "await startTechnicianStripeCheckout()",
   "Coming Soon",
   "paymentHistory.map(renderPaymentHistoryItem)",
   "No payable Estimate or Invoice is available.",
@@ -206,9 +206,9 @@ includesAll(detail, [
   "get_service_request_invoice_financial_summary_rpc",
   "financialSummary: mapInvoiceFinancialSummaryPayload(summaryData)",
   "const getInvoiceAllocatedCents = (invoice: DashboardServiceRequestInvoice)",
-  "invoice.financialSummary\n      ? moneyToCents(invoice.financialSummary.allocatedPaid)",
+  "getInvoiceValidAllocations(invoice).reduce",
   "const getInvoiceBalanceDue = (invoice: DashboardServiceRequestInvoice)",
-  "invoice.financialSummary.balanceDue",
+  "moneyToCents(invoice.total) - getInvoiceAllocatedCents(invoice)",
   "void Promise.all([loadInvoices(), loadPayments(), loadEstimates()])",
 ]);
 
@@ -219,7 +219,7 @@ assert.doesNotMatch(
 );
 
 assert.ok(
-  detail.includes("+{formatServiceRequestMoney(entry.payment.amount)}"),
+  detail.includes("+{formatServiceRequestMoney(centsToMoney(netPaymentCents))}"),
   "Collapsed payment rows should show compact signed amounts.",
 );
 includesAll(detail, [
