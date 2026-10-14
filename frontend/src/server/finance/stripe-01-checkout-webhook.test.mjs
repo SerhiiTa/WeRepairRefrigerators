@@ -217,11 +217,16 @@ test("Stripe service role can persist sessions and webhook event state only serv
   assert.doesNotMatch(stripeServiceRoleGrantRepair, /\bdelete\b|\btruncate\b/i);
 });
 
-test("Refund and dispute events are audit-only until explicit adjustment ledger exists", () => {
-  assert.match(webhookAccounting, /event\.type\.startsWith\("refund\."\)/);
+test("Refund webhooks use refund reservations while charge-level refund events remain audit-only", () => {
+  assert.match(webhookAccounting, /isStripeRefundEvent\(event\)/);
+  assert.match(webhookAccounting, /processStripeRefundWebhookEvent/);
+  assert.match(webhookAccounting, /confirm_stripe_service_request_payment_refund_rpc/);
+  assert.match(webhookAccounting, /record_stripe_service_request_payment_refund_failure_rpc/);
+  assert.match(webhookAccounting, /refund_requires_reconciliation/);
+  assert.match(webhookAccounting, /event\.type === "charge\.refunded"/);
   assert.match(webhookAccounting, /event\.type\.startsWith\("charge\.dispute\."\)/);
-  assert.match(webhookAccounting, /recorded_audit_only/);
-  assert.match(webhookAccounting, /until ledger adjustment support is implemented/);
+  assert.match(webhookAccounting, /recorded_refund_audit_only/);
+  assert.match(webhookAccounting, /refund\.\* event is required for ledger adjustment/);
 });
 
 test("0122 atomic Stripe posting RPC owns financial writes and service-role grant", () => {

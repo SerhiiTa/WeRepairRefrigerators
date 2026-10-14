@@ -400,6 +400,10 @@ function formatCentsAsInput(value: number): string {
   return (Math.max(0, value) / 100).toFixed(2);
 }
 
+function formatPlainMoney(value: number): string {
+  return Math.max(0, value).toFixed(2);
+}
+
 function parseMoneyInputToCents(value: string): number | null {
   const normalized = value.trim().replace(/[$,\s]/g, "");
 
@@ -529,6 +533,7 @@ type PaymentsState =
       status: "loading";
       payments: DashboardServiceRequestPayment[];
       allocations: DashboardServiceRequestPaymentAllocation[];
+      refunds: DashboardPaymentRefund[];
       receipts: DashboardPaymentReceipt[];
       receiptDeliveries: DashboardPaymentReceiptDelivery[];
       error: null;
@@ -537,6 +542,7 @@ type PaymentsState =
       status: "ready";
       payments: DashboardServiceRequestPayment[];
       allocations: DashboardServiceRequestPaymentAllocation[];
+      refunds: DashboardPaymentRefund[];
       receipts: DashboardPaymentReceipt[];
       receiptDeliveries: DashboardPaymentReceiptDelivery[];
       error: string | null;
@@ -545,10 +551,23 @@ type PaymentsState =
       status: "error";
       payments: DashboardServiceRequestPayment[];
       allocations: DashboardServiceRequestPaymentAllocation[];
+      refunds: DashboardPaymentRefund[];
       receipts: DashboardPaymentReceipt[];
       receiptDeliveries: DashboardPaymentReceiptDelivery[];
       error: string;
     };
+
+type DashboardPaymentRefund = {
+  id: string;
+  paymentId: string;
+  amount: number;
+  refundType: string;
+  status: string;
+  reason: string;
+  providerRefundId: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+};
 
 type DashboardPaymentReceipt = {
   id: string;
@@ -585,6 +604,12 @@ type ReceiptDeliveryState =
   | { status: "idle"; message: null }
   | { status: "loading"; message: string | null }
   | { status: "sending"; message: string | null }
+  | { status: "success"; message: string }
+  | { status: "error"; message: string };
+
+type PaymentRefundState =
+  | { status: "idle"; message: null }
+  | { status: "saving"; message: string | null }
   | { status: "success"; message: string }
   | { status: "error"; message: string };
 
@@ -703,6 +728,17 @@ type ManualPaymentVoidDraft = {
   paymentId: string;
   reason: ManualPaymentVoidReason;
   reasonNote: string;
+};
+
+type PaymentRefundMode = "full" | "partial";
+
+type PaymentRefundDraft = {
+  paymentId: string;
+  mode: PaymentRefundMode;
+  amount: string;
+  reason: string;
+  moneyReturnedConfirmed: boolean;
+  idempotencyKey: string;
 };
 
 type ManualPaymentDraft = {
@@ -1880,6 +1916,7 @@ export function ServiceRequestDetail({
     status: "loading",
     payments: [],
     allocations: [],
+    refunds: [],
     receipts: [],
     receiptDeliveries: [],
     error: null,
@@ -2121,6 +2158,10 @@ export function ServiceRequestDetail({
     useState<ManualPaymentVoidDraft | null>(null);
   const [manualPaymentVoidState, setManualPaymentVoidState] =
     useState<ManualPaymentVoidState>({ status: "idle", message: null });
+  const [paymentRefundDraft, setPaymentRefundDraft] =
+    useState<PaymentRefundDraft | null>(null);
+  const [paymentRefundState, setPaymentRefundState] =
+    useState<PaymentRefundState>({ status: "idle", message: null });
   const [receiptDeliveryDraft, setReceiptDeliveryDraft] =
     useState<ReceiptDeliveryDraft | null>(null);
   const [receiptDeliveryState, setReceiptDeliveryState] =
@@ -3084,6 +3125,7 @@ export function ServiceRequestDetail({
         status: "error",
         payments: [],
         allocations: [],
+        refunds: [],
         receipts: [],
         receiptDeliveries: [],
         error: "Payments are not available for this workspace.",
@@ -3091,7 +3133,13 @@ export function ServiceRequestDetail({
       return;
     }
 
-    const [paymentsResult, allocationsResult, receiptsResult, deliveriesResult] =
+    const [
+      paymentsResult,
+      allocationsResult,
+      refundsResult,
+      receiptsResult,
+      deliveriesResult,
+    ] =
       await Promise.all([
         supabase
           .from("service_request_payments")
@@ -3101,6 +3149,11 @@ export function ServiceRequestDetail({
         supabase
           .from("service_request_payment_allocations")
           .select(SERVICE_REQUEST_PAYMENT_ALLOCATION_SELECT_COLUMNS)
+          .eq("service_request_id", requestId)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("service_request_payment_refunds" as never)
+          .select("id,payment_id,refund_amount,refund_type,refund_status,refund_reason,provider_refund_id,created_at,updated_at")
           .eq("service_request_id", requestId)
           .order("created_at", { ascending: false }),
         supabase
@@ -3120,6 +3173,7 @@ export function ServiceRequestDetail({
         status: "error",
         payments: [],
         allocations: [],
+        refunds: [],
         receipts: [],
         receiptDeliveries: [],
         error: paymentsResult.error.message,
@@ -3132,6 +3186,7 @@ export function ServiceRequestDetail({
         status: "error",
         payments: [],
         allocations: [],
+        refunds: [],
         receipts: [],
         receiptDeliveries: [],
         error: allocationsResult.error.message,
@@ -3139,7 +3194,9 @@ export function ServiceRequestDetail({
       return;
     }
 
-    const receiptReadError = receiptsResult.error
+    const receiptReadError = refundsResult.error
+      ? `Refund history is unavailable: ${refundsResult.error.message}`
+      : receiptsResult.error
       ? `Receipt history is unavailable: ${receiptsResult.error.message}`
       : deliveriesResult.error
         ? `Receipt delivery history is unavailable: ${deliveriesResult.error.message}`
@@ -3153,6 +3210,24 @@ export function ServiceRequestDetail({
       allocations: (
         allocationsResult.data as unknown as ServiceRequestPaymentAllocationRow[]
       ).map(mapServiceRequestPaymentAllocationRow),
+      refunds: refundsResult.error
+        ? []
+        : ((refundsResult.data ?? []) as unknown as Array<Record<string, unknown>>).map(
+            (row) => ({
+              id: String(row.id),
+              paymentId: String(row.payment_id),
+              amount: Number(row.refund_amount),
+              refundType: String(row.refund_type),
+              status: String(row.refund_status),
+              reason: String(row.refund_reason ?? ""),
+              providerRefundId:
+                typeof row.provider_refund_id === "string"
+                  ? row.provider_refund_id
+                  : null,
+              createdAt: String(row.created_at),
+              updatedAt: typeof row.updated_at === "string" ? row.updated_at : null,
+            }),
+          ),
       receipts: receiptsResult.error
         ? []
         : ((receiptsResult.data ?? []) as unknown as Array<Record<string, unknown>>).map(
@@ -7576,6 +7651,14 @@ export function ServiceRequestDetail({
         : total,
     0,
   );
+  const succeededRefunds = paymentsState.refunds.filter(
+    (refund) => refund.status === "succeeded",
+  );
+  const succeededRefundCents = succeededRefunds.reduce(
+    (total, refund) => total + moneyToCents(refund.amount),
+    0,
+  );
+  const netPaidCreditCents = Math.max(0, validPaidCreditCents - succeededRefundCents);
   const estimateAllocatedCents = new Map<string, number>();
   const invoiceAllocatedCents = new Map<string, number>();
   const estimatesById = new Map(
@@ -7604,14 +7687,14 @@ export function ServiceRequestDetail({
   });
   const getInvoiceAllocatedCents = (invoice: DashboardServiceRequestInvoice) =>
     invoice.invoiceLifecycleStatus === "current"
-      ? validPaidCreditCents
+      ? netPaidCreditCents
       : invoice.financialSummary
         ? moneyToCents(invoice.financialSummary.allocatedPaid)
         : invoiceAllocatedCents.get(invoice.id) ?? 0;
   const getInvoiceBalanceDue = (invoice: DashboardServiceRequestInvoice) => {
     if (invoice.invoiceLifecycleStatus === "current") {
       return centsToMoney(
-        Math.max(0, moneyToCents(invoice.total) - validPaidCreditCents),
+        Math.max(0, moneyToCents(invoice.total) - netPaidCreditCents),
       );
     }
 
@@ -7721,7 +7804,7 @@ export function ServiceRequestDetail({
       currentBalanceDue: centsToMoney(financeBalanceDueCents),
     };
   };
-  const financePaidTotal = centsToMoney(validPaidCreditCents);
+  const financePaidTotal = centsToMoney(netPaidCreditCents);
   const financeBalanceDueTotal = Math.max(
     0,
     financeApprovedTotal - financePaidTotal,
@@ -7732,7 +7815,7 @@ export function ServiceRequestDetail({
   );
   const financeBalanceDueCents = Math.max(
     0,
-    moneyToCents(financeApprovedTotal) - validPaidCreditCents,
+    moneyToCents(financeApprovedTotal) - netPaidCreditCents,
   );
   const paymentHistory = paymentsState.payments
     .map((payment) => {
@@ -7758,12 +7841,16 @@ export function ServiceRequestDetail({
             (delivery) => delivery.receiptId === receipt.id,
           )
         : [];
+      const refunds = paymentsState.refunds.filter(
+        (refund) => refund.paymentId === payment.id,
+      );
 
       return {
         payment,
         allocation,
         estimateTarget,
         invoiceTarget,
+        refunds,
         receipt,
         receiptDeliveries,
       };
@@ -7773,6 +7860,34 @@ export function ServiceRequestDetail({
         new Date(right.payment.paidAt ?? right.payment.createdAt).getTime() -
         new Date(left.payment.paidAt ?? left.payment.createdAt).getTime(),
     );
+  const getPaymentRefunds = (paymentId: string) =>
+    paymentsState.refunds.filter((refund) => refund.paymentId === paymentId);
+  const getSucceededRefundCentsForPayment = (paymentId: string) =>
+    getPaymentRefunds(paymentId)
+      .filter((refund) => refund.status === "succeeded")
+      .reduce((total, refund) => total + moneyToCents(refund.amount), 0);
+  const getPendingRefundCentsForPayment = (paymentId: string) =>
+    getPaymentRefunds(paymentId)
+      .filter((refund) => refund.status === "pending")
+      .reduce((total, refund) => total + moneyToCents(refund.amount), 0);
+  const getRefundableCentsForPayment = (payment: DashboardServiceRequestPayment) =>
+    Math.max(
+      0,
+      moneyToCents(payment.amount) -
+        getSucceededRefundCentsForPayment(payment.id) -
+        getPendingRefundCentsForPayment(payment.id),
+    );
+  const canRefundPayment = (payment: DashboardServiceRequestPayment) =>
+    payment.voidedAt === null &&
+    payment.paymentStatus !== "void" &&
+    ["paid", "succeeded", "imported", "partially_refunded", "refunded"].includes(
+      String(payment.paymentStatus),
+    ) &&
+    getRefundableCentsForPayment(payment) > 0;
+  const selectedPaymentRefundEntry = paymentRefundDraft
+    ? paymentHistory.find((entry) => entry.payment.id === paymentRefundDraft.paymentId) ??
+      null
+    : null;
   const financeEstimates = [...visibleDocumentEstimates].sort((left, right) => {
     const getStatusPriority = (
       status: DashboardServiceRequestEstimate["estimateStatus"],
@@ -9851,6 +9966,189 @@ export function ServiceRequestDetail({
     }, 700);
   }
 
+  async function submitPaymentRefund() {
+    if (state.status !== "ready" || !paymentRefundDraft || !selectedPaymentRefundEntry) {
+      setPaymentRefundState({
+        status: "error",
+        message: "Choose a valid payment to refund.",
+      });
+      return;
+    }
+
+    const { payment } = selectedPaymentRefundEntry;
+    const refundableCents = getRefundableCentsForPayment(payment);
+    const requestedCents =
+      paymentRefundDraft.mode === "full"
+        ? refundableCents
+        : parseMoneyInputToCents(paymentRefundDraft.amount);
+
+    if (!canRefundPayment(payment) || refundableCents <= 0) {
+      setPaymentRefundState({
+        status: "error",
+        message: "This payment has no refundable balance.",
+      });
+      return;
+    }
+
+    if (requestedCents === null || requestedCents < 1) {
+      setPaymentRefundState({
+        status: "error",
+        message: "Refund amount must be at least $0.01.",
+      });
+      return;
+    }
+
+    if (requestedCents > refundableCents) {
+      setPaymentRefundState({
+        status: "error",
+        message: "Refund amount exceeds the currently refundable balance.",
+      });
+      return;
+    }
+
+    if (paymentRefundDraft.reason.trim().length < 3) {
+      setPaymentRefundState({
+        status: "error",
+        message: "Refund reason is required.",
+      });
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+
+    if (!supabase) {
+      setPaymentRefundState({
+        status: "error",
+        message: "Refunds are not available for this workspace.",
+      });
+      return;
+    }
+
+    const isStripeRefund = payment.provider === "stripe";
+
+    if (!isStripeRefund && !paymentRefundDraft.moneyReturnedConfirmed) {
+      setPaymentRefundState({
+        status: "error",
+        message: "Confirm the money has already been returned before recording a manual refund.",
+      });
+      return;
+    }
+
+    setPaymentRefundState({
+      status: "saving",
+      message: isStripeRefund ? "Requesting Stripe refund..." : "Recording refund...",
+    });
+
+    if (isStripeRefund) {
+      const sessionResult = await getDashboardActionSession(supabase);
+
+      if (!sessionResult.ok) {
+        setPaymentRefundState({ status: "error", message: sessionResult.message });
+        return;
+      }
+
+      const { data: sessionData, error: sessionError } = sessionResult.response;
+      const accessToken = sessionData.session?.access_token;
+
+      if (sessionError || !accessToken) {
+        setPaymentRefundState({
+          status: "error",
+          message: "Log in again before requesting a Stripe refund.",
+        });
+        return;
+      }
+
+      let response: Response;
+      let payload:
+        | {
+            ok?: boolean;
+            message?: string;
+            recoverable?: boolean;
+            refund?: { status?: string };
+          }
+        | null;
+
+      try {
+        response = await fetch(
+          `/api/service-requests/${payment.serviceRequestId}/payments/${payment.id}/refund`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${accessToken}`,
+            },
+            body: JSON.stringify({
+              amount: formatCentsAsInput(requestedCents),
+              reason: paymentRefundDraft.reason,
+              idempotencyKey: paymentRefundDraft.idempotencyKey,
+            }),
+          },
+        );
+        payload = (await response.json().catch(() => null)) as typeof payload;
+      } catch {
+        setPaymentRefundState({
+          status: "error",
+          message: "Stripe refund request could not reach the server. Try again.",
+        });
+        return;
+      }
+
+      if (!response.ok || !payload?.ok) {
+        if (payload?.recoverable) {
+          setPaymentRefundState({
+            status: "success",
+            message: "Refund requested. Awaiting Stripe confirmation.",
+          });
+          await Promise.all([loadPayments(), loadEstimates(), loadInvoices()]);
+          return;
+        }
+
+        setPaymentRefundState({
+          status: "error",
+          message: payload?.message ?? "Stripe refund could not be requested.",
+        });
+        return;
+      }
+
+      setPaymentRefundState({
+        status: "success",
+        message:
+          payload.refund?.status === "succeeded"
+            ? "Refund confirmed by Stripe."
+            : "Refund requested. Awaiting Stripe confirmation.",
+      });
+      await Promise.all([loadPayments(), loadEstimates(), loadInvoices()]);
+      return;
+    }
+
+    const { error } = await supabase.rpc(
+      "record_manual_service_request_payment_refund_rpc" as never,
+      {
+        p_service_request_id: payment.serviceRequestId,
+        p_payment_id: payment.id,
+        p_refund_amount: formatCentsAsInput(requestedCents),
+        p_refund_reason: paymentRefundDraft.reason.trim(),
+        p_idempotency_key: paymentRefundDraft.idempotencyKey,
+        p_money_returned_confirmed: true,
+        p_allocation_adjustments: null,
+      } as never,
+    );
+
+    if (error) {
+      setPaymentRefundState({
+        status: "error",
+        message: error.message,
+      });
+      return;
+    }
+
+    setPaymentRefundState({
+      status: "success",
+      message: "Manual refund recorded.",
+    });
+    await Promise.all([loadPayments(), loadEstimates(), loadInvoices()]);
+  }
+
   function renderEstimateCard(estimate: DashboardServiceRequestEstimate) {
     const linkedInvoice = invoicesByEstimateId.get(estimate.id) ?? null;
     const isImportedWorkiz = estimate.sourceSystem === "workiz";
@@ -10225,6 +10523,25 @@ export function ServiceRequestDetail({
               ),
           )
         : paymentHistory.filter((entry) => entry.invoiceTarget?.id === invoice.id);
+    const invoiceOriginalPayments = centsToMoney(
+      invoicePayments.reduce(
+        (total, entry) => total + moneyToCents(entry.payment.amount),
+        0,
+      ),
+    );
+    const invoiceRefunds = centsToMoney(
+      invoicePayments.reduce(
+        (total, entry) =>
+          total +
+          entry.refunds
+            .filter((refund) => refund.status === "succeeded")
+            .reduce(
+              (refundTotal, refund) => refundTotal + moneyToCents(refund.amount),
+              0,
+            ),
+        0,
+      ),
+    );
     const tabs: { id: InvoiceWorkspaceTab; label: string }[] = [
       { id: "overview", label: "Overview" },
       { id: "items", label: "Items" },
@@ -10533,7 +10850,7 @@ export function ServiceRequestDetail({
             </div>
           </div>
 
-          <div className="grid grid-cols-3 divide-x divide-[#D7DEE8] py-3 sm:py-5">
+          <div className="grid grid-cols-2 divide-x divide-y divide-[#D7DEE8] py-3 sm:grid-cols-4 sm:divide-y-0 sm:py-5">
             <div className="min-w-0 pr-2 sm:pr-3">
               <p className="text-[0.75rem] font-semibold leading-4 text-[#657089] sm:text-sm">Total</p>
               <p className="mt-1 whitespace-nowrap break-keep text-[clamp(1.05rem,4.7vw,1.25rem)] font-bold leading-tight text-[#0B1228] tabular-nums sm:mt-2 sm:text-3xl">
@@ -10541,12 +10858,26 @@ export function ServiceRequestDetail({
               </p>
             </div>
             <div className="min-w-0 px-2 sm:px-3">
-              <p className="text-[0.75rem] font-semibold leading-4 text-[#657089] sm:text-sm">Paid</p>
+              <p className="text-[0.75rem] font-semibold leading-4 text-[#657089] sm:text-sm">Original Paid</p>
+              <p className="mt-1 whitespace-nowrap break-keep text-[clamp(1.05rem,4.7vw,1.25rem)] font-bold leading-tight text-emerald-700 tabular-nums sm:mt-2 sm:text-3xl">
+                {formatServiceRequestMoney(invoiceOriginalPayments)}
+              </p>
+            </div>
+            <div className="min-w-0 pr-2 pt-3 sm:px-3 sm:pt-0">
+              <p className="text-[0.75rem] font-semibold leading-4 text-[#657089] sm:text-sm">Refunds</p>
+              <p className="mt-1 whitespace-nowrap break-keep text-[clamp(1.05rem,4.7vw,1.25rem)] font-bold leading-tight text-red-700 tabular-nums sm:mt-2 sm:text-3xl">
+                -{formatServiceRequestMoney(invoiceRefunds)}
+              </p>
+            </div>
+            <div className="min-w-0 px-2 pt-3 sm:px-3 sm:pt-0">
+              <p className="text-[0.75rem] font-semibold leading-4 text-[#657089] sm:text-sm">Net Paid</p>
               <p className="mt-1 whitespace-nowrap break-keep text-[clamp(1.05rem,4.7vw,1.25rem)] font-bold leading-tight text-emerald-700 tabular-nums sm:mt-2 sm:text-3xl">
                 {formatServiceRequestMoney(allocatedPaid)}
               </p>
             </div>
-            <div className="min-w-0 pl-2 sm:pl-3">
+          </div>
+          <div className="border-t border-[#D7DEE8] py-3 sm:py-4">
+            <div className="flex items-center justify-between gap-3">
               <p className="text-[0.75rem] font-semibold leading-4 text-[#657089] sm:text-sm">Balance Due</p>
               <p className="mt-1 whitespace-nowrap break-keep text-[clamp(1.1rem,5vw,1.375rem)] font-bold leading-tight text-[#0F6BFF] tabular-nums sm:mt-2 sm:text-3xl">
                 {formatServiceRequestMoney(balanceDue)}
@@ -10728,6 +11059,22 @@ export function ServiceRequestDetail({
                     : ""}
                 </p>
               ) : null}
+              {entry.refunds.length > 0 ? (
+                <div className="space-y-1 rounded-2xl bg-red-50 p-3 sm:col-span-2">
+                  <p className="text-xs font-black uppercase tracking-[0.12em] text-red-700">
+                    Refund History
+                  </p>
+                  {entry.refunds.map((refund) => (
+                    <p className="text-xs font-semibold text-red-900" key={refund.id}>
+                      -{formatServiceRequestMoney(refund.amount)} ·{" "}
+                      {formatServiceRequestSource(refund.status)} ·{" "}
+                      {formatServiceRequestDate(refund.updatedAt ?? refund.createdAt)}
+                      {refund.reason ? ` · ${refund.reason}` : ""}
+                      {refund.providerRefundId ? ` · ${refund.providerRefundId}` : ""}
+                    </p>
+                  ))}
+                </div>
+              ) : null}
               {paymentCanBeVoided ? (
                 <div className="sm:col-span-2">
                   <button
@@ -10743,6 +11090,30 @@ export function ServiceRequestDetail({
                     type="button"
                   >
                     Void Payment
+                  </button>
+                </div>
+              ) : null}
+              {canRefundPayment(entry.payment) ? (
+                <div className="sm:col-span-2">
+                  <button
+                    className="rounded-full border border-blue-200 px-3 py-1.5 text-xs font-black text-[#0F6BFF] transition hover:bg-blue-50"
+                    onClick={() => {
+                      const refundableAmount = centsToMoney(
+                        getRefundableCentsForPayment(entry.payment),
+                      );
+                      setPaymentRefundDraft({
+                        paymentId: entry.payment.id,
+                        mode: "partial",
+                        amount: formatPlainMoney(refundableAmount),
+                        reason: "",
+                        moneyReturnedConfirmed: false,
+                        idempotencyKey: buildPaymentIdempotencyKey(),
+                      });
+                      setPaymentRefundState({ status: "idle", message: null });
+                    }}
+                    type="button"
+                  >
+                    Refund Payment
                   </button>
                 </div>
               ) : null}
@@ -17507,6 +17878,234 @@ export function ServiceRequestDetail({
                   {receiptDeliveryState.status === "sending"
                     ? "Sending..."
                     : "Confirm Send"}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })() : null}
+
+      {paymentRefundDraft && selectedPaymentRefundEntry ? (() => {
+        const payment = selectedPaymentRefundEntry.payment;
+        const refunds = selectedPaymentRefundEntry.refunds;
+        const succeededRefundCents = refunds
+          .filter((refund) => refund.status === "succeeded")
+          .reduce((total, refund) => total + moneyToCents(refund.amount), 0);
+        const pendingRefundCents = refunds
+          .filter((refund) => refund.status === "pending")
+          .reduce((total, refund) => total + moneyToCents(refund.amount), 0);
+        const refundableCents = getRefundableCentsForPayment(payment);
+        const requestedCents =
+          paymentRefundDraft.mode === "full"
+            ? refundableCents
+            : parseMoneyInputToCents(paymentRefundDraft.amount);
+        const isStripeRefund = payment.provider === "stripe";
+        const canSubmitRefund =
+          paymentRefundState.status !== "saving" &&
+          paymentRefundState.status !== "success" &&
+          requestedCents !== null &&
+          requestedCents >= 1 &&
+          requestedCents <= refundableCents &&
+          paymentRefundDraft.reason.trim().length >= 3 &&
+          (isStripeRefund || paymentRefundDraft.moneyReturnedConfirmed);
+
+        return (
+          <div className="fixed inset-0 z-[140] flex items-end justify-center bg-[#0F172A]/55 px-3 py-4 backdrop-blur-sm sm:items-center">
+            <div className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.16em] text-[#0F6BFF]">
+                    Payment Refund
+                  </p>
+                  <h3 className="mt-1 text-xl font-black text-[#0F172A]">
+                    Refund Payment
+                  </h3>
+                  <p className="mt-1 text-sm font-semibold leading-6 text-[#64748B]">
+                    Target one confirmed payment. Refunds preserve the original receipt and
+                    payment history.
+                  </p>
+                </div>
+                <button
+                  aria-label="Close refund form"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[#E5E7EB] text-xl font-black text-[#64748B] transition hover:border-[#0F6BFF] hover:text-[#0F6BFF]"
+                  disabled={paymentRefundState.status === "saving"}
+                  onClick={() => {
+                    setPaymentRefundDraft(null);
+                    setPaymentRefundState({ status: "idle", message: null });
+                  }}
+                  type="button"
+                >
+                  x
+                </button>
+              </div>
+
+              <div className="mt-4 grid gap-2 rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] p-3 text-sm sm:grid-cols-2">
+                <p>
+                  <span className="font-black text-[#0F172A]">Original: </span>
+                  {formatServiceRequestMoney(payment.amount)}
+                </p>
+                <p>
+                  <span className="font-black text-[#0F172A]">Method: </span>
+                  {getPaymentDisplayLabel(payment)}
+                </p>
+                <p>
+                  <span className="font-black text-[#0F172A]">Refunded: </span>
+                  {formatServiceRequestMoney(centsToMoney(succeededRefundCents))}
+                </p>
+                <p>
+                  <span className="font-black text-[#0F172A]">Pending: </span>
+                  {formatServiceRequestMoney(centsToMoney(pendingRefundCents))}
+                </p>
+                <p className="sm:col-span-2">
+                  <span className="font-black text-[#0F172A]">Maximum refundable: </span>
+                  <span className="font-black text-[#0F6BFF]">
+                    {formatServiceRequestMoney(centsToMoney(refundableCents))}
+                  </span>
+                </p>
+              </div>
+
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                {(["full", "partial"] as const).map((mode) => (
+                  <button
+                    className={`rounded-xl border px-3 py-3 text-sm font-black transition ${
+                      paymentRefundDraft.mode === mode
+                        ? "border-[#0F6BFF] bg-blue-50 text-[#0F6BFF]"
+                        : "border-[#D7DEE8] text-[#334155] hover:border-[#0F6BFF]"
+                    }`}
+                    disabled={paymentRefundState.status === "saving"}
+                    key={mode}
+                    onClick={() => {
+                      setPaymentRefundDraft((current) =>
+                        current
+                          ? {
+                              ...current,
+                              mode,
+                              amount: formatCentsAsInput(refundableCents),
+                              idempotencyKey: buildPaymentIdempotencyKey(),
+                            }
+                          : current,
+                      );
+                      setPaymentRefundState({ status: "idle", message: null });
+                    }}
+                    type="button"
+                  >
+                    {mode === "full" ? "Full Refund" : "Partial Refund"}
+                  </button>
+                ))}
+              </div>
+
+              {paymentRefundDraft.mode === "partial" ? (
+                <label className="mt-4 block">
+                  <span className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
+                    Refund amount
+                  </span>
+                  <div className="mt-2 flex overflow-hidden rounded-xl border border-[#D7DEE8] bg-white focus-within:border-[#0F6BFF] focus-within:ring-4 focus-within:ring-blue-100">
+                    <span className="flex w-11 items-center justify-center border-r border-[#D7DEE8] bg-[#F8FAFC] text-base font-black text-[#334155]">
+                      $
+                    </span>
+                    <input
+                      className="min-w-0 flex-1 px-3 py-3 text-lg font-black text-[#0F172A] outline-none"
+                      disabled={paymentRefundState.status === "saving"}
+                      inputMode="decimal"
+                      onChange={(event) => {
+                        const nextAmount = event.currentTarget.value;
+                        setPaymentRefundDraft((current) =>
+                          current ? { ...current, amount: nextAmount } : current,
+                        );
+                        setPaymentRefundState({ status: "idle", message: null });
+                      }}
+                      value={paymentRefundDraft.amount}
+                    />
+                  </div>
+                </label>
+              ) : null}
+
+              <label className="mt-4 block">
+                <span className="text-xs font-black uppercase tracking-[0.14em] text-[#64748B]">
+                  Refund reason
+                </span>
+                <textarea
+                  className="mt-2 min-h-24 w-full rounded-xl border border-[#D7DEE8] bg-white px-3 py-3 text-sm font-semibold leading-6 text-[#0F172A] outline-none transition focus:border-[#0F6BFF] focus:ring-4 focus:ring-blue-100"
+                  disabled={paymentRefundState.status === "saving"}
+                  onChange={(event) => {
+                    const nextReason = event.currentTarget.value;
+                    setPaymentRefundDraft((current) =>
+                      current ? { ...current, reason: nextReason } : current,
+                    );
+                    setPaymentRefundState({ status: "idle", message: null });
+                  }}
+                  placeholder="Short reason required for the refund record"
+                  value={paymentRefundDraft.reason}
+                />
+              </label>
+
+              {!isStripeRefund ? (
+                <label className="mt-4 flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-900">
+                  <input
+                    checked={paymentRefundDraft.moneyReturnedConfirmed}
+                    className="mt-1 h-4 w-4"
+                    disabled={paymentRefundState.status === "saving"}
+                    onChange={(event) => {
+                      const nextMoneyReturnedConfirmed = event.currentTarget.checked;
+                      setPaymentRefundDraft((current) =>
+                        current
+                          ? {
+                              ...current,
+                              moneyReturnedConfirmed: nextMoneyReturnedConfirmed,
+                            }
+                          : current,
+                      );
+                      setPaymentRefundState({ status: "idle", message: null });
+                    }}
+                    type="checkbox"
+                  />
+                  <span>
+                    I confirm the money has already been returned to the customer.
+                  </span>
+                </label>
+              ) : (
+                <p className="mt-4 rounded-2xl border border-blue-200 bg-blue-50 p-3 text-sm font-bold leading-6 text-[#0F6BFF]">
+                  Stripe refunds are requested now, then finalized only after trusted provider confirmation.
+                </p>
+              )}
+
+              {paymentRefundState.message ? (
+                <p
+                  className={`mt-4 rounded-xl border px-3 py-2 text-sm font-bold ${
+                    paymentRefundState.status === "error"
+                      ? "border-red-200 bg-red-50 text-red-700"
+                      : paymentRefundState.status === "success"
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                        : "border-blue-200 bg-blue-50 text-[#0F6BFF]"
+                  }`}
+                >
+                  {paymentRefundState.message}
+                </p>
+              ) : null}
+
+              <div className="mt-5 grid grid-cols-2 gap-2">
+                <button
+                  className="rounded-xl border border-[#E5E7EB] px-4 py-3 text-sm font-black text-[#0F172A] disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={paymentRefundState.status === "saving"}
+                  onClick={() => {
+                    setPaymentRefundDraft(null);
+                    setPaymentRefundState({ status: "idle", message: null });
+                  }}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  className="rounded-xl bg-[#0F6BFF] px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={!canSubmitRefund}
+                  onClick={() => void submitPaymentRefund()}
+                  type="button"
+                >
+                  {paymentRefundState.status === "saving"
+                    ? "Processing..."
+                    : isStripeRefund
+                      ? "Request Stripe Refund"
+                      : "Record Refund"}
                 </button>
               </div>
             </div>

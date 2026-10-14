@@ -33,6 +33,15 @@ type ProviderEventRow = {
   processing_status: string;
 };
 
+type RefundRow = {
+  id: string;
+  company_id: string;
+  service_request_id: string;
+  payment_id: string;
+  provider_refund_id: string | null;
+  refund_status: string;
+};
+
 function digestPayload(payload: string) {
   return crypto.createHash("sha256").update(payload).digest("hex");
 }
@@ -50,8 +59,178 @@ function getAttemptIdFromEvent(event: Stripe.Event): string | null {
     : null;
 }
 
+function isStripeRefundEvent(event: Stripe.Event) {
+  return event.type === "refund.created" || event.type === "refund.updated";
+}
+
+function isChargeRefundAuditEvent(event: Stripe.Event) {
+  return event.type === "charge.refunded" || event.type.startsWith("charge.dispute.");
+}
+
+function getRefundObject(event: Stripe.Event) {
+  return event.data.object as Stripe.Refund;
+}
+
+function normalizeRefundWebhookStatus(status: string | null | undefined) {
+  if (status === "succeeded" || status === "failed" || status === "canceled") {
+    return status;
+  }
+
+  return "pending";
+}
+
+async function findLocalRefundForStripeRefund(refund: Stripe.Refund) {
+  const serviceRole = getSupabaseServiceRoleClient();
+
+  if (!serviceRole) {
+    throw new Error("Stripe webhook accounting is not configured.");
+  }
+
+  const metadataRefundId =
+    typeof refund.metadata?.homefixos_refund_id === "string"
+      ? refund.metadata.homefixos_refund_id
+      : null;
+
+  let query = (serviceRole as any)
+    .from("service_request_payment_refunds")
+    .select(
+      "id,company_id,service_request_id,payment_id,provider_refund_id,refund_status",
+    )
+    .eq("refund_type", "stripe")
+    .limit(1);
+
+  if (metadataRefundId) {
+    query = query.eq("id", metadataRefundId);
+  } else {
+    query = query.eq("provider_refund_id", refund.id);
+  }
+
+  const { data, error } = await query.maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (data ?? null) as RefundRow | null;
+}
+
+async function processStripeRefundWebhookEvent(params: {
+  event: Stripe.Event;
+  rawBody: string;
+}) {
+  const refund = getRefundObject(params.event);
+  const localRefund = await findLocalRefundForStripeRefund(refund);
+  const eventInsert = await insertProviderEvent({
+    attempt: null,
+    context: localRefund
+      ? {
+          companyId: localRefund.company_id,
+          paymentId: localRefund.payment_id,
+          serviceRequestId: localRefund.service_request_id,
+        }
+      : undefined,
+    event: params.event,
+    rawBody: params.rawBody,
+  });
+
+  if (eventInsert.duplicate) {
+    return { ok: true, duplicate: true, action: "ignored_duplicate" };
+  }
+
+  const eventRow = eventInsert.row;
+
+  if (!eventRow) {
+    return { ok: true, duplicate: true, action: "ignored_duplicate" };
+  }
+
+  if (!localRefund) {
+    await markProviderEvent(eventRow.id, {
+      processing_status: "failed",
+      failure_reason:
+        "Stripe refund has no matching HomeFixOS refund reservation and requires manual reconciliation.",
+    });
+    return {
+      ok: false,
+      duplicate: false,
+      action: "refund_requires_reconciliation",
+    };
+  }
+
+  const serviceRole = getSupabaseServiceRoleClient();
+
+  if (!serviceRole) {
+    throw new Error("Stripe webhook accounting is not configured.");
+  }
+
+  const status = normalizeRefundWebhookStatus(refund.status);
+
+  if (status === "succeeded") {
+    const { error } = await (serviceRole as any).rpc(
+      "confirm_stripe_service_request_payment_refund_rpc",
+      {
+        p_refund_id: localRefund.id,
+        p_provider_refund_id: refund.id,
+        p_provider_event_id: params.event.id,
+        p_metadata: {
+          stripe_refund_status: refund.status,
+          stripe_refund_webhook_confirmed: true,
+        },
+      },
+    );
+
+    if (error) {
+      await markProviderEvent(eventRow.id, {
+        processing_status: "failed",
+        failure_reason: "Stripe refund confirmation failed.",
+      });
+      throw new Error(error.message);
+    }
+
+    await markProviderEvent(eventRow.id, { processing_status: "processed" });
+    return { ok: true, duplicate: false, action: "confirmed_refund" };
+  }
+
+  if (status === "failed" || status === "canceled") {
+    const { error } = await (serviceRole as any).rpc(
+      "record_stripe_service_request_payment_refund_failure_rpc",
+      {
+        p_refund_id: localRefund.id,
+        p_refund_status: status,
+        p_failure_reason: `Stripe refund webhook reported ${status}.`,
+        p_provider_event_id: params.event.id,
+        p_metadata: {
+          stripe_refund_status: refund.status,
+          stripe_refund_webhook_terminal: true,
+        },
+      },
+    );
+
+    if (error) {
+      await markProviderEvent(eventRow.id, {
+        processing_status: "failed",
+        failure_reason: "Stripe refund failure release failed.",
+      });
+      throw new Error(error.message);
+    }
+
+    await markProviderEvent(eventRow.id, { processing_status: "processed" });
+    return { ok: true, duplicate: false, action: "released_refund" };
+  }
+
+  await markProviderEvent(eventRow.id, {
+    processing_status: "processed",
+    failure_reason: "Stripe refund is still pending.",
+  });
+  return { ok: true, duplicate: false, action: "marked_refund_pending" };
+}
+
 async function insertProviderEvent(params: {
   attempt: CheckoutAttempt | null;
+  context?: {
+    companyId?: string | null;
+    paymentId?: string | null;
+    serviceRequestId?: string | null;
+  };
   event: Stripe.Event;
   rawBody: string;
 }) {
@@ -64,9 +243,11 @@ async function insertProviderEvent(params: {
   const { data, error } = await (serviceRole as any)
     .from("service_request_payment_provider_events")
     .insert({
-      company_id: params.attempt?.company_id ?? null,
-      service_request_id: params.attempt?.service_request_id ?? null,
+      company_id: params.attempt?.company_id ?? params.context?.companyId ?? null,
+      service_request_id:
+        params.attempt?.service_request_id ?? params.context?.serviceRequestId ?? null,
       checkout_attempt_id: params.attempt?.id ?? null,
+      payment_id: params.context?.paymentId ?? null,
       provider: "stripe",
       provider_event_id: params.event.id,
       provider_event_type: params.event.type,
@@ -375,6 +556,28 @@ export async function processStripeWebhookEvent(
 
   const attemptId = getAttemptIdFromEvent(event);
 
+  if (isStripeRefundEvent(event)) {
+    return processStripeRefundWebhookEvent({ event, rawBody });
+  }
+
+  if (isChargeRefundAuditEvent(event)) {
+    const eventInsert = await insertProviderEvent({ attempt: null, event, rawBody });
+
+    if (eventInsert.duplicate) {
+      return { ok: true, duplicate: true, action: "ignored_duplicate" };
+    }
+
+    if (eventInsert.row) {
+      await markProviderEvent(eventInsert.row.id, {
+        processing_status: "processed",
+        failure_reason:
+          "Charge-level refund or dispute event recorded for audit; refund.* event is required for ledger adjustment.",
+      });
+    }
+
+    return { ok: true, duplicate: false, action: "recorded_refund_audit_only" };
+  }
+
   if (event.type === "payment_intent.succeeded") {
     if (!attemptId) {
       return { ok: false, duplicate: false, action: "missing_attempt" };
@@ -470,19 +673,6 @@ export async function processStripeWebhookEvent(
     });
     await markProviderEvent(eventRow.id, { processing_status: "processed" });
     return { ok: true, duplicate: false, action: "marked_failed" };
-  }
-
-  if (
-    event.type.startsWith("charge.refund") ||
-    event.type.startsWith("refund.") ||
-    event.type.startsWith("charge.dispute.")
-  ) {
-    await markProviderEvent(eventRow.id, {
-      processing_status: "processed",
-      failure_reason:
-        "Refund and dispute events are recorded for audit only until ledger adjustment support is implemented.",
-    });
-    return { ok: true, duplicate: false, action: "recorded_audit_only" };
   }
 
   await markProviderEvent(eventRow.id, {
