@@ -1,0 +1,85 @@
+\set ON_ERROR_STOP on
+begin;
+create function pg_temp.ok(v boolean,label text) returns void language plpgsql as $$begin if v is distinct from true then raise exception 'FAIL %',label;end if;raise notice 'PASS %',label;end$$;
+do $$
+declare co uuid:=gen_random_uuid();other uuid:=gen_random_uuid();u uuid:=gen_random_uuid();v uuid:=gen_random_uuid();customer uuid:=gen_random_uuid();c uuid:=gen_random_uuid();c2 uuid:=gen_random_uuid();a uuid;b uuid;foreign_device uuid;p uuid;d staff_notification_deliveries;d2 staff_notification_deliveries;devices jsonb;count_before bigint;
+begin
+ insert into companies values(co),(other);insert into profiles(id) values(u),(v),(customer);
+ insert into company_members(company_id,profile_id,member_role) values(co,u,'dispatcher'),(other,v,'dispatcher');
+ insert into communication_conversations(id,company_id) values(c,co),(c2,other);
+ perform set_config('request.jwt.claim.sub',u::text,true);
+ a:=save_staff_push_subscription(co,'https://web.push.apple.com/general-a',repeat('A',87),repeat('A',22),array['inbound_sms','ai_needs_attention']);
+ b:=save_staff_push_subscription(co,'https://web.push.apple.com/general-b',repeat('A',87),repeat('A',22),array['inbound_sms']);
+ perform set_config('request.jwt.claim.sub',v::text,true);
+ foreign_device:=save_staff_push_subscription(other,'https://web.push.apple.com/general-other',repeat('A',87),repeat('A',22),array['inbound_sms']);
+ insert into communication_messages values(gen_random_uuid(),c,'sms','inbound','customer');
+ perform pg_temp.ok((select count(*)=1 from staff_notification_deliveries),'real committed event creates one Push queue item');
+ insert into communication_messages select * from communication_messages on conflict do nothing;
+ perform pg_temp.ok((select count(*)=1 from staff_notification_deliveries),'duplicate canonical event does not duplicate delivery');
+ perform pg_temp.ok((select bool_and(recipient_profile_id=u and company_id=co) from staff_notifications),'recipient company routing');
+ perform pg_temp.ok(not exists(select 1 from staff_notifications where recipient_profile_id=customer),'no customer notification');
+ perform pg_temp.ok(not exists(select 1 from staff_notification_deliveries where channel<>'push'),'no automatic customer SMS or Telegram');
+ perform pg_temp.ok(not has_function_privilege('authenticated','claim_general_staff_push(integer)','execute') and not has_function_privilege('anon','claim_general_staff_push(integer)','execute'),'browser claims denied');
+ perform pg_temp.ok(has_function_privilege('service_role','claim_general_staff_push(integer)','execute'),'service claim granted');
+ perform pg_temp.ok(not has_function_privilege('service_role','claim_staff_notification_deliveries(text[],integer)','execute') and not has_function_privilege('service_role','prepare_staff_push_devices(uuid,uuid)','execute'),'old pilot guard grants preserved');
+ update staff_notification_preferences set push_enabled=false where company_id=co;
+ perform pg_temp.ok((select count(*)=0 from claim_general_staff_push(20)),'opt-out blocks claim');
+ perform pg_temp.ok((select bool_and(status='permanently_failed') from staff_notification_deliveries),'opt-out terminalizes pending deliveries');
+ update staff_notification_deliveries set status='queued'; -- Synthetic fixture reset for separate quiet-hours case.
+ update staff_notification_preferences set push_enabled=true,quiet_start='00:00',quiet_end='00:00' where company_id=co;
+ perform pg_temp.ok((select count(*)=0 from claim_general_staff_push(20)),'quiet hours block claim');
+ update staff_notification_preferences set quiet_start=null,quiet_end=null where company_id=co;
+ update company_members set member_status='suspended',suspended_at=clock_timestamp() where profile_id=u;
+ perform pg_temp.ok((select count(*)=0 from claim_general_staff_push(20)),'suspended staff blocked');
+ update company_members set member_status='active',suspended_at=null where profile_id=u;
+ update staff_notification_deliveries set status='queued'; -- Synthetic fixture reset for subsequent cases.
+ -- Busy tenant has several older events; sparse tenant must get the next turn.
+ insert into communication_messages select gen_random_uuid(),c,'sms','inbound','customer' from generate_series(1,4);
+ select * into d from claim_general_staff_push(1);
+ insert into communication_messages values(gen_random_uuid(),c2,'sms','inbound','customer');
+ select * into d2 from claim_general_staff_push(1);
+ perform pg_temp.ok((select company_id=other from staff_notifications where id=d2.notification_id),'fair next turn for sparse company');
+ devices:=prepare_general_staff_push(d.id,d.lease_token);
+ perform pg_temp.ok(jsonb_array_length(devices)=2,'only recipient devices prepared');
+ perform pg_temp.ok(not reserve_staff_push_device(d.id,d.lease_token,foreign_device),'foreign company device denied');
+ perform pg_temp.ok(reserve_staff_push_device(d.id,d.lease_token,a),'owned active device reserved');
+ perform finish_staff_push_device(d.id,d.lease_token,a,'accepted',201);
+ perform pg_temp.ok(not reserve_staff_push_device(d.id,d.lease_token,a),'accepted device never resent');
+ perform pg_temp.ok(reserve_staff_push_device(d.id,d.lease_token,b),'second owned device reserved');
+ perform finish_staff_push_device(d.id,d.lease_token,b,'retryable',429);
+ perform finish_staff_notification_delivery(d.id,d.lease_token,'retryable',null,null,null,120);
+ perform pg_temp.ok((select status='failed' and next_attempt_at>clock_timestamp()+interval '100 seconds' from staff_notification_deliveries where id=d.id),'known rejection backoff persisted');
+ update staff_notification_deliveries set next_attempt_at=clock_timestamp()-interval '1 second' where id=d.id;
+ -- Isolate retry candidate from other synthetic events for this assertion.
+ update staff_notification_deliveries set next_attempt_at=clock_timestamp()+interval '1 hour' where id<>d.id and status='queued';
+ select * into d from claim_general_staff_push(1);
+ devices:=prepare_general_staff_push(d.id,d.lease_token);
+ perform pg_temp.ok((select count(*)=1 from jsonb_array_elements(devices) e where e->>'status'='accepted'),'retry retains accepted-device state');
+ perform pg_temp.ok(not reserve_staff_push_device(d.id,d.lease_token,a),'retry cannot resend accepted device');
+ perform pg_temp.ok(reserve_staff_push_device(d.id,d.lease_token,b),'known-rejected device can retry');
+ perform finish_staff_push_device(d.id,d.lease_token,b,'permanent',410);
+ perform pg_temp.ok((select status='expired' from staff_push_subscriptions where id=b),'410 disables expired subscription');
+ perform finish_staff_notification_delivery(d.id,d.lease_token,'unknown');
+ perform pg_temp.ok((select status='permanently_failed' from staff_notification_deliveries where id=d.id),'uncertain outcome terminal');
+ update staff_notification_deliveries set lease_until=clock_timestamp()-interval '1 second' where id=d2.id;
+ perform count(*) from claim_general_staff_push(1);
+ perform pg_temp.ok((select error_code='delivery_outcome_unknown' from staff_notification_deliveries where id=d2.id),'expired lease quarantined');
+ update staff_notification_deliveries set attempt_count=5,status='failed' where status='queued';
+ perform count(*) from claim_general_staff_push(1);
+ perform pg_temp.ok(not exists(select 1 from staff_notification_deliveries where status='failed' and attempt_count=5),'retry cap enforced');
+ update staff_notification_preferences set push_enabled=true where company_id=co;
+ p:=create_staff_push_pilot(co,u,a,gen_random_uuid());
+ perform pg_temp.ok((select count(*)=0 from claim_general_staff_push(20)),'general claims exclude synthetic pilot');
+ select * into d from staff_notification_deliveries where notification_id=p;
+ perform pg_temp.ok(d.attempt_count=0 and d.status='queued','pilot untouched by general recovery');
+ devices:=claim_staff_push_pilot(p,u,a,co);
+ perform pg_temp.ok(devices is not null,'pilot claim still works');
+ select * into d from staff_notification_deliveries where notification_id=p;
+ perform pg_temp.ok(prepare_general_staff_push(d.id,d.lease_token)='[]'::jsonb,'general fanout rejects pilot lease');
+ perform pg_temp.ok(jsonb_array_length(prepare_staff_push_pilot(d.id,d.lease_token))=1,'pilot still single-device');
+ perform pg_temp.ok((staff_push_delivery_metrics()->>'pending')::integer>=0,'aggregate observability RPC');
+ perform set_config('request.jwt.claim.sub',u::text,true);
+ perform revoke_staff_push_subscription(co,'https://web.push.apple.com/general-a');
+ perform pg_temp.ok(prepare_staff_push_pilot(d.id,d.lease_token)='[]'::jsonb,'revoked device cannot be prepared');
+end$$;
+rollback;

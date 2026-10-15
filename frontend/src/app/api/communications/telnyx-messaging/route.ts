@@ -1,3 +1,4 @@
+import {wakePushAfterCommit} from '@/server/notifications/post-commit-wakeup';
 import { NextResponse } from "next/server";
 
 import {
@@ -6,6 +7,7 @@ import {
 } from "@/server/communications/telnyx-sms-transport";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 export async function POST(request: Request) {
   const rawBody = await request.text();
@@ -30,6 +32,8 @@ export async function POST(request: Request) {
   }
 
   const result = await handleTelnyxMessagingWebhook(payload);
+  // Handler awaits the canonical message INSERT/RPC commit before returning 200.
+  if(result.ok && result.status===200 && (payload as {data?:{event_type?:string}})?.data?.event_type==='message.received')wakePushAfterCommit();
   return NextResponse.json(
     { ok: result.ok, message: result.message },
     { status: result.status },

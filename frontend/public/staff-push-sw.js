@@ -2,7 +2,7 @@
 function safePushPath(value) {
  if(typeof value!=='string')return '/dashboard';
  const uuid='[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
- if(value==='/dashboard' || new RegExp('^/dashboard/leads/'+uuid+'$').test(value) || new RegExp('^/dashboard/communications\\?conversation='+uuid+'&view=detail$').test(value))return value;
+ if(value==='/dashboard' || new RegExp('^/dashboard/leads/'+uuid+'(?:\\?tab=appointment|\\?tab=finance&financeSection=(?:estimates|payments))?$').test(value) || new RegExp('^/dashboard/communications\\?conversation='+uuid+'&view=detail$').test(value))return value;
  return '/dashboard';
 }
 self.addEventListener('push',event=>{

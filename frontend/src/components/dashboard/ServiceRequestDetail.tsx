@@ -2380,7 +2380,9 @@ export function ServiceRequestDetail({
         }
 
         setActiveJobTab("estimate");
-        setIsFinanceEstimatesOpen(true);
+        const paymentDestination = params.get("financeSection") === "payments";
+        setIsFinanceEstimatesOpen(!paymentDestination);
+        if (paymentDestination) setIsFinancePaymentsOpen(true);
         setManualEstimateId(null);
         setFinanceEstimateMode("home");
         return;

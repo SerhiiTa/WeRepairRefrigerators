@@ -16,14 +16,14 @@ export interface DeliveryStore {
 // request timeout, and report retryable ONLY if the provider definitely did not accept.
 // Ambiguous timeouts are unknown; accepted != sent. Future receipt handlers must authenticate.
 export type Adapter = (recipient:Recipient,dedupeKey:string,signal:AbortSignal,claim:Claim)=>Promise<Outcome>;
-export async function runDeliveryBatch(store:DeliveryStore,adapters:Partial<Record<Channel,Adapter>>) {
+export async function runDeliveryBatch(store:DeliveryStore,adapters:Partial<Record<Channel,Adapter>>,options:{maxClaims?:number;budgetMs?:number}={}) {
  if(typeof window!=='undefined') throw new Error('Server worker only');
  const channels=(['push','telegram','sms'] as const).filter(c=>adapters[c]);
  if(channels.length===0) return {claimed:0,finished:0};
  // One claim at a time keeps later items from expiring while earlier providers are slow.
  let claimed=0,finished=0;
  const started=Date.now();
- while(claimed<3 && Date.now()-started<20_000){
+ while(claimed<Math.min(20,options.maxClaims??3) && Date.now()-started<Math.min(20000,options.budgetMs??20000)){
   const rows=await store.claim(channels,1);
   if(rows.length===0) break;
   const claim=rows[0];claimed++;

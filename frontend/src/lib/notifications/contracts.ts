@@ -5,8 +5,14 @@ export type StaffNotification = {
 };
 export type NotificationInbox = {items:StaffNotification[]; unread_count:number; as_of:string};
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export function notificationHref(n:Pick<StaffNotification,'conversation_id'|'service_request_id'>):string|null {
- if(n.service_request_id && uuid.test(n.service_request_id)) return `/dashboard/leads/${n.service_request_id}`;
+export function notificationHref(n:Pick<StaffNotification,'conversation_id'|'service_request_id'> & {event_type?:string}):string|null {
+ if(n.service_request_id && uuid.test(n.service_request_id)){
+  const base=`/dashboard/leads/${n.service_request_id}`;
+  if(n.event_type==='estimate_approved')return `${base}?tab=finance&financeSection=estimates`;
+  if(n.event_type==='payment_confirmed'||n.event_type==='refund_confirmed')return `${base}?tab=finance&financeSection=payments`;
+  if(n.event_type==='appointment_created'||n.event_type==='appointment_changed')return `${base}?tab=appointment`;
+  return base;
+ }
  if(n.conversation_id && uuid.test(n.conversation_id)) return `/dashboard/communications?${new URLSearchParams({conversation:n.conversation_id,view:'detail'})}`;
  return null;
 }

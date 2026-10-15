@@ -13,7 +13,7 @@ export function createPushAdapter(rpc:DeliveryRpc,send:PushSend,pilotSubscriptio
   if(!Array.isArray(devices) || devices.length===0) return {kind:'permanent',errorCode:'no_active_staff_devices'};
   if(pilotSubscriptionId && (devices.length!==1 || devices[0].id!==pilotSubscriptionId))return {kind:'permanent',errorCode:'pilot_device_mismatch'};
   const payload=JSON.stringify({title:'HomeFixOS',kind:pilotSubscriptionId?'staff_push_pilot':undefined,body:pilotSubscriptionId?'Synthetic staff Push pilot.':'A staff update is available.',tag:dedupeKey,
-   href:notificationHref({conversation_id:recipient.conversationId,service_request_id:recipient.jobId})??'/dashboard'});
+   href:notificationHref({conversation_id:recipient.conversationId,service_request_id:recipient.jobId,event_type:recipient.eventType})??'/dashboard'});
   const results=await Promise.all(devices.map(async(device):Promise<Outcome>=>{
    if(device.status==='accepted')return {kind:'accepted'};
    if(device.status==='permanent')return {kind:'permanent'};

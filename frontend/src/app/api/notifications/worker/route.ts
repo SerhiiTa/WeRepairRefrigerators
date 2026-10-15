@@ -1,3 +1,4 @@
+import {processGeneralPush} from '@/server/notifications/general-push';
 import {NextResponse} from 'next/server';
 import webPush from 'web-push';
 import {getSupabaseServiceRoleClient} from '@/lib/supabase/service-role';
@@ -10,14 +11,19 @@ import {HOMEFIX_PRIVATE_COMPANY_ID} from '@/lib/auth/homefix-private-access';
 export const runtime='nodejs';
 export const maxDuration=60;
 export const dynamic='force-dynamic';
-// General delivery is intentionally disabled. No scheduler or batch invocation path.
+// General delivery requires explicit secret-authorized recovery mode; pilot still requires staff session.
 export async function POST(request:Request){
  if(!workerAuthorized(request.headers.get('authorization'),process.env.CRON_SECRET))return NextResponse.json({error:'Unauthorized'},{status:401});
  let pilot;
  try{
   if(Number(request.headers.get('content-length')??0)>2048)throw new Error('Oversized');
-  const raw=await request.text();if(raw.length>2048)throw new Error('Oversized');pilot=parsePilotRequest(JSON.parse(raw));
- }catch{return NextResponse.json({error:'General worker disabled. Exact pilot mode and IDs required.'},{status:403});}
+  const raw=await request.text();if(raw.length>2048)throw new Error('Oversized');const body=JSON.parse(raw);
+  if(body?.mode==='recovery'){
+   try{return NextResponse.json(await processGeneralPush('recovery'));}
+   catch{return NextResponse.json({error:'Recovery unavailable; queue retained.'},{status:503});}
+  }
+  pilot=parsePilotRequest(body);
+ }catch{return NextResponse.json({error:'Explicit recovery or exact pilot mode and IDs required.'},{status:403});}
  const staffToken=request.headers.get('x-homefix-staff-token');
  if(!staffToken)return NextResponse.json({error:'Staff session required'},{status:401});
  const access=await requireHomeFixPrivateAccess(new Request(request.url,{headers:{authorization:`Bearer ${staffToken}`}}));
