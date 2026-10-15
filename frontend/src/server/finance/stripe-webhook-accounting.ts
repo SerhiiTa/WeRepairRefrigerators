@@ -8,6 +8,8 @@ import { getSupabaseServiceRoleClient } from "@/lib/supabase/service-role";
 import { ensurePaymentReceipt } from "./payment-receipts";
 import { getStripeRuntimeConfig } from "./stripe-config";
 
+import { isSandboxTestContextAllowed } from "./sandbox-test-policy";
+
 type CheckoutAttempt = {
   id: string;
   amount: number | string;
@@ -361,13 +363,8 @@ async function updateAttempt(attemptId: string, values: Record<string, unknown>)
 async function isAttemptAllowedForRuntime(attempt: CheckoutAttempt) {
   const config = getStripeRuntimeConfig();
 
-  if (config.mode !== "production_sandbox_pilot") {
-    return true;
-  }
-
-  if (!config.pilotCustomerId) {
-    return false;
-  }
+  if (config.mode === "mock") return true;
+  if (config.mode !== "test" && config.mode !== "production_sandbox_pilot") return false;
 
   const serviceRole = getSupabaseServiceRoleClient();
 
@@ -404,8 +401,11 @@ async function isAttemptAllowedForRuntime(attempt: CheckoutAttempt) {
   return Boolean(
     data?.company_id === attempt.company_id &&
       customerCompanyId === data.company_id &&
-      data?.customer_id &&
-      data.customer_id.toLowerCase() === config.pilotCustomerId,
+      isSandboxTestContextAllowed({
+        companyId: data.company_id,
+        customerCompanyId,
+        customerId: data.customer_id ?? null,
+      }),
   );
 }
 

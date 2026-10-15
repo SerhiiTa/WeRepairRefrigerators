@@ -12,6 +12,8 @@ import {
   type StripeRuntimeConfig,
 } from "./stripe-config";
 
+import { isSandboxTestContextAllowed } from "./sandbox-test-policy";
+
 type CheckoutTargetType = "estimate" | "invoice";
 type CheckoutKind = "deposit" | "custom_deposit" | "pay_in_full" | "balance_due";
 
@@ -294,8 +296,6 @@ function getStripePublicEligibilityDiagnosticEnv() {
   const publishableKey =
     process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY?.trim() ?? "";
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET?.trim() ?? "";
-  const pilotCustomerId =
-    process.env.WRA_STRIPE_SANDBOX_PILOT_CUSTOMER_ID?.trim() ?? "";
 
   return {
     hasSecretKey: Boolean(secretKey),
@@ -306,8 +306,6 @@ function getStripePublicEligibilityDiagnosticEnv() {
     publishableKeyLooksTest: publishableKey.startsWith("pk_test_"),
     hasWebhookSecret: Boolean(webhookSecret),
     webhookSecretLooksValid: webhookSecret.startsWith("whsec_"),
-    hasPilotCustomerId: Boolean(pilotCustomerId),
-    pilotCustomerIdLooksUuid: UUID_PATTERN.test(pilotCustomerId),
     mockModeEnabled: process.env.STRIPE_MOCK_MODE === "1",
     nodeEnv: process.env.NODE_ENV ?? "unknown",
   };
@@ -382,20 +380,9 @@ function assertPilotCustomerAllowed(
   config: StripeRuntimeConfig,
   context: PaymentTargetContext,
 ) {
-  if (config.mode !== "production_sandbox_pilot") {
-    return;
-  }
-
-  if (!config.pilotCustomerId) {
-    throw new Error("Stripe Sandbox Pilot customer is not configured.");
-  }
-
-  if (
-    !context.customerId ||
-    context.customerId.toLowerCase() !== config.pilotCustomerId ||
-    context.customerCompanyId !== context.companyId
-  ) {
-    throw new Error("Stripe Sandbox Pilot is not available for this customer.");
+  if (config.mode === "mock") return;
+  if (context.customerCompanyId !== context.companyId || !isSandboxTestContextAllowed(context)) {
+    throw new Error("Stripe Sandbox is not available for this customer. The customer must belong to the configured company.");
   }
 }
 

@@ -41,7 +41,7 @@ test("Stripe QA config allows only explicit local Test Mode keys", () => {
   assert.doesNotMatch(devQa, /renameSync|unlinkSync/);
 
   assert.match(stripeConfig, /Live Stripe keys are not allowed/);
-  assert.match(stripeConfig, /WRA_STRIPE_SANDBOX_PILOT_CUSTOMER_ID/);
+  assert.doesNotMatch(stripeConfig, /WRA_STRIPE_SANDBOX_PILOT_CUSTOMER_ID|WRA_STRIPE_SANDBOX_TEST_CUSTOMER_IDS/);
   assert.match(stripeConfig, /production_sandbox_pilot/);
   assert.match(stripeConfig, /process\.env\.NODE_ENV !== "production"/);
   assert.match(stripeConfig, /Stripe mock mode is only allowed in local QA/);

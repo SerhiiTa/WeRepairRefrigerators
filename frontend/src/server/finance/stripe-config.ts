@@ -14,9 +14,7 @@ export type StripeRuntimeConfig = {
 };
 
 let cachedStripeClient: Stripe | null = null;
-
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+let cachedStripeSecret: string | null = null;
 
 function isLocalQaStripeEnabled() {
   return process.env.NODE_ENV !== "production"
@@ -24,27 +22,11 @@ function isLocalQaStripeEnabled() {
     && process.env.WRA_QA_ENABLE_STRIPE_TEST_MODE === "1";
 }
 
-function getPilotCustomerId() {
-  const pilotCustomerId =
-    process.env.WRA_STRIPE_SANDBOX_PILOT_CUSTOMER_ID?.trim() ?? "";
-
-  if (!pilotCustomerId) {
-    return null;
-  }
-
-  if (!UUID_PATTERN.test(pilotCustomerId)) {
-    throw new Error("Stripe Sandbox Pilot customer id must be a valid UUID.");
-  }
-
-  return pilotCustomerId.toLowerCase();
-}
-
 export function getStripeRuntimeConfig(): StripeRuntimeConfig {
   const secretKey = process.env.STRIPE_SECRET_KEY?.trim() ?? "";
   const publishableKey =
     process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY?.trim() ?? "";
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET?.trim() ?? "";
-  const pilotCustomerId = getPilotCustomerId();
 
   if (process.env.STRIPE_MOCK_MODE === "1") {
     if (!isLocalQaStripeEnabled()) {
@@ -62,7 +44,7 @@ export function getStripeRuntimeConfig(): StripeRuntimeConfig {
   if (!secretKey) {
     return {
       mode: "disabled",
-      pilotCustomerId,
+      pilotCustomerId: null,
       publishableKey: publishableKey || null,
       webhookSecret: webhookSecret || null,
     };
@@ -84,24 +66,7 @@ export function getStripeRuntimeConfig(): StripeRuntimeConfig {
     throw new Error("Stripe webhook secret must start with whsec_.");
   }
 
-  if (pilotCustomerId) {
-    return {
-      mode: "production_sandbox_pilot",
-      pilotCustomerId,
-      publishableKey: publishableKey || null,
-      webhookSecret: webhookSecret || null,
-    };
-  }
-
-  if (!isLocalQaStripeEnabled()) {
-    return {
-      mode: "disabled",
-      pilotCustomerId: null,
-      publishableKey: publishableKey || null,
-      webhookSecret: webhookSecret || null,
-    };
-  }
-
+  // As in Production, credentials select the Stripe account. There is no independent account pin.
   return {
     mode: "test",
     pilotCustomerId: null,
@@ -117,8 +82,9 @@ export function getStripeClient(): Stripe | null {
     return null;
   }
 
-  if (!cachedStripeClient) {
+  if (!cachedStripeClient || cachedStripeSecret !== process.env.STRIPE_SECRET_KEY?.trim()) {
     cachedStripeClient = new Stripe(process.env.STRIPE_SECRET_KEY?.trim() ?? "");
+    cachedStripeSecret = process.env.STRIPE_SECRET_KEY?.trim() ?? null;
   }
 
   return cachedStripeClient;

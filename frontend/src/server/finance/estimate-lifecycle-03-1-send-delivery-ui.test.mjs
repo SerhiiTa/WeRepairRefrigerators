@@ -163,7 +163,6 @@ includesAll(telnyxTransport, [
   "isLocalQaSmsMockEnabled",
   "WRA_QA_ENVIRONMENT",
   "WRA_DISABLE_PROVIDER_CALLS",
-  "WRA_PRODUCTION_SMS_TEST_RECIPIENT",
   "TELNYX_MOCK_MODE",
   "NEXT_PUBLIC_SUPABASE_URL",
   "getOrCreateLocalQaSmsSourceAccount",
@@ -178,12 +177,10 @@ assert.match(
 assert.match(
   telnyxTransport,
   /function checkOutboundSmsRecipientAllowed/,
-  "Production controlled testing must centralize outbound SMS recipient allowlisting.",
+  "Outbound SMS must validate recipients before sending.",
 );
 includesAll(telnyxTransport, [
-  "WRA_PRODUCTION_SMS_TEST_RECIPIENT",
-  "Outbound SMS blocked by controlled-testing recipient allowlist.",
-  "Outbound SMS blocked because the controlled-testing recipient allowlist is invalid.",
+  "SMS recipient must be a valid international phone number.",
 ]);
 assert.match(
   telnyxTransport,

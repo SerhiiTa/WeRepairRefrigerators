@@ -158,54 +158,12 @@ function isLocalQaSmsMockEnabled(): boolean {
   );
 }
 
-function getProductionSmsTestRecipient(): string | null {
-  const configured =
-    process.env.WRA_PRODUCTION_SMS_TEST_RECIPIENT?.trim() ?? "";
-
-  if (!configured) {
-    return null;
-  }
-
-  const normalized = normalizeSmsPhone(configured);
-
-  if (!normalized) {
-    throw new Error("WRA_PRODUCTION_SMS_TEST_RECIPIENT must be a valid phone number.");
-  }
-
-  return normalized;
-}
-
 function checkOutboundSmsRecipientAllowed(toPhone: string):
   | { ok: true }
   | { ok: false; status: number; message: string } {
-  if (isLocalQaSmsMockEnabled()) {
-    return { ok: true };
+  if (!/^\+[1-9]\d{7,14}$/.test(toPhone)) {
+    return { ok: false, status: 400, message: "SMS recipient must be a valid international phone number." };
   }
-
-  let allowedRecipient: string | null;
-
-  try {
-    allowedRecipient = getProductionSmsTestRecipient();
-  } catch {
-    return {
-      ok: false,
-      status: 503,
-      message: "Outbound SMS blocked because the controlled-testing recipient allowlist is invalid.",
-    };
-  }
-
-  if (!allowedRecipient) {
-    return { ok: true };
-  }
-
-  if (toPhone !== allowedRecipient) {
-    return {
-      ok: false,
-      status: 403,
-      message: "Outbound SMS blocked by controlled-testing recipient allowlist.",
-    };
-  }
-
   return { ok: true };
 }
 
