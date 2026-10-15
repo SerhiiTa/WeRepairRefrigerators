@@ -17,11 +17,13 @@ type ConversationUnreadRow = {
 };
 
 type CommunicationsAttentionContextValue = {
+  companyId: string | null;
   unreadCount: number;
 };
 
 const CommunicationsAttentionContext =
   createContext<CommunicationsAttentionContextValue>({
+    companyId: null,
     unreadCount: 0,
   });
 
@@ -147,7 +149,7 @@ export function CommunicationsAttentionProvider({
     [conversationUnreadCounts],
   );
 
-  const value = useMemo(() => ({ unreadCount }), [unreadCount]);
+  const value = useMemo(() => ({ unreadCount, companyId }), [unreadCount, companyId]);
 
   return (
     <CommunicationsAttentionContext.Provider value={value}>

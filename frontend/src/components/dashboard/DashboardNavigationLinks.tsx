@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { NotificationBell } from "./notifications/NotificationCenter";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -87,7 +88,7 @@ function isActivePath(
   return href === "/dashboard" ? pathname === href : pathname.startsWith(href);
 }
 
-export function DashboardNavigationLinks({
+function DashboardNavigationLinksContent({
   variant,
 }: DashboardNavigationLinksProps) {
   const pathname = usePathname();
@@ -411,4 +412,8 @@ async function withTimeout<T>(
       }, timeoutMs);
     }),
   ]);
+}
+
+export function DashboardNavigationLinks(props: DashboardNavigationLinksProps) {
+ return <div><NotificationBell /><DashboardNavigationLinksContent {...props} /></div>;
 }

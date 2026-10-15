@@ -1509,6 +1509,9 @@ export type Database = {
       };
     };
     Functions: {
+      list_staff_notifications: { Args: {p_company: string}; Returns: Json };
+      read_staff_notifications: { Args: {p_company: string; p_id?: string | null; p_before?: string | null}; Returns: undefined };
+
       can_access_communication_conversation: {
         Args: {
           target_conversation_id: string;

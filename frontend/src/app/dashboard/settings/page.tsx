@@ -1,3 +1,4 @@
+import { StaffPushSettings } from "@/components/dashboard/notifications/StaffPushSettings";
 import { CompanyBaseAddressSettings } from "@/components/dashboard/CompanyBaseAddressSettings";
 import { PriceBookSettings } from "@/components/dashboard/PriceBookSettings";
 
@@ -19,6 +20,7 @@ export default function SettingsPage() {
 
       <CompanyBaseAddressSettings />
       <PriceBookSettings />
+      <StaffPushSettings />
     </div>
   );
 }

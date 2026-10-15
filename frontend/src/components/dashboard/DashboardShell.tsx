@@ -1,3 +1,4 @@
+import { NotificationProvider } from "./notifications/NotificationCenter";
 import { DashboardAuthGate } from "./DashboardAuthGate";
 import { DashboardSidebar } from "./DashboardSidebar";
 import { DashboardTopbar } from "./DashboardTopbar";
@@ -11,6 +12,7 @@ export function DashboardShell({ children }: DashboardShellProps) {
   return (
     <DashboardAuthGate>
       <CommunicationsAttentionProvider>
+      <NotificationProvider>
         <main className="min-h-screen bg-[#F7F9FC] font-sans text-[#0F172A]">
           <div className="flex min-h-screen w-full">
             <DashboardSidebar />
@@ -22,6 +24,7 @@ export function DashboardShell({ children }: DashboardShellProps) {
             </div>
           </div>
         </main>
+      </NotificationProvider>
       </CommunicationsAttentionProvider>
     </DashboardAuthGate>
   );
