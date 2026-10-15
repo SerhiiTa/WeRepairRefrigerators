@@ -1,5 +1,6 @@
 'use client';
 import {useEffect,useState} from 'react';
+import {OwnerTestPush} from './OwnerTestPush';
 import {getSupabaseBrowserClient} from '@/lib/supabase/client';
 const events=['missed_call','inbound_sms','website_request','customer_reply','ai_needs_attention','technician_assigned','appointment_created','appointment_changed','estimate_approved','payment_confirmed','refund_confirmed'];
 const recommended=['missed_call','inbound_sms','ai_needs_attention'];
@@ -81,5 +82,6 @@ export function StaffPushSettings(){
   <p className="mt-2 text-sm text-slate-600">Choose events for your account. Existing quiet hours apply. Push service acceptance does not confirm that a notification was seen.</p>
   <fieldset disabled={!supported||busy} className="mt-3 grid gap-1 sm:grid-cols-2"><legend className="sr-only">Push events</legend>{events.map(event=><label key={event} className="flex min-h-11 items-center gap-3 text-sm"><input type="checkbox" checked={selected.includes(event)} onChange={e=>setSelected(old=>e.target.checked?[...old,event]:old.filter(v=>v!==event))}/>{event.replaceAll('_',' ')}</label>)}</fieldset>
   <div className="mt-3 flex flex-wrap gap-3"><button type="button" disabled={!supported||busy} onClick={()=>void enable()} className="min-h-11 rounded-xl bg-blue-600 px-4 text-white disabled:opacity-50">{enabled?'Save Push preferences':'Enable Push'}</button><button type="button" disabled={!enabled||busy} onClick={()=>void disable()} className="min-h-11 rounded-xl border border-slate-300 px-4 disabled:opacity-50">Disable Push</button></div>
+  <OwnerTestPush key={userId} userId={userId}/>
  </section>;
 }
