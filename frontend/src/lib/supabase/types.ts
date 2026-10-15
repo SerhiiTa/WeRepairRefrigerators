@@ -1632,6 +1632,10 @@ export type Database = {
         };
         Returns: Json;
       };
+      save_conversation_job_rpc: {
+        Args: { p_conversation_id: string; p_fields?: Json; p_allow_possible_duplicate?: boolean };
+        Returns: Json;
+      };
       ensure_communication_job_intake_rpc: {
         Args: {
           p_conversation_id: string;

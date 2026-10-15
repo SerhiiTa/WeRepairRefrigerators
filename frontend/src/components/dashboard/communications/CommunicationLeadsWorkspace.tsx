@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { getLeadReturnTo, getLeadConversationHref } from "./lead-navigation";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useState } from "react";
 
@@ -838,7 +839,8 @@ export function CommunicationLeadsWorkspace() {
   );
 }
 
-export function CommunicationLeadDetail({ leadId }: { leadId: string }) {
+export function CommunicationLeadDetail({ leadId, returnTo }: { leadId: string; returnTo?: string }) {
+  const backHref = getLeadReturnTo(returnTo);
   const [state, setState] = useState<LeadDetailState>(leadDetailInitialState);
   const [reloadToken, setReloadToken] = useState(0);
   const [jobState, setJobState] = useState<ActionState>({ status: "idle", message: null });
@@ -871,6 +873,7 @@ export function CommunicationLeadDetail({ leadId }: { leadId: string }) {
   }, [leadId, reloadToken]);
 
   const lead = state.lead;
+  const conversationHref = getLeadConversationHref(lead?.conversation_id ?? null);
   const jobId = lead?.service_request_id ?? state.intake?.linked_service_request_id ?? state.job?.id ?? null;
   const jobBlockedReason = getJobBlockedReason(lead, state.intake);
   const canCreateJob = Boolean(lead && (state.intake || lead.conversation_id) && !jobId && !jobBlockedReason);
@@ -1046,8 +1049,8 @@ export function CommunicationLeadDetail({ leadId }: { leadId: string }) {
   if (!lead || state.status === "error") {
     return (
       <main className="mx-auto max-w-3xl space-y-4">
-        <Link className="text-sm font-bold text-[#0F6BFF]" href="/dashboard/communication-leads">
-          Back to Leads
+        <Link className="text-sm font-bold text-[#0F6BFF]" href={backHref} replace>
+          Back
         </Link>
         <p className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm font-semibold text-amber-800">
           {state.error ?? "Lead is unavailable."}
@@ -1059,8 +1062,8 @@ export function CommunicationLeadDetail({ leadId }: { leadId: string }) {
   return (
     <main className="-mx-4 -my-5 min-h-screen max-w-none space-y-3 bg-[#F6F8FB] px-4 pb-20 pt-4 sm:-mx-6 lg:mx-auto lg:my-0 lg:max-w-3xl lg:px-0">
       <div className="flex h-10 items-center justify-between">
-        <Link className="text-base font-medium text-[#1677FF]" href="/dashboard/communication-leads">
-          ‹ Leads
+        <Link className="text-base font-medium text-[#1677FF]" href={backHref} replace>
+          ‹ {backHref.startsWith("/dashboard/communications?") ? "Conversation" : "Leads"}
         </Link>
         <button
           aria-label="More lead actions"
@@ -1105,18 +1108,16 @@ export function CommunicationLeadDetail({ leadId }: { leadId: string }) {
           </a>
           <Link
             className={`flex h-[68px] flex-col items-center justify-center gap-1 rounded-xl border text-center text-xs font-bold ${
-              lead.conversation_id
+              conversationHref
                 ? "border-[#E4E7EC] bg-white text-[#101828]"
                 : "pointer-events-none border-[#E4E7EC] bg-white text-[#98A2B3]"
             }`}
-            href={
-              lead.conversation_id
-                ? `/dashboard/communications?conversation=${lead.conversation_id}&view=detail`
-                : "#"
-            }
+            aria-disabled={!conversationHref}
+            tabIndex={conversationHref ? undefined : -1}
+            href={conversationHref ?? "#"}
           >
             <MessageIcon className="h-6 w-6 text-[#1677FF]" />
-            Message
+            {conversationHref ? "Message" : "No conversation"}
           </Link>
           {jobId ? (
             <Link
@@ -1380,7 +1381,7 @@ export function CommunicationLeadDetail({ leadId }: { leadId: string }) {
       ) : null}
 
       <SectionCard title="Communication">
-        {lead.conversation_id ? (
+        {conversationHref ? (
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#EAF3FF] text-[#1677FF]">
               <MessageIcon className="h-5 w-5" />
@@ -1391,7 +1392,7 @@ export function CommunicationLeadDetail({ leadId }: { leadId: string }) {
             </div>
             <Link
               className="rounded-lg border border-[#1677FF] px-4 py-2 text-sm font-bold text-[#1677FF]"
-              href={`/dashboard/communications?conversation=${lead.conversation_id}&view=detail`}
+              href={conversationHref!}
             >
               Open
             </Link>

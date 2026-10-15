@@ -1,7 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import { CommunicationSourceIcon } from "./CommunicationSourceIcon";
+import { getConversationAttention, isConversationVisible, matchesInboxChannel, matchesInboxWorkflow } from "./communication-source";
+import { useRouter } from "next/navigation";
+import { startTransition, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
 
 import { BrowserCallModal } from "@/components/dashboard/DashboardCustomers";
 import {
@@ -173,7 +176,8 @@ const emptyDetailData: ConversationDetailData = {
 };
 
 type ContextTab = "customer" | "lead" | "job" | "activity";
-type ChannelFilter = "all" | "calls" | "texts" | "unread";
+type ChannelFilter = "all" | "calls" | "texts" | "unread" | "messages" | "web";
+type WorkflowFilter = "inbox" | "assigned" | "archived" | "unread" | "needs_action";
 
 function mapConversation(row: ConversationRow): HubConversation {
   return {
@@ -242,23 +246,7 @@ function getSourceLabel(sourceType: DatabaseCommunicationSourceType): string {
 }
 
 function hasConversationChannel(conversation: HubConversation, channel: ChannelFilter): boolean {
-  if (channel === "all") {
-    return true;
-  }
-  if (channel === "unread") {
-    return conversation.unreadCount > 0;
-  }
-
-  return conversation.threadSourceTypes.some((sourceType) => {
-    if (channel === "calls") {
-      return sourceType === "phone";
-    }
-    if (channel === "texts") {
-      return sourceType === "sms";
-    }
-
-    return false;
-  });
+  return matchesInboxChannel(conversation.sourceType, channel, conversation.unreadCount);
 }
 
 function getConversationTitle(conversation: HubConversation): string {
@@ -637,65 +625,6 @@ function getJsonString(value: Json | null | undefined, key: string): string | nu
   return typeof entry === "string" && entry.trim() ? entry.trim() : null;
 }
 
-function isTrustedWebsiteRequest(detail: ConversationDetailData, conversation: HubConversation) {
-  return (
-    conversation.sourceType === "website_form" &&
-    Boolean(conversation.inboundSourceId) &&
-    Boolean(detail.intake?.id)
-  );
-}
-
-function getCreateJobBlockedReason(
-  detail: ConversationDetailData,
-  conversation: HubConversation | null,
-): string | null {
-  if (!conversation) {
-    return "Select a conversation before creating a Job.";
-  }
-
-  const intake = detail.intake;
-  if (!intake) {
-    return "Request details are required before creating a Job.";
-  }
-
-  if (!isTrustedWebsiteRequest(detail, conversation)) {
-    return "A trusted website request is required before creating a Job.";
-  }
-
-  if (detail.job || intake.linked_service_request_id) {
-    return null;
-  }
-
-  const customerName = [intake.customer_first_name, intake.customer_last_name]
-    .filter(Boolean)
-    .join(" ") || intake.customer_name;
-  if (!customerName?.trim()) {
-    return "Customer name is required before creating a Job.";
-  }
-
-  if (!intake.customer_phone?.trim()) {
-    return "Customer phone is required before creating a Job.";
-  }
-
-  if (!intake.service_address?.trim()) {
-    return "Add service address to create Job.";
-  }
-
-  if (!intake.zip_code?.trim()) {
-    return "Add ZIP code to create Job.";
-  }
-
-  if (!intake.appliance_type?.trim()) {
-    return "Add appliance or service type to create Job.";
-  }
-
-  if (!intake.problem_description?.trim()) {
-    return "Add problem description to create Job.";
-  }
-
-  return null;
-}
-
 function getRequestDetailRows(
   detail: ConversationDetailData,
   conversation: HubConversation,
@@ -739,14 +668,16 @@ function getInitialChannelFilter(): ChannelFilter {
   const value = getInitialQueryParam("channel");
   return value === "calls" ||
     value === "texts" ||
+    value === "messages" ||
+    value === "web" ||
     value === "unread"
     ? value
     : "all";
 }
 
-function getInitialInboxTab(): "inbox" | "assigned" | "archived" {
+function getInitialInboxTab(): WorkflowFilter {
   const value = getInitialQueryParam("box");
-  return value === "assigned" || value === "archived" ? value : "inbox";
+  return value === "assigned" || value === "archived" || value === "unread" || value === "needs_action" ? value : "inbox";
 }
 
 function getStatusLabel(status: string): string {
@@ -1347,37 +1278,9 @@ function getHubReadError(message: string) {
   return "Communications Hub is unavailable right now.";
 }
 
-function getConversationFlags(
-  conversation: CommunicationConversation,
-  detail?: ConversationDetailData | null,
-  hasRecording?: boolean,
-) {
-  const flags: Array<{ label: string; tone: "blue" | "amber" | "emerald" | "slate" | "purple" }> = [];
-
-  if (conversation.status === "needs_action" || conversation.status === "open") {
-    flags.push({ label: "Needs Review", tone: "amber" });
-  }
-
-  if (!conversation.customerId && !detail?.customer) {
-    flags.push({ label: "Missing Customer", tone: "purple" });
-  }
-
-  if (!conversation.linkedServiceRequestId && !detail?.job) {
-    flags.push({ label: "Missing Job", tone: "slate" });
-  }
-
-  if (conversation.linkedServiceRequestId || detail?.job) {
-    flags.push({ label: "Converted", tone: "emerald" });
-  }
-
-  if (hasRecording) {
-    flags.push({ label: "Has Recording", tone: "blue" });
-  }
-
-  return flags;
-}
-
 export function CommunicationsHub() {
+  const router = useRouter();
+  const leadNavigationPendingRef = useRef(false);
   const [hubState, setHubState] = useState<HubState>({
     status: "loading",
     conversations: [],
@@ -1398,7 +1301,7 @@ export function CommunicationsHub() {
   const recordingAudioUrlsRef = useRef<string[]>([]);
   const [activeFilter, setActiveFilter] = useState<ChannelFilter>(getInitialChannelFilter);
   const [inboxTab, setInboxTab] =
-    useState<"inbox" | "assigned" | "archived">(getInitialInboxTab);
+    useState<WorkflowFilter>(getInitialInboxTab);
   const [searchQuery, setSearchQuery] = useState(() => getInitialQueryParam("q") ?? "");
   const [, setContextTab] = useState<ContextTab>("customer");
   const [mobileDetailOpen, setMobileDetailOpen] = useState(
@@ -1430,6 +1333,23 @@ export function CommunicationsHub() {
   const [isBrowserCallOpen, setIsBrowserCallOpen] = useState(false);
   const [expandedTranscriptByCallId, setExpandedTranscriptByCallId] =
     useState<ExpandedTranscriptByCallId>({});
+
+  useEffect(() => {
+    const restoreConversationUrl = () => {
+      if (window.location.pathname !== "/dashboard/communications") return;
+      leadNavigationPendingRef.current = false;
+      startTransition(() => {
+        setSelectedConversationId(getInitialQueryParam("conversation"));
+        setMobileDetailOpen(getInitialQueryParam("view") === "detail" && Boolean(getInitialQueryParam("conversation")));
+        setActiveFilter(getInitialChannelFilter());
+        setInboxTab(getInitialInboxTab());
+        setSearchQuery(getInitialQueryParam("q") ?? "");
+      });
+    };
+    restoreConversationUrl();
+    window.addEventListener("popstate", restoreConversationUrl);
+    return () => window.removeEventListener("popstate", restoreConversationUrl);
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -1902,7 +1822,11 @@ export function CommunicationsHub() {
     }
 
     let canceled = false;
-    const timer = window.setTimeout(() => {
+    let acknowledging = false;
+    const acknowledgeRead = () => {
+      if (canceled || acknowledging) return;
+      if (!isConversationVisible(window.matchMedia("(min-width: 1280px)").matches, mobileDetailOpen, document.visibilityState)) return;
+      acknowledging = true;
       const conversationIds =
         selectedConversation.threadConversationIds.length > 0
           ? selectedConversation.threadConversationIds
@@ -1915,6 +1839,7 @@ export function CommunicationsHub() {
           }),
         ),
       ).then((results) => {
+          acknowledging = false;
           if (results.some(({ error }) => error) || canceled) {
             return;
           }
@@ -1936,17 +1861,21 @@ export function CommunicationsHub() {
             ),
           }));
         });
-    }, 400);
+    };
+    const timer = window.setTimeout(acknowledgeRead, 400);
+    document.addEventListener("visibilitychange", acknowledgeRead);
 
     return () => {
       canceled = true;
       window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", acknowledgeRead);
     };
   }, [
     detailState.status,
     selectedConversation,
     selectedConversationId,
     selectedConversation?.unreadCount,
+    mobileDetailOpen,
   ]);
 
   const filteredConversations = useMemo(() => {
@@ -1955,12 +1884,7 @@ export function CommunicationsHub() {
     return hubState.conversations.filter((conversation) => {
       const matchesFilter =
         activeFilter === "all" || hasConversationChannel(conversation, activeFilter);
-      const matchesInbox =
-        inboxTab === "archived"
-          ? conversation.status === "resolved"
-          : inboxTab === "assigned"
-            ? conversation.status !== "resolved"
-            : conversation.status !== "resolved";
+      const matchesInbox = matchesInboxWorkflow(conversation.status, conversation.unreadCount, inboxTab);
       const haystack = [
         getConversationTitle(conversation),
         conversation.customerPhone,
@@ -1982,6 +1906,8 @@ export function CommunicationsHub() {
     () => ({
       all: hubState.conversations.length,
       calls: hubState.conversations.filter((item) => hasConversationChannel(item, "calls")).length,
+      messages: hubState.conversations.filter((item) => hasConversationChannel(item, "messages")).length,
+      web: hubState.conversations.filter((item) => hasConversationChannel(item, "web")).length,
       texts: hubState.conversations.filter((item) => hasConversationChannel(item, "texts")).length,
       unread: hubState.conversations.filter((item) => hasConversationChannel(item, "unread")).length,
     }),
@@ -2059,6 +1985,14 @@ export function CommunicationsHub() {
       destinationReturnTo,
     )}`;
   const linkedLeadId = detail.lead?.id ?? createdLeadId;
+  const canOpenLinkedLead = Boolean(
+    detailState.status === "ready" &&
+      linkedLeadId &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(linkedLeadId) &&
+      detail.lead?.id === linkedLeadId &&
+      detail.lead.conversation_id &&
+      selectedConversation?.threadConversationIds.includes(detail.lead.conversation_id),
+  );
   const linkedJobId =
     detail.job?.id ??
     detail.intake?.linked_service_request_id ??
@@ -2066,7 +2000,6 @@ export function CommunicationsHub() {
     null;
   const canonicalConversationSummary =
     getCanonicalConversationSummary(selectedConversation);
-  const createJobBlockedReason = getCreateJobBlockedReason(detail, selectedConversation);
   const canCreateJobFromConversation = Boolean(
     selectedConversation &&
       !detail.job &&
@@ -2281,7 +2214,12 @@ export function CommunicationsHub() {
     }
 
     if (linkedLeadId) {
-      window.location.assign(withReturnTo(`/dashboard/communication-leads/${linkedLeadId}`));
+      if (!canOpenLinkedLead || leadNavigationPendingRef.current) return;
+      leadNavigationPendingRef.current = true;
+      if (window.location.pathname + window.location.search !== destinationReturnTo) {
+        window.history.replaceState(window.history.state, "", destinationReturnTo);
+      }
+      router.push(withReturnTo(`/dashboard/communication-leads/${linkedLeadId}`));
       return;
     }
 
@@ -2463,101 +2401,12 @@ export function CommunicationsHub() {
   }
 
   async function handleCreateJobFromConversation() {
-    if (!selectedConversation) {
-      return;
-    }
-
+    if (!selectedConversation || detailState.status !== "ready") return;
     if (linkedJobId) {
-      window.location.assign(withReturnTo(`/dashboard/leads/${linkedJobId}`));
+      router.push(withReturnTo(`/dashboard/leads/${linkedJobId}`));
       return;
     }
-
-    if (createJobBlockedReason) {
-      setCreateJobState({ status: "error", message: createJobBlockedReason });
-      return;
-    }
-
-    setCreateLeadState({ status: "idle", message: null });
-    setCreateJobState({ status: "saving", message: "Creating job..." });
-
-    try {
-      const supabase = getSupabaseBrowserClient();
-      if (!supabase) {
-        throw new Error("Communications is not configured for job creation.");
-      }
-
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session?.access_token) {
-        throw new Error("Log in again to create this job.");
-      }
-
-      const response = await fetch(
-        `/api/communications/conversations/${selectedConversation.id}/create-job`,
-        {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ allowPossibleDuplicate: true }),
-        },
-      );
-      const payload = (await response.json().catch(() => null)) as {
-        conversion?: { serviceRequestId?: string | null; alreadyConverted?: boolean };
-        message?: string;
-        ok?: boolean;
-      } | null;
-
-      if (!response.ok || !payload?.ok || !payload.conversion?.serviceRequestId) {
-        throw new Error(payload?.message ?? "Could not create this job.");
-      }
-
-      const serviceRequestId = payload.conversion.serviceRequestId;
-      const { data: jobData } = await supabase
-        .from("service_requests")
-        .select("*")
-        .eq("id", serviceRequestId)
-        .maybeSingle();
-
-      setHubState((current) => ({
-        ...current,
-        conversations: current.conversations.map((conversation) =>
-          conversation.id === selectedConversation.id
-            ? { ...conversation, linkedServiceRequestId: serviceRequestId }
-            : conversation,
-        ),
-      }));
-      setDetailState((current) => ({
-        ...current,
-        data: {
-          ...current.data,
-          job: (jobData ?? current.data.job) as ServiceRequestRow | null,
-          intake: current.data.intake
-            ? {
-                ...current.data.intake,
-                linked_service_request_id: serviceRequestId,
-              }
-            : current.data.intake,
-        },
-      }));
-      setContextTab("job");
-      setMobileDetailTab("job");
-      setDetailReloadToken((value) => value + 1);
-      setCreateJobState({
-        status: "success",
-        message: payload.conversion.alreadyConverted
-          ? "Job already existed. Opening link is available below."
-          : "Job created and linked to this conversation.",
-      });
-    } catch (error) {
-      setCreateJobState({
-        status: "error",
-        message: error instanceof Error ? error.message : "Could not create this job.",
-      });
-    }
+    router.push(withReturnTo(`/dashboard/leads?newJob=1&conversationId=${encodeURIComponent(selectedConversation.id)}`));
   }
 
   return (
@@ -2597,17 +2446,17 @@ export function CommunicationsHub() {
 
       <section className="xl:hidden">
         {!mobileDetailOpen ? (
-          <aside className="overflow-hidden rounded-2xl border border-[#E5E7EB] bg-white shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
+          <aside className="min-w-0 overflow-hidden rounded-2xl border border-[#E5E7EB] bg-white">
             <div className="border-b border-[#E5E7EB] p-3">
               <div className="flex min-w-0 items-center justify-between gap-2">
                 <div className="min-w-0">
-                  <p className="truncate text-base font-black text-[#0F172A]">Customer Threads</p>
-                  <p className="truncate text-xs font-semibold text-[#64748B]">
-                    Calls, texts, and AI in one timeline
+                  <p className="text-xs leading-5 text-[#64748B]">
+                    Calls, texts, and web requests in one timeline
                   </p>
                 </div>
                 <button
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#0F6BFF] text-lg font-black text-white shadow-[0_8px_18px_rgba(15,107,255,0.2)] disabled:cursor-not-allowed disabled:opacity-70"
+                  aria-label="New communication"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-[#0F6BFF] text-lg font-black text-white disabled:cursor-not-allowed disabled:opacity-70"
                   disabled
                   title="New communication actions are not available yet."
                   type="button"
@@ -2615,33 +2464,36 @@ export function CommunicationsHub() {
                   +
                 </button>
               </div>
-              <input
-                className="mt-3 h-10 w-full rounded-lg border border-[#E5E7EB] px-3 text-sm font-medium text-[#0F172A] outline-none placeholder:text-[#94A3B8] focus:border-[#0F6BFF]"
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search conversations..."
-                type="search"
-                value={searchQuery}
-              />
-              <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
-                {([
-                  ["inbox", "Inbox"],
-                  ["assigned", "Assigned"],
-                  ["archived", "Archived"],
-                ] as Array<[typeof inboxTab, string]>).map(([value, label]) => (
-                  <button
-                    className={`shrink-0 rounded-lg px-3 py-2 text-sm font-semibold ${
-                      inboxTab === value
-                        ? "bg-blue-50 text-[#0F6BFF]"
-                        : "text-[#64748B] hover:bg-[#F8FAFC]"
-                    }`}
-                    key={value}
-                    onClick={() => setInboxTab(value)}
-                    type="button"
-                  >
-                    {label}
-                  </button>
-                ))}
+              <label className="relative mt-3 block">
+                <span className="sr-only">Search conversations</span>
+                <svg aria-hidden="true" className="pointer-events-none absolute left-3 top-3.5 text-slate-400" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="10" cy="10" r="7" /><path d="m15 15 6 6" /></svg>
+                <input
+                  className="h-11 w-full min-w-0 rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] pl-9 pr-3 text-sm text-[#0F172A] outline-none placeholder:text-[#94A3B8] focus:border-[#0F6BFF]"
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Search conversations..."
+                  type="search"
+                  value={searchQuery}
+                />
+              </label>
+              <div className="mt-2 flex min-w-0 items-center gap-1">
+                <div className="flex min-w-0 flex-1" aria-label="Conversation channels">
+                  {([ ["all", "All"], ["calls", "Calls"], ["messages", "Messages"], ["web", "Web"] ] as Array<[ChannelFilter,string]>).map(([value,label]) => (
+                    <button key={value} type="button" aria-pressed={activeFilter === value || (value === "messages" && activeFilter === "texts")} onClick={() => setActiveFilter(value)} className={`min-h-11 min-w-11 flex-1 rounded-lg px-1 text-xs font-semibold ${activeFilter === value || (value === "messages" && activeFilter === "texts") ? "bg-blue-50 text-[#0F6BFF]" : "text-[#64748B]"}`}>{label}</button>
+                  ))}
+                </div>
+                <label className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-slate-50 text-slate-600">
+                  <span className="sr-only">Workflow filter</span>
+                  <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 6h16M7 12h10M10 18h4" /></svg>
+                  <select aria-label="Workflow filter" className="absolute inset-0 h-11 w-11 cursor-pointer opacity-0" value={inboxTab === "assigned" ? "inbox" : inboxTab} onChange={(event) => {setInboxTab(event.target.value as WorkflowFilter); if (activeFilter === "unread") setActiveFilter("all");}}>
+                    <option value="inbox">Active conversations</option>
+                    <option value="unread">Unread</option>
+                    <option value="needs_action">Needs Action</option>
+                    <option value="archived">Archived</option>
+                    <option disabled>Assigned to Me — unavailable</option>
+                  </select>
+                </label>
               </div>
+              {inboxTab !== "inbox" && inboxTab !== "assigned" || activeFilter === "unread" ? <p className="mt-1 text-xs text-[#64748B]">{inboxTab === "archived" ? "Archived" : inboxTab === "needs_action" ? "Needs Action" : "Unread"}</p> : null}
             </div>
 
             <div className="max-h-[calc(100dvh-220px)] overflow-y-auto">
@@ -2656,46 +2508,29 @@ export function CommunicationsHub() {
                 />
               ) : (
                 filteredConversations.map((conversation) => {
-                  const flags = getConversationFlags(conversation);
+                  const attention = getConversationAttention(conversation.status, conversation.unreadCount);
 
                   return (
                     <button
-                      className="w-full border-b border-[#E5E7EB] bg-white p-4 text-left transition hover:bg-[#F8FAFC]"
+                      className="block h-auto min-h-11 w-full border-b border-[#E5E7EB] bg-white px-3 py-3 text-left transition hover:bg-[#F8FAFC]"
                       key={conversation.id}
                       onClick={() => openConversation(conversation.id)}
                       type="button"
                     >
-                      <div className="flex items-start justify-between gap-3">
+                      <div className="flex min-w-0 items-start gap-3">
+                        <CommunicationSourceIcon source={conversation.sourceType} />
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-black text-[#0F172A]">
-                            {getConversationTitle(conversation)}
-                          </p>
-                          <p className="mt-0.5 truncate text-xs font-semibold text-[#64748B]">
-                            {conversation.customerPhone ??
-                              conversation.customerEmail ??
-                              formatProviderName(conversation.providerName)}
-                          </p>
-                          {conversation.unreadCount > 0 ? (
-                            <span className="mt-1 inline-flex rounded-full bg-red-500 px-2 py-0.5 text-[11px] font-black text-white">
-                              {conversation.unreadCount}
-                            </span>
-                          ) : null}
+                          <div className="flex min-w-0 items-start justify-between gap-2">
+                            <p className="min-w-0 flex-1 line-clamp-2 break-words text-sm font-bold text-[#0F172A]">{getConversationTitle(conversation)}</p>
+                            <p className="max-w-[30%] shrink-0 text-right text-[11px] leading-4 text-[#64748B]">{formatActivity(conversation)}</p>
+                          </div>
+                          <p className="mt-0.5 break-all text-xs text-[#64748B]">{conversation.customerPhone ?? conversation.customerEmail ?? formatProviderName(conversation.providerName)}</p>
+                          <p className="mt-1 line-clamp-2 break-words text-sm leading-5 text-[#334155]">{getConversationPreview(conversation)}</p>
+                          {attention || conversation.unreadCount > 0 ? <div className="mt-1 flex flex-wrap items-center gap-2">
+                            {attention ? <Badge tone={attention.tone}>{attention.label}</Badge> : null}
+                            {conversation.unreadCount > 0 ? <span aria-label={`${conversation.unreadCount} unread messages`} className="h-2 w-2 rounded-full bg-[#0F6BFF]" /> : null}
+                          </div> : null}
                         </div>
-                        <p className="shrink-0 text-xs font-bold text-[#0F6BFF]">
-                          {formatActivity(conversation)}
-                        </p>
-                      </div>
-                      <p className="mt-1 line-clamp-2 text-sm font-medium leading-5 text-[#334155]">
-                        {getConversationPreview(conversation)}
-                      </p>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        <Badge tone="blue">{getSourceLabel(conversation.sourceType)}</Badge>
-                        <Badge tone="amber">{getStatusLabel(conversation.status)}</Badge>
-                        {flags.slice(0, 1).map((flag) => (
-                          <Badge key={flag.label} tone={flag.tone}>
-                            {flag.label}
-                          </Badge>
-                        ))}
                       </div>
                     </button>
                   );
@@ -2859,10 +2694,11 @@ export function CommunicationsHub() {
                   canCreateLead={canCreateLeadFromConversation}
                   detail={detail}
                   onCreateLead={() => void handleCreateLeadFromConversation()}
+                  onOpenLead={canOpenLinkedLead ? () => void handleCreateLeadFromConversation() : undefined}
                   state={createLeadState}
                 />
               ) : mobileDetailTab === "job" ? (
-                <MobileJobPanel detail={detail} returnTo={destinationReturnTo} />
+                <MobileJobPanel detail={detail} returnTo={destinationReturnTo} onCreateJob={() => void handleCreateJobFromConversation()} />
               ) : (
                 <MobileActivityPanel events={detail.timelineEvents} />
               )}
@@ -2971,7 +2807,7 @@ export function CommunicationsHub() {
             ) : (
               filteredConversations.map((conversation) => {
                 const selected = conversation.id === selectedConversationId;
-                const flags = getConversationFlags(conversation);
+                const attention = getConversationAttention(conversation.status, conversation.unreadCount);
                 const title = getConversationTitle(conversation);
 
                 return (
@@ -2986,9 +2822,7 @@ export function CommunicationsHub() {
                     type="button"
                   >
                     <div className="flex items-start gap-3">
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#E8F1FF] text-sm font-black text-[#0F6BFF]">
-                        {getInitials(title)}
-                      </div>
+                      <CommunicationSourceIcon source={conversation.sourceType} />
                       <div className="min-w-0">
                         <div className="flex min-w-0 items-center gap-2">
                           <p className="truncate text-sm font-black text-[#0F172A]">
@@ -3007,12 +2841,7 @@ export function CommunicationsHub() {
                           {getConversationPreview(conversation)}
                         </p>
                         <div className="mt-1.5 flex flex-wrap gap-1.5">
-                          <Badge tone="blue">{getSourceLabel(conversation.sourceType)}</Badge>
-                          {flags.slice(0, 1).map((flag) => (
-                            <Badge key={flag.label} tone={flag.tone}>
-                              {flag.label}
-                            </Badge>
-                          ))}
+                          {attention ? <Badge tone={attention.tone}>{attention.label}</Badge> : null}
                         </div>
                       </div>
                       <p className="ml-auto shrink-0 text-xs font-bold text-[#0F6BFF]">
@@ -3284,6 +3113,14 @@ export function CommunicationsHub() {
                   )}
                 </Panel>
 
+                {canOpenLinkedLead ? (
+                  <LeadPanel
+                    detail={detail}
+                    onOpenLead={() => void handleCreateLeadFromConversation()}
+                    state={createLeadState}
+                  />
+                ) : null}
+
                 <Panel title="Active Job">
                   {detail.job ? (
                     <div className="space-y-2">
@@ -3293,10 +3130,13 @@ export function CommunicationsHub() {
                       <ActionLink href={withReturnTo(`/dashboard/leads/${detail.job.id}`)} label="View job" />
                     </div>
                   ) : (
+                    <>
                     <EmptyState
                       title="No active job linked"
                       body="Create a Job from the thread when the customer is ready to schedule."
                     />
+                    <button className="min-h-11 text-sm font-bold text-[#0F6BFF]" onClick={() => void handleCreateJobFromConversation()} type="button">Create Job</button>
+                    </>
                   )}
                 </Panel>
 
@@ -3656,11 +3496,13 @@ function LeadPanel({
   canCreateLead = false,
   detail,
   onCreateLead,
+  onOpenLead,
   state,
 }: {
   canCreateLead?: boolean;
   detail: ConversationDetailData;
   onCreateLead?: () => void;
+  onOpenLead?: () => void;
   state: ActionState;
 }) {
   if (!detail.lead) {
@@ -3708,6 +3550,15 @@ function LeadPanel({
   return (
     <Panel title="Lead">
       <div className="space-y-2">
+        {onOpenLead ? (
+          <button
+            className="inline-flex min-h-11 min-w-11 items-center rounded-lg px-3 text-sm font-semibold text-[#0F6BFF] hover:bg-blue-50"
+            onClick={onOpenLead}
+            type="button"
+          >
+            Open Lead →
+          </button>
+        ) : null}
         <ContextRow label="Status" value={getStatusLabel(detail.lead.status)} />
         <ContextRow label="Name" value={leadName} />
         <ContextRow label="Phone" value={detail.lead.customer_phone ?? "Not captured"} />
@@ -3733,11 +3584,13 @@ function MobileLeadPanel({
   canCreateLead,
   detail,
   onCreateLead,
+  onOpenLead,
   state,
 }: {
   canCreateLead: boolean;
   detail: ConversationDetailData;
   onCreateLead: () => void;
+  onOpenLead?: () => void;
   state: ActionState;
 }) {
   return (
@@ -3745,6 +3598,7 @@ function MobileLeadPanel({
       canCreateLead={canCreateLead}
       detail={detail}
       onCreateLead={onCreateLead}
+      onOpenLead={onOpenLead}
       state={state}
     />
   );
@@ -3753,9 +3607,11 @@ function MobileLeadPanel({
 function MobileJobPanel({
   detail,
   returnTo,
+  onCreateJob,
 }: {
   detail: ConversationDetailData;
   returnTo: string;
+  onCreateJob: () => void;
 }) {
   const withReturnTo = (href: string) =>
     `${href}${href.includes("?") ? "&" : "?"}returnTo=${encodeURIComponent(returnTo)}`;
@@ -3770,10 +3626,7 @@ function MobileJobPanel({
           <ActionLink href={withReturnTo(`/dashboard/leads/${detail.job.id}`)} label="Open Job" />
         </div>
       ) : (
-        <EmptyState
-          title="No job linked"
-          body="Create Job from the conversation header when the required request details are available."
-        />
+        <button className="min-h-11 text-sm font-bold text-[#0F6BFF]" onClick={onCreateJob} type="button">Create Job</button>
       )}
     </Panel>
   );

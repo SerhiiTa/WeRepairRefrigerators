@@ -1,6 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { getLeadReturnTo } from "./communications/lead-navigation";
+import { mergeConversationPrefill, conversationWizardPayload } from "@/lib/communications/conversation-job-prefill";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { StatusBadge } from "@/components/StatusBadge";
@@ -432,6 +435,12 @@ function requestMatchesDateFilter(
 }
 
 export function ServiceRequestsInbox() {
+  const router = useRouter();
+  const conversationSubmitRef = useRef(false);
+  const editedFieldsRef = useRef(new Set<keyof NewJobForm>());
+  const [conversationContext, setConversationContext] = useState<{conversationId:string;customerId:string|null;jobId:string|null} | null>(null);
+  const [conversationPrefillReady, setConversationPrefillReady] = useState(false);
+  const conversationReturnRef = useRef("/dashboard/communications");
   const [communicationCounts, setCommunicationCounts] = useState<CommunicationCounts>({});
   const [customers, setCustomers] = useState<CustomerOption[]>([]);
   const [invoiceSummaries, setInvoiceSummaries] = useState<InvoiceSummaryRow[]>([]);
@@ -786,6 +795,7 @@ export function ServiceRequestsInbox() {
 
     const params = new URLSearchParams(window.location.search);
     const shouldOpenNewJob = params.get("newJob") === "1";
+    if (params.get("conversationId")) return;
     const customerId = params.get("customerId");
     const assetId = params.get("assetId");
     const prefillKey = [customerId, assetId ?? ""].join(":");
@@ -877,7 +887,46 @@ export function ServiceRequestsInbox() {
     setShowFilters(false);
   }
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const conversationId = params.get("conversationId");
+    if (params.get("newJob") !== "1" || !conversationId) return;
+    let canceled = false;
+    const timer = window.setTimeout(() => {
+      const fallback = `/dashboard/communications?conversation=${encodeURIComponent(conversationId)}&view=detail`;
+      const suppliedReturn = getLeadReturnTo(params.get("returnTo"));
+      conversationReturnRef.current = suppliedReturn.startsWith("/dashboard/communications?") ? suppliedReturn : fallback;
+      setConversationContext({conversationId,customerId:null,jobId:null});
+      setShowNewJobWizard(true);
+      setNewJobState({status:"saving",message:"Loading conversation details..."});
+      void (async () => {
+        try {
+          const token = await getAccessToken();
+          const response = await fetch(`/api/communications/conversations/${encodeURIComponent(conversationId)}/create-job`,{headers:{Authorization:`Bearer ${token}`}});
+          const data = await response.json();
+          if (canceled) return;
+          if (!response.ok || !data.ok) throw new Error(data.message || "Could not load conversation.");
+          setConversationContext(data.context);
+          if (data.context.jobId) {
+            router.replace(`/dashboard/leads/${data.context.jobId}?returnTo=${encodeURIComponent(conversationReturnRef.current)}`);
+            return;
+          }
+          setNewJobForm(current => mergeConversationPrefill(current,data.fields,editedFieldsRef.current));
+          setConversationPrefillReady(true);
+          setNewJobState({status:"idle",message:null});
+        } catch (error) {
+          if (!canceled) setNewJobState({status:"error",message:error instanceof Error ? error.message : "Could not load conversation."});
+        }
+      })();
+    },0);
+    return () => {canceled=true;window.clearTimeout(timer);};
+  }, [router]);
+
   function closeNewJobWizard() {
+    if (conversationContext) {
+      router.replace(conversationReturnRef.current);
+      return;
+    }
     setShowNewJobWizard(false);
     setNewJobForm(emptyNewJobForm);
     setNewJobState({ status: "idle", message: null });
@@ -890,6 +939,7 @@ export function ServiceRequestsInbox() {
     key: K,
     value: NewJobForm[K],
   ) {
+    editedFieldsRef.current.add(key);
     setNewJobForm((current) => ({ ...current, [key]: value }));
     if (key === "serviceAddress") {
       setAddressFocused(true);
@@ -898,6 +948,12 @@ export function ServiceRequestsInbox() {
   }
 
   function selectExistingCustomer(customerId: string) {
+    if (conversationContext && !conversationPrefillReady) return;
+    if (conversationContext?.customerId && customerId !== conversationContext.customerId) {
+      setNewJobState({status:"error",message:"This conversation already has a linked Customer. Review its details without changing the association."});
+      return;
+    }
+    for (const key of ["customerFirstName","customerLastName","customerPhone","customerEmail","customerSearch","selectedCustomerId","city","state","unit","zipCode","serviceAddress"] as const) editedFieldsRef.current.add(key);
     const customer = customers.find((option) => option.id === customerId);
     const nameParts = customer ? splitCustomerName(customer.fullName) : null;
 
@@ -923,6 +979,7 @@ export function ServiceRequestsInbox() {
   }
 
   async function selectAddressSuggestion(suggestion: AddressSuggestion) {
+    for (const key of ["city","serviceAddress","state","unit","zipCode"] as const) editedFieldsRef.current.add(key);
     try {
       const adapter = getAddressAutocompleteAdapter();
       const resolved = adapter.resolve ? await adapter.resolve(suggestion) : suggestion;
@@ -986,6 +1043,16 @@ export function ServiceRequestsInbox() {
   }
 
   async function createJobFromWizard() {
+    if (conversationSubmitRef.current) return;
+    if (conversationContext?.jobId) {
+      router.push(`/dashboard/leads/${conversationContext.jobId}?returnTo=${encodeURIComponent(conversationReturnRef.current)}`);
+      return;
+    }
+    if (conversationContext && !conversationPrefillReady) return;
+    if (conversationContext && newJobForm.scheduleMode === "now" && !newJobForm.assignedTechnicianId) {
+      setNewJobState({status:"error",message:"Choose a technician for Schedule Now, or choose Schedule Later."});
+      return;
+    }
     const firstError = validateNewJobForm();
 
     if (firstError) {
@@ -993,10 +1060,22 @@ export function ServiceRequestsInbox() {
       return;
     }
 
+    conversationSubmitRef.current = true;
     setNewJobState({ status: "saving", message: "Creating job..." });
 
     try {
       const accessToken = await getAccessToken();
+      if (conversationContext) {
+        const response = await fetch(`/api/communications/conversations/${encodeURIComponent(conversationContext.conversationId)}/create-job`, {
+          method:"POST",headers:{Authorization:`Bearer ${accessToken}`,"Content-Type":"application/json"},
+          body:JSON.stringify({wizard:conversationWizardPayload({...newJobForm,customerPhone:normalizeUSPhone(newJobForm.customerPhone)},conversationContext.customerId),allowPossibleDuplicate:false}),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok || !data.conversion?.serviceRequestId) throw new Error(data.message || "Could not create Job.");
+        setConversationContext(current => current ? {...current,jobId:data.conversion.serviceRequestId} : current);
+        router.push(`/dashboard/leads/${data.conversion.serviceRequestId}?returnTo=${encodeURIComponent(conversationReturnRef.current)}`);
+        return;
+      }
       const fullName = [newJobForm.customerFirstName, newJobForm.customerLastName]
         .map((part) => part.trim())
         .filter(Boolean)
@@ -1107,6 +1186,8 @@ export function ServiceRequestsInbox() {
         status: "error",
         message: error instanceof Error ? error.message : "Could not create this job.",
       });
+    } finally {
+      conversationSubmitRef.current = false;
     }
   }
 
@@ -1441,6 +1522,9 @@ export function ServiceRequestsInbox() {
               </button>
             </div>
 
+            {conversationContext ? <p className="mt-3 text-sm text-slate-500">Conversation details are prefilled for review. Any appointment time is requested only; choose Schedule Now and a technician to book.
+              {newJobForm.appointmentDate || newJobForm.windowStartTime || newJobForm.windowEndTime ? <span className="block">Requested: {[newJobForm.appointmentDate, [newJobForm.windowStartTime, newJobForm.windowEndTime].filter(Boolean).join("–")].filter(Boolean).join(" ")}</span> : null}
+            </p> : null}
             <div className="mt-5 space-y-5">
               <section className="rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] p-3">
                 <h3 className="text-sm font-black text-[#0F172A]">Customer</h3>
@@ -1459,6 +1543,7 @@ export function ServiceRequestsInbox() {
                         }))
                       }
                       placeholder="Name, phone, email, or address"
+                      disabled={Boolean(conversationContext && (!conversationPrefillReady || conversationContext.customerId))}
                       value={newJobForm.customerSearch}
                     />
                   </label>
@@ -1728,7 +1813,7 @@ export function ServiceRequestsInbox() {
               </button>
               <button
                 className="rounded-[10px] bg-[#0F6BFF] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#0057D9] disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={newJobState.status === "saving"}
+                disabled={newJobState.status === "saving" || Boolean(conversationContext && !conversationPrefillReady)}
                 onClick={createJobFromWizard}
                 type="button"
               >
