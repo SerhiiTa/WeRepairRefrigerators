@@ -51,9 +51,16 @@ export async function sendEstimateEmail(input: {
     if (claimError || !claimed)
         return fail('Send reservation unavailable. Do not resend until reviewed.');
     const result = await sendReceiptEmail(payload, config.key, r.delivery_id);
-    const { data: finalized, error: saveError } = await db.rpc('finalize_estimate_email_delivery_rpc', { p_delivery_id: r.delivery_id, p_outcome: result.status, p_provider_message_id: result.status === 'accepted' ? result.messageId : null });
-    if (saveError)
+    let finalized;
+    try {
+        const finalization = await db.rpc('finalize_estimate_email_delivery_rpc', { p_delivery_id: r.delivery_id, p_outcome: result.status, p_provider_message_id: result.status === 'accepted' ? result.messageId : null });
+        if (finalization.error) throw new Error('Finalization failed');
+        finalized = finalization.data;
+    }
+    catch {
+        console.error('[Estimate email]', { stage: 'database_finalization_failed', providerOutcome: result.status, ...result.diagnostics });
         return fail('Provider outcome could not be recorded. Do not resend until reviewed.');
+    }
     if (result.status !== 'accepted')
         return fail(result.message, result.status === 'unknown' ? 409 : 502);
     if (!finalized?.active) return fail('Provider accepted, but Estimate changed. Link remains inactive; staff review required.',409);

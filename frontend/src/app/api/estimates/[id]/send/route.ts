@@ -200,7 +200,7 @@ export async function POST(
   }
 
   if (channel === "email") {
-    const result=await sendEstimateEmail({estimateId:id,recipient,idempotencyKey,userClient:supabase}).catch(()=>({status:503,body:{ok:false,message:"Estimate email outcome could not be confirmed. Do not resend until reviewed."}}));
+    const result=await sendEstimateEmail({estimateId:id,recipient,idempotencyKey,userClient:supabase}).catch(()=>{console.error("[Estimate email]", {stage:"unhandled_send_failure",providerOutcome:"unknown"});return {status:503,body:{ok:false,message:"Estimate email outcome could not be confirmed. Do not resend until reviewed."}};});
     return NextResponse.json(result.body,{status:result.status});
   }
 
