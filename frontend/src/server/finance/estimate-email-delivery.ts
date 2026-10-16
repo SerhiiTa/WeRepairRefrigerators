@@ -2,7 +2,7 @@
 import 'server-only';
 import { createHash } from 'node:crypto';
 import { getSupabaseServiceRoleClient } from '@/lib/supabase/service-role';
-import { emailConfiguration, normalizeReceiptEmail, sendReceiptEmail } from '@/server/communications/telnyx-email-transport';
+import { emailConfiguration, normalizeReceiptEmail, sendReceiptEmail, logEstimateEmailDiagnostic } from '@/server/communications/telnyx-email-transport';
 const table = 'service_request_estimate_revision_deliveries';
 export function estimateEmailOrigin() {
     try {
@@ -41,23 +41,32 @@ export async function sendEstimateEmail(input: {
         return fail('Estimate delivery is unavailable.');
     const fingerprint = createHash('sha256').update(JSON.stringify([input.estimateId, recipient])).digest('hex');
     const { data: r, error } = await input.userClient.rpc('reserve_estimate_email_delivery_rpc', { p_estimate_id: input.estimateId, p_recipient: recipient, p_idempotency_key: input.idempotencyKey, p_fingerprint: fingerprint });
-    if (error || !r)
+    if (error || !r) {
+        logEstimateEmailDiagnostic(undefined, { stage: 'reservation_failed' }, error?.code);
         return fail(error?.code === '42501' ? 'You are not authorized to send this estimate.' : error?.code === '55000' ? 'Previous email outcome requires review. Do not resend.' : 'Estimate email could not be reserved. Verify the email migration and estimate eligibility.', error?.code === '42501' ? 403 : 409);
+    }
+    logEstimateEmailDiagnostic(r.delivery_id, { stage: 'reservation_completed' });
     if (!r.claimed && (r.provider_error || r.review_required)) return fail("Previous email requires review. Do not resend automatically.",409);
     if (!r.claimed)
         return ['sent', 'delivered'].includes(r.delivery_status) ? { status: 200, body: { ok: true, message: r.delivery_status === 'delivered' ? 'Delivered' : 'Accepted for sending', deliveryStatus: r.delivery_status } } : fail('This send already has an attempt. Review its outcome before resending.', 409);
     const payload = estimateEmailTemplate(config.from, config.replyTo, recipient, r.estimate_number ?? '', `${origin}/estimates/${r.approval_token}`);
     const { data: claimed, error: claimError } = await db.from(table).update({ provider_status: 'sending', delivery_metadata: { manual_action: true, request: payload, provider_key: r.delivery_id } }).eq('id', r.delivery_id).eq('revision_id', r.revision_id).eq('provider_status', 'reserved').select('id').single();
-    if (claimError || !claimed)
+    if (claimError || !claimed) {
+        logEstimateEmailDiagnostic(r.delivery_id, { stage: 'send_claim_failed' }, claimError?.code);
         return fail('Send reservation unavailable. Do not resend until reviewed.');
-    const result = await sendReceiptEmail(payload, config.key, r.delivery_id);
+    }
+    const result = await sendReceiptEmail(payload, config.key, r.delivery_id, event => logEstimateEmailDiagnostic(r.delivery_id, event));
+    const diagnosticContext = { ...result.diagnostics, messageId: result.status === 'accepted' ? result.messageId : undefined };
+    logEstimateEmailDiagnostic(r.delivery_id, { ...diagnosticContext, stage: 'database_finalization_initiated' });
     let finalized;
     try {
         const finalization = await db.rpc('finalize_estimate_email_delivery_rpc', { p_delivery_id: r.delivery_id, p_outcome: result.status, p_provider_message_id: result.status === 'accepted' ? result.messageId : null });
-        if (finalization.error) throw new Error('Finalization failed');
+        if (finalization.error) throw finalization.error;
         finalized = finalization.data;
+        logEstimateEmailDiagnostic(r.delivery_id, { ...diagnosticContext, stage: 'database_finalization_succeeded' });
     }
-    catch {
+    catch (error) {
+        logEstimateEmailDiagnostic(r.delivery_id, { ...diagnosticContext, stage: 'database_finalization_failed' }, error && typeof error === 'object' && 'code' in error ? error.code : undefined);
         console.error('[Estimate email]', { stage: 'database_finalization_failed', providerOutcome: result.status, ...result.diagnostics });
         return fail('Provider outcome could not be recorded. Do not resend until reviewed.');
     }
