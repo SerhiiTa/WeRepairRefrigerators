@@ -528,7 +528,9 @@ export function ServiceRequestsInbox() {
         supabase
           .from("technician_profiles")
           .select("id,display_name,business_name")
-          .eq("technician_status", "verified")
+          .is("archived_at", null)
+          .is("suspended_at", null)
+          .is("rejected_at", null)
           .order("updated_at", { ascending: false })
           .limit(50),
         supabase
@@ -1065,10 +1067,6 @@ export function ServiceRequestsInbox() {
       return;
     }
     if (conversationContext && !conversationPrefillReady) return;
-    if (conversationContext && newJobForm.scheduleMode === "now" && !newJobForm.assignedTechnicianId) {
-      setNewJobState({status:"error",message:"Choose a technician for Schedule Now, or choose Schedule Later."});
-      return;
-    }
     const firstError = validateNewJobForm();
 
     if (firstError) {
@@ -1538,7 +1536,7 @@ export function ServiceRequestsInbox() {
               </button>
             </div>
 
-            {conversationContext ? <p className="mt-3 text-sm text-slate-500">Conversation details are prefilled for review. Any appointment time is requested only; choose Schedule Now and a technician to book.
+            {conversationContext ? <p className="mt-3 text-sm text-slate-500">Conversation details are prefilled for review. Any appointment time is requested only; choose Schedule Now to book. Technician assignment is optional.
               {requestedAppointment ? <span className="mt-2 block"><strong className="block">Requested appointment</strong>{requestedAppointment}<span className="block">Not confirmed</span></span> : null}
             </p> : null}
             <div className="mt-5 space-y-5">

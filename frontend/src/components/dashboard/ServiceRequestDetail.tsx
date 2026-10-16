@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { submitManualDispatch } from "@/lib/manual-dispatch";
 import Image from "next/image";
 import { useMobileFinancePresentation } from "./mobile-finance-preference";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -1452,50 +1453,6 @@ function getTechnicianProfileInitials(profile: TechnicianProfileRow): string {
     .join("");
 
   return initials || "T";
-}
-
-function getAssignmentDayOfWeek(dateKey: string): number | null {
-  const date = new Date(`${dateKey}T12:00:00`);
-
-  return Number.isNaN(date.getTime()) ? null : date.getDay();
-}
-
-function getAssignmentMinutes(value: string | null): number | null {
-  if (!value) {
-    return null;
-  }
-
-  const [rawHours, rawMinutes] = value.slice(0, 5).split(":");
-  const hours = Number.parseInt(rawHours ?? "", 10);
-  const minutes = Number.parseInt(rawMinutes ?? "", 10);
-
-  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
-    return null;
-  }
-
-  return hours * 60 + minutes;
-}
-
-function doesRuleCoverWindow(
-  rule: TechnicianAvailabilityRule,
-  startTime: string,
-  endTime: string,
-): boolean {
-  const ruleStart = getAssignmentMinutes(rule.startTime);
-  const ruleEnd = getAssignmentMinutes(rule.endTime);
-  const windowStart = getAssignmentMinutes(startTime);
-  const windowEnd = getAssignmentMinutes(endTime);
-
-  if (
-    ruleStart === null ||
-    ruleEnd === null ||
-    windowStart === null ||
-    windowEnd === null
-  ) {
-    return false;
-  }
-
-  return ruleStart <= windowStart && ruleEnd >= windowEnd;
 }
 
 function toScheduleInputTime(value: string | null): string {
@@ -3435,8 +3392,6 @@ export function ServiceRequestDetail({
     const { data, error } = await supabase
       .from("technician_profiles")
       .select(TECHNICIAN_PROFILE_MATCH_SELECT_COLUMNS)
-      .eq("technician_status", "verified")
-      .eq("marketplace_enabled", true)
       .is("archived_at", null)
       .is("rejected_at", null)
       .is("suspended_at", null)
@@ -7169,10 +7124,7 @@ export function ServiceRequestDetail({
     }
 
     setSelectedAssignmentTechnicianId(
-      state.request.assignedTechnicianProfileId ??
-        bestTechnicianMatch?.technicianProfileId ??
-        technicianProfilesState.profiles[0]?.id ??
-        null,
+      state.request.assignedTechnicianProfileId ?? null,
     );
     setTechnicianAssignmentSearch("");
     setTechnicianAssignmentSaveState({ status: "idle", message: null });
@@ -7196,13 +7148,7 @@ export function ServiceRequestDetail({
   }
 
   async function saveTechnicianAssignment() {
-    if (state.status !== "ready" || !selectedAssignmentTechnicianId) {
-      setTechnicianAssignmentSaveState({
-        status: "error",
-        message: "Choose a technician first.",
-      });
-      return;
-    }
+    if (state.status !== "ready" || technicianAssignmentSaveState.status === "saving") return;
 
     const currentRequest = state.request;
     const supabase = getSupabaseBrowserClient();
@@ -7238,7 +7184,7 @@ export function ServiceRequestDetail({
 
     setTechnicianAssignmentSaveState({ status: "saving", message: null });
 
-    const response = await fetch(
+    const response = await submitManualDispatch(
       `/api/service-requests/${currentRequest.id}/appointments`,
       {
         method: "PATCH",
@@ -7249,7 +7195,7 @@ export function ServiceRequestDetail({
         body: JSON.stringify({
           operation: "assign_technician",
           appointmentId: currentRequest.appointmentId ?? null,
-          technicianProfileId: selectedAssignmentTechnicianId,
+          technicianProfileId: selectedAssignmentTechnicianId || null,
         }),
       },
     );
@@ -7273,7 +7219,7 @@ export function ServiceRequestDetail({
       };
     } | null;
 
-    if (!response.ok || !payload?.ok || !payload.technician?.id) {
+    if (!response.ok || !payload?.ok) {
       setTechnicianAssignmentSaveState({
         status: "error",
         message:
@@ -7292,11 +7238,12 @@ export function ServiceRequestDetail({
         status: "ready",
         request: {
           ...current.request,
-          assignedTechnicianProfileId: payload.technician?.id ?? current.request.assignedTechnicianProfileId,
+          assignedTechnicianProfileId: payload.technician?.id ?? null,
+          selectedTechnicianSlug: null,
           selectedTechnicianBusinessName:
             payload.technician?.displayName ??
             payload.technician?.businessName ??
-            current.request.selectedTechnicianBusinessName,
+            null,
           appointmentId: payload.appointment?.id ?? current.request.appointmentId,
           scheduledDate:
             payload.appointment?.appointment_date ?? current.request.scheduledDate,
@@ -7314,7 +7261,7 @@ export function ServiceRequestDetail({
 
     setTechnicianAssignmentSaveState({
       status: "success",
-      message: payload.appointment?.id
+      message: !payload.technician?.id ? "Technician removed; appointment preserved." : payload.appointment?.id
         ? "Technician assigned and appointment updated."
         : "Technician assigned.",
     });
@@ -7347,7 +7294,7 @@ export function ServiceRequestDetail({
   }
 
   async function saveScheduleFromSheet() {
-    if (state.status !== "ready") {
+    if (state.status !== "ready" || scheduleSheetSaveState.status === "saving") {
       return;
     }
 
@@ -7388,7 +7335,6 @@ export function ServiceRequestDetail({
 
     const technicianProfileId =
       currentRequest.assignedTechnicianProfileId ??
-      bestTechnicianMatch?.technicianProfileId ??
       null;
 
     const supabase = getSupabaseBrowserClient();
@@ -7423,7 +7369,7 @@ export function ServiceRequestDetail({
     }
 
     setScheduleSheetSaveState({ status: "saving", message: null });
-    const response = await fetch(
+    const response = await submitManualDispatch(
       `/api/service-requests/${currentRequest.id}/appointments`,
       {
         method: "PUT",
@@ -7485,9 +7431,7 @@ export function ServiceRequestDetail({
           status:
             payload.operation === "created" ? "scheduled" : current.request.status,
           assignedTechnicianProfileId:
-            payload.appointment?.technician_profile_id ??
-            current.request.assignedTechnicianProfileId ??
-            technicianProfileId,
+            payload.appointment?.technician_profile_id ?? null,
           appointmentId: payload.appointment?.id ?? current.request.appointmentId,
           scheduledDate:
             payload.appointment?.appointment_date ?? scheduleDraft.startDate,
@@ -8342,90 +8286,15 @@ export function ServiceRequestDetail({
     ? assignedTechnicianLabel
     : "Not assigned";
   const assignmentJobZip = normalizeAssignmentZip(request.zipCode);
-  const assignmentHasScheduledWindow = Boolean(
-    request.scheduledDate &&
-      request.scheduledWindowStartTime &&
-      request.scheduledWindowEndTime,
-  );
-  const assignmentDayOfWeek = request.scheduledDate
-    ? getAssignmentDayOfWeek(request.scheduledDate)
-    : null;
   const technicianAssignmentCandidates = technicianProfilesState.profiles
     .map<TechnicianAssignmentCandidate>((profile) => {
       const displayName = getTechnicianProfileDisplayName(profile);
       const technicianZips = profile.service_zip_codes.map(normalizeAssignmentZip);
       const coversZip =
         !assignmentJobZip || technicianZips.includes(assignmentJobZip);
-      const isActive =
-        profile.technician_status === "verified" &&
-        profile.marketplace_enabled &&
-        !profile.archived_at &&
-        !profile.rejected_at &&
-        !profile.suspended_at;
-      let availabilityLabel = request.appointmentId
-        ? "Available"
-        : "Assignment only";
-      let isSelectable = isActive && coversZip;
-
-      if (!isActive) {
-        availabilityLabel = "Inactive";
-        isSelectable = false;
-      } else if (!coversZip) {
-        availabilityLabel = "Outside service area";
-        isSelectable = false;
-      } else if (
-        assignmentHasScheduledWindow &&
-        request.scheduledDate &&
-        request.scheduledWindowStartTime &&
-        request.scheduledWindowEndTime
-      ) {
-        const scheduledWindowStartTime = request.scheduledWindowStartTime;
-        const scheduledWindowEndTime = request.scheduledWindowEndTime;
-        const profileRules = technicianAvailabilityRulesState.rules.filter(
-          (rule) => rule.technicianProfileId === profile.id && rule.isAvailable,
-        );
-        const rulesForDay =
-          assignmentDayOfWeek === null
-            ? []
-            : profileRules.filter(
-                (rule) => rule.dayOfWeek === assignmentDayOfWeek,
-              );
-
-        if (profileRules.length > 0) {
-          const coversWindow = rulesForDay.some((rule) =>
-            doesRuleCoverWindow(
-              rule,
-              scheduledWindowStartTime,
-              scheduledWindowEndTime,
-            ),
-          );
-
-          if (!coversWindow) {
-            availabilityLabel =
-              rulesForDay.length > 0
-                ? "Not working this window"
-                : "Not working this day";
-            isSelectable = false;
-          }
-        } else {
-          const startMinutes = getAssignmentMinutes(scheduledWindowStartTime);
-          const endMinutes = getAssignmentMinutes(scheduledWindowEndTime);
-          const isDefaultWorkingDay =
-            assignmentDayOfWeek !== null &&
-            assignmentDayOfWeek >= 1 &&
-            assignmentDayOfWeek <= 5;
-          const isDefaultWorkingWindow =
-            startMinutes !== null &&
-            endMinutes !== null &&
-            startMinutes >= 8 * 60 &&
-            endMinutes <= 17 * 60;
-
-          if (!isDefaultWorkingDay || !isDefaultWorkingWindow) {
-            availabilityLabel = "Not working this day";
-            isSelectable = false;
-          }
-        }
-      }
+      const isActive = !profile.archived_at && !profile.rejected_at && !profile.suspended_at && !["suspended", "rejected", "archived"].includes(profile.technician_status);
+      const isSelectable = isActive;
+      const availabilityLabel = !isActive ? "Inactive" : "Manual assignment — availability advisory";
 
       const isAssigned = profile.id === request.assignedTechnicianProfileId;
 
@@ -13340,6 +13209,7 @@ export function ServiceRequestDetail({
               ) : null}
 
               <div className="mt-3 max-h-[46dvh] touch-pan-y overflow-y-auto overscroll-contain border-y border-[#E5E7EB]">
+                <button type="button" className="min-h-11 px-3 text-sm font-bold" onClick={() => setSelectedAssignmentTechnicianId("")}>Unassigned / remove technician{!selectedAssignmentTechnicianId ? " ✓" : ""}</button>
                 {filteredTechnicianAssignmentCandidates.length > 0 ? (
                   filteredTechnicianAssignmentCandidates.map((candidate) => {
                     const isSelected =
@@ -13425,8 +13295,7 @@ export function ServiceRequestDetail({
                 <button
                   className="min-h-11 rounded-[12px] bg-[#2563EB] px-4 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50"
                   disabled={
-                    technicianAssignmentSaveState.status === "saving" ||
-                    !selectedAssignmentTechnicianId
+                    technicianAssignmentSaveState.status === "saving"
                   }
                   onClick={() => void saveTechnicianAssignment()}
                   type="button"

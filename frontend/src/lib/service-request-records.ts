@@ -345,7 +345,7 @@ export type DashboardServiceRequestAppointment = {
   id: string;
   companyId: string | null;
   serviceRequestId: string;
-  technicianProfileId: string;
+  technicianProfileId: string | null;
   appointmentDate: string;
   windowStartTime: string;
   windowEndTime: string;
@@ -362,6 +362,7 @@ export type DashboardServiceRequestAppointment = {
   updatedAt: string;
   request?: {
     id: string;
+    jobNumber: number | null;
     customerName: string;
     applianceType: string;
     applianceBrand: string | null;
@@ -474,7 +475,7 @@ export const APPOINTMENT_SELECT_COLUMNS = [
   "created_by",
   "created_at",
   "updated_at",
-  "service_requests(id,customer_name,appliance_type,appliance_brand,issue_description,zip_code,city,state,status)",
+  "service_requests(id,job_number,customer_name,appliance_type,appliance_brand,issue_description,zip_code,city,state,status)",
 ].join(",");
 
 export const APPOINTMENT_WITH_CALENDAR_SELECT_COLUMNS = [
@@ -496,7 +497,7 @@ export const APPOINTMENT_WITH_CALENDAR_SELECT_COLUMNS = [
   "created_by",
   "created_at",
   "updated_at",
-  "service_requests(id,customer_name,appliance_type,appliance_brand,issue_description,zip_code,city,state,status)",
+  "service_requests(id,job_number,customer_name,appliance_type,appliance_brand,issue_description,zip_code,city,state,status)",
 ].join(",");
 
 export const SERVICE_REQUEST_NOTE_SELECT_COLUMNS = [
@@ -756,6 +757,7 @@ export function mapAppointmentRow(
     request: row.service_requests
       ? {
           id: row.service_requests.id,
+          jobNumber: row.service_requests.job_number ?? null,
           customerName: row.service_requests.customer_name,
           applianceType: row.service_requests.appliance_type,
           applianceBrand: row.service_requests.appliance_brand,

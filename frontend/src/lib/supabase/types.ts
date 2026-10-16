@@ -291,7 +291,7 @@ export type Database = {
           id: string;
           company_id: string | null;
           service_request_id: string;
-          technician_profile_id: string;
+          technician_profile_id: string | null;
           appointment_date: string;
           window_start_time: string;
           window_end_time: string;

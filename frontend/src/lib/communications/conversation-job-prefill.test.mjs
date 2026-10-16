@@ -30,7 +30,7 @@ test('Conversation submit uses only atomic endpoint, duplicate click ignored',as
  const h=harness();await Promise.all([h.ctx.createJobFromWizard(),h.ctx.createJobFromWizard()]);assert.equal(h.calls.length,1);assert.equal(h.calls[0].url,`/api/communications/conversations/${id}/create-job`);assert.equal(JSON.parse(h.calls[0].options.body).allowPossibleDuplicate,false);assert.match(h.urls[0],/^\/dashboard\/leads\/job\?returnTo=/);
 });
 test('known Job recovery navigates without submitting',async()=>{const h=harness({jobId:'existing'});await h.ctx.createJobFromWizard();assert.equal(h.calls.length,0);assert.match(h.urls[0],/leads\/existing/);});
-test('Now without technician blocks submission',async()=>{const h=harness({mode:'now'});await h.ctx.createJobFromWizard();assert.equal(h.calls.length,0);assert.match(h.states[0].message,/technician/);});
+test('Now without technician submits through canonical conversion',async()=>{const h=harness({mode:'now'});await h.ctx.createJobFromWizard();assert.equal(h.calls.length,1);assert.equal(JSON.parse(h.calls[0].options.body).wizard.assignedTechnicianId,null);});
 test('cancel, generic prefill, generic save and navigation remain connected',()=>{
  assert.match(inbox,/if \(conversationContext\) \{\s*router.replace\(conversationReturnRef.current\)/);
  assert.match(inbox,/if \(params.get\("conversationId"\)\) return;/);
@@ -70,10 +70,10 @@ test('raw snapshot survives cleared Schedule Later columns; missing preference s
  assert.equal(prefill({},{}).requestedAppointmentReference,'');
  assert.equal(prefill({},{appointment_date:null,raw_payload:{requested_appointment:{date:'2026-10-19',preferredWindow:'10:00 AM'}}}).requestedAppointmentReference,'Oct 19, 2026 · 10:00 AM');
 });
-test('Schedule Now requires valid date, ordered explicit times and technician',()=>{
+test('Schedule Now requires valid date, ordered explicit times; technician optional',()=>{
  const complete={scheduleMode:'now',appointmentDate:'2026-10-19',windowStartTime:'10:00',windowEndTime:'11:00',assignedTechnicianId:id};
  assert.equal(validateSchedule(complete),null);
- for(const key of ['appointmentDate','windowStartTime','windowEndTime','assignedTechnicianId']) assert.ok(validateSchedule({...complete,[key]:''}));
+ for(const key of ['appointmentDate','windowStartTime','windowEndTime']) assert.ok(validateSchedule({...complete,[key]:''}));
  for(const patch of [{appointmentDate:'2026-02-30'},{windowStartTime:'10:00 AM'},{windowEndTime:'00:00'},{windowEndTime:'10:00'}]) assert.ok(validateSchedule({...complete,...patch}));
  assert.equal(validateSchedule({scheduleMode:'later'}),null);
 });

@@ -59,7 +59,6 @@ export function validateConversationSchedule(form: Record<string, string>): stri
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date)) || new Date(date).toISOString().slice(0,10) !== date) return "Choose a valid appointment date.";
   if (![form.windowStartTime, form.windowEndTime].every(time => /^([01]\d|2[0-3]):[0-5]\d$/.test(time))) return "Choose a valid start and end time.";
   if (form.windowEndTime <= form.windowStartTime) return "End time must be after start time.";
-  if (!form.assignedTechnicianId) return "Choose a technician for Schedule Now, or choose Schedule Later.";
   return null;
 }
 export function buildConversationJobPrefill(conversation: Row, request: Row = {}, lead: Row = {}, customer: Row = {}, asset: Row = {}) {

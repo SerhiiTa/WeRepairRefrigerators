@@ -143,7 +143,7 @@ function getOperationalStatusLabel(appointment: DashboardServiceRequestAppointme
 }
 
 function getTechnicianLabel(appointment: DashboardServiceRequestAppointment) {
-  return `Technician ${appointment.technicianProfileId.slice(0, 8).toUpperCase()}`;
+  return appointment.technicianProfileId ? `Technician ${appointment.technicianProfileId.slice(0, 8).toUpperCase()}` : "Unassigned";
 }
 
 function getAppointmentCityZip(appointment: DashboardServiceRequestAppointment) {
@@ -163,7 +163,7 @@ function AppointmentCard({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.18em] text-cyan-200">
-            {formatAppointmentWindow(appointment)}
+            {formatAppointmentWindow(appointment)} · Job #{appointment.request?.jobNumber ?? "Pending"}
           </p>
           <h3 className="mt-2 text-lg font-bold text-white">
             {appointment.request?.customerName ?? "Service appointment"}
@@ -333,7 +333,7 @@ export function TechnicianSchedule() {
     const options = new Map<string, string>();
 
     state.appointments.forEach((appointment) => {
-      options.set(appointment.technicianProfileId, getTechnicianLabel(appointment));
+      options.set(appointment.technicianProfileId ?? "unassigned", getTechnicianLabel(appointment));
     });
 
     return Array.from(options.entries()).map(([id, label]) => ({ id, label }));
@@ -345,7 +345,7 @@ export function TechnicianSchedule() {
         (appointment) =>
           appointment.appointmentDate === selectedDate &&
           (selectedTechnicianId === "all" ||
-            appointment.technicianProfileId === selectedTechnicianId),
+            (appointment.technicianProfileId ?? "unassigned") === selectedTechnicianId),
       ),
     [state.appointments, selectedDate, selectedTechnicianId],
   );
@@ -366,7 +366,7 @@ export function TechnicianSchedule() {
           `Technician ${technicianProfileId.slice(0, 8).toUpperCase()}`,
         appointments: appointmentsForDay.filter(
           (appointment) =>
-            appointment.technicianProfileId === technicianProfileId,
+            (appointment.technicianProfileId ?? "unassigned") === technicianProfileId,
         ),
       };
     });
