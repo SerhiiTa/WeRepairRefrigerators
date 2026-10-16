@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { getLeadReturnTo } from "./communications/lead-navigation";
-import { mergeConversationPrefill, conversationWizardPayload } from "@/lib/communications/conversation-job-prefill";
+import { mergeConversationPrefill, conversationWizardPayload, validateConversationSchedule } from "@/lib/communications/conversation-job-prefill";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { StatusBadge } from "@/components/StatusBadge";
@@ -439,6 +439,8 @@ export function ServiceRequestsInbox() {
   const conversationSubmitRef = useRef(false);
   const editedFieldsRef = useRef(new Set<keyof NewJobForm>());
   const [conversationContext, setConversationContext] = useState<{conversationId:string;customerId:string|null;jobId:string|null} | null>(null);
+  const [scheduleSuggestion, setScheduleSuggestion] = useState("");
+  const [requestedAppointment, setRequestedAppointment] = useState("");
   const [conversationPrefillReady, setConversationPrefillReady] = useState(false);
   const conversationReturnRef = useRef("/dashboard/communications");
   const [communicationCounts, setCommunicationCounts] = useState<CommunicationCounts>({});
@@ -896,6 +898,11 @@ export function ServiceRequestsInbox() {
       const fallback = `/dashboard/communications?conversation=${encodeURIComponent(conversationId)}&view=detail`;
       const suppliedReturn = getLeadReturnTo(params.get("returnTo"));
       conversationReturnRef.current = suppliedReturn.startsWith("/dashboard/communications?") ? suppliedReturn : fallback;
+      editedFieldsRef.current.clear();
+      setNewJobForm({...emptyNewJobForm});
+      setRequestedAppointment("");
+      setScheduleSuggestion("");
+      setConversationPrefillReady(false);
       setConversationContext({conversationId,customerId:null,jobId:null});
       setShowNewJobWizard(true);
       setNewJobState({status:"saving",message:"Loading conversation details..."});
@@ -911,7 +918,10 @@ export function ServiceRequestsInbox() {
             router.replace(`/dashboard/leads/${data.context.jobId}?returnTo=${encodeURIComponent(conversationReturnRef.current)}`);
             return;
           }
-          setNewJobForm(current => mergeConversationPrefill(current,data.fields,editedFieldsRef.current));
+          const {requestedAppointmentReference, scheduleSuggestion, ...fields} = data.fields;
+          setRequestedAppointment(requestedAppointmentReference || "");
+          setScheduleSuggestion(scheduleSuggestion || "");
+          setNewJobForm(current => mergeConversationPrefill(current,fields,editedFieldsRef.current));
           setConversationPrefillReady(true);
           setNewJobState({status:"idle",message:null});
         } catch (error) {
@@ -940,6 +950,7 @@ export function ServiceRequestsInbox() {
     value: NewJobForm[K],
   ) {
     editedFieldsRef.current.add(key);
+    if (key === "windowEndTime") setScheduleSuggestion("");
     setNewJobForm((current) => ({ ...current, [key]: value }));
     if (key === "serviceAddress") {
       setAddressFocused(true);
@@ -1027,6 +1038,11 @@ export function ServiceRequestsInbox() {
 
     if (!newJobForm.problemDescription.trim()) {
       return "Describe the problem before creating a job.";
+    }
+
+    if (conversationContext) {
+      const schedulingError = validateConversationSchedule(newJobForm);
+      if (schedulingError) return schedulingError;
     }
 
     if (newJobForm.scheduleMode === "now") {
@@ -1523,7 +1539,7 @@ export function ServiceRequestsInbox() {
             </div>
 
             {conversationContext ? <p className="mt-3 text-sm text-slate-500">Conversation details are prefilled for review. Any appointment time is requested only; choose Schedule Now and a technician to book.
-              {newJobForm.appointmentDate || newJobForm.windowStartTime || newJobForm.windowEndTime ? <span className="block">Requested: {[newJobForm.appointmentDate, [newJobForm.windowStartTime, newJobForm.windowEndTime].filter(Boolean).join("–")].filter(Boolean).join(" ")}</span> : null}
+              {requestedAppointment ? <span className="mt-2 block"><strong className="block">Requested appointment</strong>{requestedAppointment}<span className="block">Not confirmed</span></span> : null}
             </p> : null}
             <div className="mt-5 space-y-5">
               <section className="rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] p-3">
@@ -1736,10 +1752,12 @@ export function ServiceRequestsInbox() {
                       }
                       type="checkbox"
                     />
-                    Schedule now
+                    {conversationContext && newJobForm.scheduleMode === "later" ? "Schedule Later — select to Schedule Now" : "Schedule now"}
                   </label>
                 </div>
-                {newJobForm.scheduleMode === "now" ? (
+                {conversationContext && scheduleSuggestion ? <p className="mt-2 text-sm text-slate-500">{scheduleSuggestion}</p> : null}
+                {conversationContext && newJobForm.scheduleMode === "later" ? <p className="mt-2 text-sm text-slate-500">Schedule Later: these editable preferences will not book an appointment.</p> : null}
+                {newJobForm.scheduleMode === "now" || conversationContext ? (
                   <div className="mt-3 grid gap-3 sm:grid-cols-3">
                     <TextField
                       label="Date"

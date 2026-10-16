@@ -1,5 +1,67 @@
 type Row = Record<string, unknown>;
 const text = (...values: unknown[]): string => values.find(v => typeof v === "string" && v.trim()) as string || "";
+function requestedSnapshot(request: Row): Row | null {
+  const object = (value: unknown): Row => value && typeof value === "object" && !Array.isArray(value) ? value as Row : {};
+  const extracted = object(object(request.extracted_data).requested_appointment);
+  const raw = object(object(request.raw_payload).requested_appointment);
+  const snapshot = Object.keys(extracted).length ? extracted : Object.keys(raw).length ? raw : null;
+  return snapshot;
+}
+export function parseRequestedTime(value: unknown): string {
+  const input = text(value).trim();
+  const twelve = /^(0?[1-9]|1[0-2])(?::([0-5]\d))?\s*(AM|PM)$/i.exec(input);
+  if (twelve) return `${String(Number(twelve[1]) % 12 + (twelve[3].toUpperCase() === "PM" ? 12 : 0)).padStart(2,"0")}:${twelve[2] || "00"}`;
+  const clock = /^([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?$/.exec(input);
+  return clock ? `${clock[1].padStart(2,"0")}:${clock[2]}` : "";
+}
+function requestedSchedule(request: Row) {
+  const snapshot = requestedSnapshot(request);
+  const date = text(snapshot ? snapshot.date : request.appointment_date);
+  const start = parseRequestedTime(snapshot ? snapshot.windowStartTime : request.window_start_time)
+    || parseRequestedTime(snapshot ? snapshot.preferredWindow : request.preferred_appointment_window);
+  const suppliedEnd = text(snapshot ? snapshot.windowEndTime : request.window_end_time);
+  let end = parseRequestedTime(suppliedEnd);
+  let scheduleSuggestion = "";
+  if (start && !suppliedEnd) {
+    const [hour, minute] = start.split(":").map(Number);
+    // Existing booking contract requires end > start on the same date.
+    if (hour + 2 < 24) {
+      end = `${String(hour + 2).padStart(2,"0")}:${String(minute).padStart(2,"0")}`;
+      scheduleSuggestion = "End time is a suggested 2-hour window, not selected by the customer.";
+    } else {
+      scheduleSuggestion = "A 2-hour window would end the next day. Choose a valid same-day window or Schedule Later.";
+    }
+  }
+  return {
+    appointmentDate: /^\d{4}-\d{2}-\d{2}$/.test(date) && !Number.isNaN(Date.parse(date)) && new Date(date).toISOString().slice(0,10) === date ? date : "",
+    windowStartTime: start, windowEndTime: end, scheduleSuggestion,
+  };
+}
+// Keep the submitted preference separate from editable booking fields.
+export function requestedAppointmentReference(request: Row): string {
+  const snapshot = requestedSnapshot(request);
+  const date = text(snapshot ? snapshot.date : request.appointment_date);
+  const preferred = text(snapshot ? snapshot.preferredWindow : request.preferred_appointment_window);
+  const timeLabel = (value: unknown) => {
+    const time = text(value);
+    if (!/^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/.test(time)) return time;
+    const [hour, minute] = time.split(":");
+    return `${Number(hour) % 12 || 12}:${minute} ${Number(hour) < 12 ? "AM" : "PM"}`;
+  };
+  const window = [snapshot ? snapshot.windowStartTime : request.window_start_time, snapshot ? snapshot.windowEndTime : request.window_end_time].map(timeLabel).filter(Boolean).join(" – ");
+  const dateLabel = /^\d{4}-\d{2}-\d{2}$/.test(date) && !Number.isNaN(Date.parse(date))
+    ? new Intl.DateTimeFormat("en-US", {month:"short",day:"numeric",year:"numeric",timeZone:"UTC"}).format(new Date(date)) : date;
+  return [dateLabel, preferred || window, text(snapshot?.timezone)].filter(Boolean).join(" · ");
+}
+export function validateConversationSchedule(form: Record<string, string>): string | null {
+  if (form.scheduleMode !== "now") return null;
+  const date = form.appointmentDate;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date)) || new Date(date).toISOString().slice(0,10) !== date) return "Choose a valid appointment date.";
+  if (![form.windowStartTime, form.windowEndTime].every(time => /^([01]\d|2[0-3]):[0-5]\d$/.test(time))) return "Choose a valid start and end time.";
+  if (form.windowEndTime <= form.windowStartTime) return "End time must be after start time.";
+  if (!form.assignedTechnicianId) return "Choose a technician for Schedule Now, or choose Schedule Later.";
+  return null;
+}
 export function buildConversationJobPrefill(conversation: Row, request: Row = {}, lead: Row = {}, customer: Row = {}, asset: Row = {}) {
   const name = text(customer.full_name, request.customer_name, lead.customer_name, conversation.customer_display_name);
   const parts = name.trim().split(/\s+/);
@@ -17,8 +79,8 @@ export function buildConversationJobPrefill(conversation: Row, request: Row = {}
     brand: text(asset.brand, request.brand, lead.brand), modelNumber: text(asset.model_number, request.model_number),
     serialNumber: text(asset.serial_number, request.serial_number),
     problemDescription: text(request.problem_description, lead.problem_description, conversation.summary),
-    appointmentDate: text(request.appointment_date), windowStartTime: text(request.window_start_time).slice(0,5),
-    windowEndTime: text(request.window_end_time).slice(0,5),
+    requestedAppointmentReference: requestedAppointmentReference(request),
+    ...requestedSchedule(request),
     assignedTechnicianId: "", scheduleMode: "later" as const,
   };
 }

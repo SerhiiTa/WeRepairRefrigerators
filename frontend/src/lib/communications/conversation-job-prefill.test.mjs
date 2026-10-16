@@ -3,11 +3,11 @@ import test from 'node:test';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
-import {buildConversationJobPrefill as prefill,mergeConversationPrefill as merge,conversationWizardPayload as payload} from './conversation-job-prefill.ts';
+import {buildConversationJobPrefill as prefill,mergeConversationPrefill as merge,conversationWizardPayload as payload,validateConversationSchedule as validateSchedule,parseRequestedTime} from './conversation-job-prefill.ts';
 const id='00000000-0000-4000-8000-000000000100';
 for(const source of ['phone','sms','website_form']) test(`${source}: structured request + canonical Customer prefill`,()=>{
  const result=prefill({id,primary_source_type:source,summary:'Call summary'},{customer_name:'Wrong Name',customer_first_name:'Wrong',service_address:'Test Street',unit:'2',city:'Houston',state:'TX',zip_code:'77001',appliance_type:'Washer',brand:'Brand',model_number:'Model',serial_number:'Serial',problem_description:'Leak',appointment_date:'2026-10-25',window_start_time:'09:00:00',window_end_time:'11:00:00'},{id:'lead'},{id:'customer',full_name:'Canonical Customer',phone:'+12025550100'});
- assert.equal(result.selectedCustomerId,'customer');assert.equal(result.customerFirstName,'Canonical');assert.equal(result.customerLastName,'Customer');assert.equal(result.serviceAddress,'Test Street');assert.equal(result.brand,'Brand');assert.equal(result.modelNumber,'Model');assert.equal(result.serialNumber,'Serial');assert.equal(result.problemDescription,'Leak');assert.equal(result.appointmentDate,'2026-10-25');assert.equal(result.windowStartTime,'09:00');assert.equal(result.assignedTechnicianId,'');assert.equal(result.scheduleMode,'later');
+ assert.equal(result.selectedCustomerId,'customer');assert.equal(result.customerFirstName,'Canonical');assert.equal(result.customerLastName,'Customer');assert.equal(result.serviceAddress,'Test Street');assert.equal(result.brand,'Brand');assert.equal(result.modelNumber,'Model');assert.equal(result.serialNumber,'Serial');assert.equal(result.problemDescription,'Leak');assert.equal(result.appointmentDate,'2026-10-25');assert.equal(result.windowStartTime,'09:00');assert.equal(result.windowEndTime,'11:00');assert.match(result.requestedAppointmentReference,/Oct 25, 2026 · 9:00 AM – 11:00 AM/);assert.equal(result.assignedTechnicianId,'');assert.equal(result.scheduleMode,'later');
 });
 test('Lead/new Customer fallback and missing optional fields',()=>{
  const result=prefill({summary:'Call summary'},{},{customer_name:'New Caller',customer_phone:'+12025550100',service_address:'Lead Street'});
@@ -52,3 +52,50 @@ function getApi(authorized=true,permitted=true) {
 }
 test('server prefill preserves IDs, returns normalized fields without provider payloads',async()=>{const h=getApi();const response=await h.get();assert.equal(response.status,200);assert.equal(response.body.context.leadId,'lead');assert.equal(response.body.context.sourceRequestId,'source');assert.equal(response.body.fields.selectedCustomerId,'customer');assert.equal(response.body.raw_payload,undefined);});
 test('unauthorized/cross-company prefill rejected before data reads',async()=>{for(const h of [getApi(false),getApi(true,false)]){assert.ok((await h.get()).status>=400);assert.equal(h.reads.length,0);}});
+
+for (const preferredWindow of ['10:00 AM','10:00 PM']) test(`original ${preferredWindow} stays reference-only`,()=>{
+ const request={appointment_date:'2026-10-20',window_start_time:'22:00:00',window_end_time:'00:00:00',extracted_data:{requested_appointment:{date:'2026-10-19',preferredWindow}}};
+ const before=JSON.stringify(request), result=prefill({primary_source_type:'website_form'},request);
+ assert.equal(result.requestedAppointmentReference,`Oct 19, 2026 · ${preferredWindow}`);
+ assert.equal(result.scheduleMode,'later');
+ assert.equal(result.appointmentDate,'2026-10-19');assert.equal(result.assignedTechnicianId,'');
+ assert.equal(result.windowStartTime,preferredWindow==='10:00 AM'?'10:00':'22:00');
+ assert.equal(result.windowEndTime,preferredWindow==='10:00 AM'?'12:00':'');
+ assert.match(result.scheduleSuggestion,preferredWindow==='10:00 AM'?/suggested 2-hour/:/next day/);
+ const scheduled={...result,scheduleMode:'now',appointmentDate:'2026-11-01',windowStartTime:'08:00',windowEndTime:'09:00',assignedTechnicianId:id};
+ assert.equal(validateSchedule(scheduled),null);assert.equal(scheduled.requestedAppointmentReference,result.requestedAppointmentReference);
+ const saved=payload(result,null);assert.equal(saved.appointmentDate,null);assert.equal(saved.requestedAppointmentReference,undefined);assert.equal(JSON.stringify(request),before);
+});
+test('raw snapshot survives cleared Schedule Later columns; missing preference stays empty',()=>{
+ assert.equal(prefill({},{}).requestedAppointmentReference,'');
+ assert.equal(prefill({},{appointment_date:null,raw_payload:{requested_appointment:{date:'2026-10-19',preferredWindow:'10:00 AM'}}}).requestedAppointmentReference,'Oct 19, 2026 · 10:00 AM');
+});
+test('Schedule Now requires valid date, ordered explicit times and technician',()=>{
+ const complete={scheduleMode:'now',appointmentDate:'2026-10-19',windowStartTime:'10:00',windowEndTime:'11:00',assignedTechnicianId:id};
+ assert.equal(validateSchedule(complete),null);
+ for(const key of ['appointmentDate','windowStartTime','windowEndTime','assignedTechnicianId']) assert.ok(validateSchedule({...complete,[key]:''}));
+ for(const patch of [{appointmentDate:'2026-02-30'},{windowStartTime:'10:00 AM'},{windowEndTime:'00:00'},{windowEndTime:'10:00'}]) assert.ok(validateSchedule({...complete,...patch}));
+ assert.equal(validateSchedule({scheduleMode:'later'}),null);
+});
+test('Communications initialization resets stale schedule and preserves later staff choice',()=>{
+ const start=inbox.indexOf('      editedFieldsRef.current.clear();'), end=inbox.indexOf('      setShowNewJobWizard(true);',start);
+ let form={scheduleMode:'now',assignedTechnicianId:id}, reference='old', ready=true;
+ const edited=new Set(['scheduleMode']);
+ const c=vm.createContext({editedFieldsRef:{current:edited},setNewJobForm:v=>form=v,emptyNewJobForm:{scheduleMode:'later',assignedTechnicianId:''},setRequestedAppointment:v=>reference=v,setScheduleSuggestion:()=>{},setConversationPrefillReady:v=>ready=v,setConversationContext:()=>{},conversationId:id});
+ vm.runInContext(ts.transpileModule(inbox.slice(start,end),{}).outputText,c);
+ assert.equal(form.scheduleMode,'later');assert.equal(form.assignedTechnicianId,'');assert.equal(edited.size,0);assert.equal(reference,'');assert.equal(ready,false);
+ assert.equal(merge({...form,scheduleMode:'now'},prefill({},{}),new Set(['scheduleMode'])).scheduleMode,'now');
+ assert.match(inbox,/Requested appointment/);assert.match(inbox,/Not confirmed/);assert.doesNotMatch(inbox,/Requested:.*newJobForm/);
+});
+
+test('AM/PM and 24-hour parsing is explicit and rejects ambiguous windows',()=>{
+ for(const [input,expected] of [['10 AM','10:00'],['10:00 PM','22:00'],['12 AM','00:00'],['12 PM','12:00'],['9:15','09:15'],['22:30:00','22:30'],['13 PM',''],['10:99 AM',''],['morning',''],['10 AM–12 PM','']]) assert.equal(parseRequestedTime(input),expected);
+});
+test('explicit requested end is retained; dispatcher edits survive late prefill',()=>{
+ const request={extracted_data:{requested_appointment:{date:'2026-10-19',windowStartTime:'10:00',windowEndTime:'11:30'}}};
+ const incoming=prefill({},request);assert.equal(incoming.windowEndTime,'11:30');assert.equal(incoming.scheduleSuggestion,'');
+ const edits={...incoming,appointmentDate:'2026-10-20',windowStartTime:'14:00',windowEndTime:'15:00',assignedTechnicianId:id,scheduleMode:'now'};
+ assert.deepEqual(merge(edits,incoming,new Set(['appointmentDate','windowStartTime','windowEndTime','assignedTechnicianId','scheduleMode'])),edits);
+ assert.equal(validateSchedule(edits),null);
+ assert.equal(payload({...edits,scheduleMode:'later'},null).windowStartTime,null);
+});
