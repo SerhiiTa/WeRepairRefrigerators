@@ -6,11 +6,12 @@ export function normalizeReceiptEmail(value: unknown): string | null {
     return email.length <= 254 && /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,}$/.test(email) ? email : null;
 }
 export function emailConfiguration() {
-    const from = process.env.HOMEFIXOS_EMAIL_FROM?.trim();
+    const configuredFrom = process.env.HOMEFIXOS_EMAIL_FROM?.trim();
     const replyTo = normalizeReceiptEmail(process.env.HOMEFIXOS_EMAIL_REPLY_TO);
     const key = process.env.TELNYX_API_KEY?.trim();
-    const address = from?.match(/^(?:[^<>\r\n]+ <)?([^<>]+)>?$/)?.[1];
-    if (!from || /[\r\n]/.test(from) || !normalizeReceiptEmail(address) || !replyTo || !key || process.env.WRA_DISABLE_PROVIDER_CALLS === '1')
+    const address = configuredFrom?.match(/^[^<>\r\n]+\s*<([^<>]+)>$/)?.[1] ?? configuredFrom;
+    const from = normalizeReceiptEmail(address);
+    if (!from || /[\r\n]/.test(configuredFrom ?? '') || !replyTo || !key || process.env.WRA_DISABLE_PROVIDER_CALLS === '1')
         return null;
     return { from, replyTo, key };
 }
