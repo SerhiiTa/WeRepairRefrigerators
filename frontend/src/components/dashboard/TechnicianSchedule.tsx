@@ -279,7 +279,12 @@ export function TechnicianSchedule() {
 
       let { data, error } = await supabase
         .from("appointments")
-        .select(APPOINTMENT_WITH_CALENDAR_SELECT_COLUMNS)
+        .select(
+            APPOINTMENT_WITH_CALENDAR_SELECT_COLUMNS.replace(
+              "service_requests(",
+              "service_requests!appointments_service_request_id_fkey(",
+            ),
+          )
         .order("appointment_date", { ascending: true })
         .order("window_start_time", { ascending: true });
 
@@ -290,7 +295,12 @@ export function TechnicianSchedule() {
       ) {
         const fallbackResult = await supabase
           .from("appointments")
-          .select(APPOINTMENT_SELECT_COLUMNS)
+          .select(
+            APPOINTMENT_SELECT_COLUMNS.replace(
+              "service_requests(",
+              "service_requests!appointments_service_request_id_fkey(",
+            ),
+          )
           .order("appointment_date", { ascending: true })
           .order("window_start_time", { ascending: true });
 
