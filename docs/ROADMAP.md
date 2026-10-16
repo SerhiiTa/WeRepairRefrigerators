@@ -1,5 +1,32 @@
 # Roadmap
 
+## SCHEDULE-03.1 — Completed Production Release (2026-10-16)
+
+Status: **COMPLETED / DEPLOYED — READY**. Owner Production visual verification is complete (owner confirmation); this does not imply full authenticated end-to-end regression coverage. This entry is the current Schedule handoff and supersedes older Schedule planning notes below.
+
+- Application release commit: `89dffb9714ad6ebb82ec877139b01fb96d11f36c` (11 approved files).
+- Production deployment: `dpl_8NAANmW5JnbcGP1NZ886c8szo5Vv`.
+- Production Schedule: https://werepairrefrigerators.vercel.app/dashboard/technician-schedule
+- Rollback deployment: `dpl_Dz2y3Zugu59P2V5PNtbHFpuQKdcy` (verified READY after release).
+- Rollback tag: `milestone-pre-schedule-03-1-a3b7d8e`, targeting `a3b7d8e4005e60f6eef78e0bf419be02c5f2420b`.
+- Validation: 74 focused/regression tests PASS; targeted ESLint, production webpack build and diff check PASS. Mobile 375/390/430px and desktop QA completed.
+- Canonical `appointments` remain the source of truth. Assigned/Unassigned visibility, Day/Week/Technicians/List and existing Job Details navigation are implemented. Mobile legacy dashboard clutter is removed specifically from Schedule.
+- No SQL migrations or Production environment changes. The candidate's new Intake preference query/UI was removed before release; no new Intake dependency was released.
+
+Known limitations and precise QA evidence are recorded in [PROJECT_STATE.md](PROJECT_STATE.md#known-limitations--not-pass-claims): live QA technician assignment NOT VERIFIED; accepted baseline TS5097; incomplete authenticated Estimate/Invoice regression; unverified backup recovery; multi-company aggregate visibility; unverified cross-timezone behavior; advanced dispatch not implemented.
+
+### Architectural decision: Intake is LEGACY / DEPRECATED
+
+Intake remains physically present but is not part of new operational workflows. No new functionality may depend on Intake. Schedule must not query `intake_requests`; Jobs and Communications must not introduce new Intake dependencies. Existing Intake code/data remains untouched. Removal requires a separate dependency audit and controlled future task; historical references below are not authorization to extend Intake.
+
+Canonical operational flow: **Customer → Job / Service Request → Appointment → Estimate → Invoice → Payment**.
+
+### Next planned task — not started
+
+**SCHEDULE-03.2 — Interactive Dispatch**: Drag & Drop appointment movement, technician reassignment, Assign / Unassign, rescheduling and conflict prevention through existing canonical appointment workflows and `manual_dispatch_rpc`; mobile-first usability and no Intake dependencies. Scope preview only; implementation has not started.
+
+**Deferred separate task — WRA Backup & Recovery System**: PostgreSQL backups, Supabase Storage backups, encrypted secrets archive, recovery testing and backup automation. No backup infrastructure was implemented; deferral does not block documentation completion.
+
 Read first:
 
 docs/CODEX_OPERATING_RULES.md

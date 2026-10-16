@@ -1,5 +1,42 @@
 # Project State
 
+## SCHEDULE-03.1 — Completed Production Release (2026-10-16)
+
+Status: **COMPLETED / DEPLOYED — READY**. Owner Production visual verification is complete (owner confirmation); this does not imply full authenticated end-to-end regression coverage. This entry is the current Schedule handoff and supersedes older Schedule planning notes below.
+
+- Application release commit: `89dffb9714ad6ebb82ec877139b01fb96d11f36c` (11 approved files).
+- Production deployment: `dpl_8NAANmW5JnbcGP1NZ886c8szo5Vv`.
+- Production Schedule: https://werepairrefrigerators.vercel.app/dashboard/technician-schedule
+- Rollback deployment: `dpl_Dz2y3Zugu59P2V5PNtbHFpuQKdcy` (verified READY after release).
+- Rollback tag: `milestone-pre-schedule-03-1-a3b7d8e`, targeting `a3b7d8e4005e60f6eef78e0bf419be02c5f2420b`.
+- Validation: 74 focused/regression tests PASS; targeted ESLint, production webpack build and diff check PASS. Mobile 375/390/430px and desktop QA completed.
+- Canonical `appointments` remain the source of truth. Assigned/Unassigned visibility, Day/Week/Technicians/List and existing Job Details navigation are implemented. Mobile legacy dashboard clutter is removed specifically from Schedule.
+- No SQL migrations or Production environment changes. The candidate's new Intake preference query/UI was removed before release; no new Intake dependency was released.
+
+### Known limitations — not PASS claims
+
+1. Live technician assignment in isolated QA is **NOT VERIFIED**. QA initially had no technician profiles; the supported Profile Editor subsequently created one synthetic Draft profile with `company_id = NULL`. No supported company-affiliation workflow was available, and assignment correctly returned 403 without changing the appointment. Technician-lane movement, persistence and live assignment conflicts remain unverified end to end.
+2. Three pre-existing TS5097 errors remain in unchanged Finance tests: `repair-proposal-calculations.test.ts:4` and `repair-proposal-generation.test.ts:8,12`. The unchanged release baseline reproduced identical errors; accepted for this release. No Finance changes were made.
+3. Authenticated Estimate/Invoice workflows were not fully regression-tested during deployment. Public invalid-token checks returned 404; those checks do not validate actual documents.
+4. Full Production database and Storage backup recovery is not yet configured or verified by this work. Provider backup/PITR status and restore readiness remain unconfirmed.
+5. Active company memberships scope Schedule data, with RLS preserved. Multi-company users may see appointments across authorized companies; no dedicated company switcher exists.
+6. Cross-timezone behavior was not independently verified; existing local date/time semantics are retained.
+7. Owner visual verification is complete; advanced interactive dispatch is not implemented.
+
+Read-only Production smoke checks returned HTTP 200 for Home, Login, Dashboard, Jobs, Schedule and a Job Details route; all 18 Schedule assets returned 200. These are route/asset checks, not proof of authenticated business workflows.
+
+### Architectural decision: Intake is LEGACY / DEPRECATED
+
+Intake remains physically present but is not part of new operational workflows. No new functionality may depend on Intake. Schedule must not query `intake_requests`; Jobs and Communications must not introduce new Intake dependencies. Existing Intake code/data remains untouched. Removal requires a separate dependency audit and controlled future task; historical references below are not authorization to extend Intake.
+
+Canonical operational flow: **Customer → Job / Service Request → Appointment → Estimate → Invoice → Payment**.
+
+### Next planned task — not started
+
+**SCHEDULE-03.2 — Interactive Dispatch**: Drag & Drop appointment movement, technician reassignment, Assign / Unassign, rescheduling and conflict prevention through existing canonical appointment workflows and `manual_dispatch_rpc`; mobile-first usability and no Intake dependencies. Scope preview only; implementation has not started.
+
+**Deferred separate task — WRA Backup & Recovery System**: PostgreSQL backups, Supabase Storage backups, encrypted secrets archive, recovery testing and backup automation. No backup infrastructure was implemented; deferral does not block documentation completion.
+
 Read first:
 
 docs/CODEX_OPERATING_RULES.md
