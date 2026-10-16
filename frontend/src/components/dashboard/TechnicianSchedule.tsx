@@ -1,557 +1,100 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import {useEffect,useMemo,useRef,useState} from "react";
+import {SERVICE_REQUEST_STATUS_LABELS} from "@/lib/service-request-records";
+import {getSupabaseBrowserClient} from "@/lib/supabase/client";
+import {loadAppointments,loadTechnicians,loadScheduleCompanies} from "./schedule/data";
+import {appointmentTone,dateKey,dateLabel,filterAppointments,initials,minutes,monthDates,positionAppointments,shiftDate,technicianName,timeLabel,timeRange,UNASSIGNED,visibleHours,weekDates,type Appointment,type Technician,type View} from "./schedule/board";
+import s from "./schedule/board.module.css";
 
-import { StatusBadge } from "@/components/StatusBadge";
-import {
-  APPOINTMENT_SELECT_COLUMNS,
-  APPOINTMENT_WITH_CALENDAR_SELECT_COLUMNS,
-  formatServiceRequestDate,
-  formatServiceRequestSource,
-  mapAppointmentRow,
-  SERVICE_REQUEST_STATUS_TONES,
-  type DashboardServiceRequestAppointment,
-} from "@/lib/service-request-records";
-import { getSupabaseBrowserClient } from "@/lib/supabase/client";
-import type { AppointmentRow, ServiceRequestRow } from "@/lib/supabase/types";
-
-type ScheduleState =
-  | {
-      status: "loading";
-      appointments: DashboardServiceRequestAppointment[];
-      error: null;
-    }
-  | {
-      status: "ready";
-      appointments: DashboardServiceRequestAppointment[];
-      error: null;
-    }
-  | {
-      status: "error";
-      appointments: DashboardServiceRequestAppointment[];
-      error: string;
-    };
-
-type TechnicianGroup = {
-  technicianProfileId: string;
-  label: string;
-  appointments: DashboardServiceRequestAppointment[];
-};
-
-const activeAppointmentStatuses = new Set([
-  "scheduled",
-  "confirmed",
-  "en_route",
-]);
-
-function getTodayKey() {
-  return new Date().toISOString().slice(0, 10);
+const views:View[]=["Day","Week","Technicians","List"];
+function jobStatus(a:Appointment){return a.request?SERVICE_REQUEST_STATUS_LABELS[a.request.status]??a.request.status:"Job status unavailable";}
+function Card({a,onSelect,selected,compact=false}:{a:Appointment;onSelect:(id:string)=>void;selected:boolean;compact?:boolean}) {
+ return <button type="button" className={`${s.card} ${s[appointmentTone(a)]} ${selected?s.selected:""} ${compact?s.compact:""}`} onClick={()=>onSelect(a.id)} aria-label={`${a.request?.customerName||"Customer unavailable"}, ${timeRange(a)}, ${jobStatus(a)}${!a.technicianProfileId?", Unassigned":""}`} aria-pressed={selected}>
+  <span className={s.cardTime}>{timeRange(a)}</span><strong>{a.request?.customerName||"Customer unavailable"}</strong>
+  <span>{[a.request?.applianceBrand,a.request?.applianceType].filter(Boolean).join(" ")||"Appliance unavailable"}</span>
+  {a.request?.issueDescription&&<span className={s.ellipsis}>{a.request.issueDescription}</span>}
+  <span className={s.cardBottom}><span>{[a.request?.city,a.request?.state].filter(Boolean).join(", ")}</span>{a.request?.jobNumber!=null&&<span>#{a.request.jobNumber}</span>}</span>
+  <span className={s.badges}><span>{jobStatus(a)}</span>{!a.technicianProfileId&&<span>Unassigned</span>}{a.status==="no_show"&&<span>Needs attention · No show</span>}</span>
+ </button>;
 }
-
-function shiftDate(dateKey: string, days: number) {
-  const date = new Date(`${dateKey}T12:00:00.000Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
+function MiniCalendar({date,onDate}:{date:string;onDate:(v:string)=>void}) {
+ const [month,setMonth]=useState(date.slice(0,7)+"-01");
+ function move(n:number){const d=new Date(month+"T12:00:00");d.setMonth(d.getMonth()+n);setMonth(dateKey(d));}
+ return <section className={s.mini} aria-label="Calendar"><div className={s.miniHeading}><button aria-label="Previous month" onClick={()=>move(-1)}>‹</button><strong>{new Intl.DateTimeFormat("en-US",{month:"long",year:"numeric"}).format(new Date(month+"T12:00:00"))}</strong><button aria-label="Next month" onClick={()=>move(1)}>›</button></div><div className={s.monthGrid}>{["Su","Mo","Tu","We","Th","Fr","Sa"].map(d=><span key={d}>{d}</span>)}{monthDates(month).map(d=><button key={d} className={`${d===date?s.chosenDate:""} ${d.slice(0,7)!==month.slice(0,7)?s.dim:""}`} aria-label={dateLabel(d)} aria-pressed={d===date} onClick={()=>onDate(d)}>{Number(d.slice(-2))}</button>)}</div></section>;
 }
-
-function formatDateLabel(dateKey: string) {
-  return new Intl.DateTimeFormat("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  }).format(new Date(`${dateKey}T12:00:00.000Z`));
+function Details({a,technicians,onClose}:{a:Appointment;technicians:Technician[];onClose:()=>void}) {
+ const heading=useRef<HTMLHeadingElement>(null);
+ useEffect(()=>{heading.current?.focus();},[a.id]);
+ const href=`/dashboard/leads/${encodeURIComponent(a.serviceRequestId)}`;
+ const technician=a.technicianProfileId?technicianName(technicians.find(t=>t.id===a.technicianProfileId)):"Unassigned";
+ return <section className={s.details} aria-labelledby="schedule-detail-title" onKeyDown={e=>{if(e.key==="Escape")onClose();}}>
+  <header><h2 id="schedule-detail-title" ref={heading} tabIndex={-1}>Job Details</h2><button aria-label="Close Job Details" onClick={onClose}>×</button></header>
+  <div className={s.detailMeta}><span className={s.badge}>{jobStatus(a)}</span><span>{a.request?.jobNumber!=null?`#${a.request.jobNumber}`:"Job number unavailable"}</span></div>
+  <h3>{a.request?.customerName||"Customer unavailable"}</h3>{a.phone&&<a href={`tel:${a.phone.replace(/[^+\d]/g,"")}`} className={s.phone}>{a.phone} · Call</a>}
+  <dl><dt>Service address</dt><dd>{a.address||[a.request?.city,a.request?.state,a.request?.zipCode].filter(Boolean).join(", ")||"Unavailable"}</dd>
+   <dt>Appliance / Brand</dt><dd>{[a.request?.applianceType,a.request?.applianceBrand].filter(Boolean).join(" · ")||"Unavailable"}</dd>
+   <dt>Problem</dt><dd>{a.request?.issueDescription||"Unavailable"}</dd>
+   <dt>Appointment</dt><dd>{dateLabel(a.appointmentDate)}<br/>{timeRange(a)}<br/><span className={s.muted}>Appointment status: {a.status.replaceAll("_"," ")}</span></dd>
+   <dt>Technician</dt><dd>{technician}</dd>
+  </dl>
+  <div className={s.detailActions}><Link className={s.primary} href={`${href}?tab=appointment`}>Assign Technician</Link><Link className={s.button} href={`${href}?tab=appointment`}>Edit Appointment</Link><Link className={s.button} href={href}>Open Job</Link></div>
+ </section>;
 }
-
-function formatAppointmentWindow(appointment: DashboardServiceRequestAppointment) {
-  const start = appointment.windowStartTime.slice(0, 5);
-  const end = appointment.windowEndTime.slice(0, 5);
-
-  return `${start}-${end}`;
-}
-
-function getScheduleReadError(message: string): string {
-  if (
-    message.includes("appointments") &&
-    (message.includes("schema cache") || message.includes("Could not find"))
-  ) {
-    return "Technician schedule is not ready yet. Apply migration 0032 in Supabase.";
-  }
-
-  if (message.includes("permission denied") || message.includes("row-level security")) {
-    return "This account is not allowed to read appointment schedules.";
-  }
-
-  return message;
-}
-
-function getCalendarSyncLabel(appointment: DashboardServiceRequestAppointment) {
-  if (appointment.externalCalendarStatus === "synced") {
-    return "Calendar Sync: Synced";
-  }
-
-  if (appointment.externalCalendarStatus === "failed") {
-    return "Calendar Sync: Failed";
-  }
-
-  if (appointment.externalCalendarStatus === "pending") {
-    return "Calendar Sync: Pending";
-  }
-
-  if (appointment.externalCalendarStatus === "canceled") {
-    return "Calendar Sync: Canceled";
-  }
-
-  return "Calendar Sync: Not configured";
-}
-
-function getCalendarSyncTone(appointment: DashboardServiceRequestAppointment) {
-  if (appointment.externalCalendarStatus === "synced") {
-    return "border-emerald-300/20 bg-emerald-300/10 text-emerald-100";
-  }
-
-  if (appointment.externalCalendarStatus === "failed") {
-    return "border-amber-300/20 bg-amber-300/10 text-amber-100";
-  }
-
-  return "border-white/10 bg-slate-900 text-slate-300";
-}
-
-function getStatusTone(appointment: DashboardServiceRequestAppointment) {
-  if (appointment.status === "completed") {
-    return "border-emerald-300/20 bg-emerald-300/10 text-emerald-100";
-  }
-
-  if (appointment.status === "canceled" || appointment.status === "no_show") {
-    return "border-slate-300/20 bg-slate-300/10 text-slate-300";
-  }
-
-  if (appointment.status === "en_route") {
-    return "border-cyan-300/20 bg-cyan-300/10 text-cyan-100";
-  }
-
-  return "border-blue-300/20 bg-blue-300/10 text-blue-100";
-}
-
-function getOperationalStatusLabel(appointment: DashboardServiceRequestAppointment) {
-  if (appointment.status === "en_route") {
-    return "In progress";
-  }
-
-  return formatServiceRequestSource(appointment.status);
-}
-
-function getTechnicianLabel(appointment: DashboardServiceRequestAppointment) {
-  return appointment.technicianProfileId ? `Technician ${appointment.technicianProfileId.slice(0, 8).toUpperCase()}` : "Unassigned";
-}
-
-function getAppointmentCityZip(appointment: DashboardServiceRequestAppointment) {
-  const city = appointment.request?.city;
-  const zip = appointment.request?.zipCode ?? "unknown";
-
-  return `${city ? `${city} · ` : ""}ZIP ${zip}`;
-}
-
-function AppointmentCard({
-  appointment,
-}: {
-  appointment: DashboardServiceRequestAppointment;
-}) {
-  return (
-    <article className="rounded-lg border border-white/10 bg-slate-950 p-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <p className="text-xs font-bold uppercase tracking-[0.18em] text-cyan-200">
-            {formatAppointmentWindow(appointment)} · Job #{appointment.request?.jobNumber ?? "Pending"}
-          </p>
-          <h3 className="mt-2 text-lg font-bold text-white">
-            {appointment.request?.customerName ?? "Service appointment"}
-          </h3>
-          <p className="mt-1 text-sm leading-6 text-slate-400">
-            {appointment.request?.applianceBrand
-              ? `${appointment.request.applianceBrand} `
-              : ""}
-            {appointment.request?.applianceType ?? "Appliance"} ·{" "}
-            {getAppointmentCityZip(appointment)}
-          </p>
-        </div>
-        <span
-          className={`rounded-full border px-3 py-1 text-xs font-black uppercase tracking-[0.14em] ${getStatusTone(
-            appointment,
-          )}`}
-        >
-          {getOperationalStatusLabel(appointment)}
-        </span>
-      </div>
-
-      <p className="mt-4 line-clamp-3 text-sm leading-6 text-slate-300">
-        {appointment.request?.issueDescription ?? "No issue summary available."}
-      </p>
-
-      {appointment.request ? (
-        <div className="mt-4">
-          <StatusBadge
-            tone={SERVICE_REQUEST_STATUS_TONES[appointment.request.status] ?? "slate"}
-          >
-            Job: {formatServiceRequestSource(appointment.request.status)}
-          </StatusBadge>
-        </div>
-      ) : null}
-
-      <div
-        className={`mt-4 rounded-md border px-3 py-2 text-xs font-bold ${getCalendarSyncTone(
-          appointment,
-        )}`}
-      >
-        {getCalendarSyncLabel(appointment)}
-        {appointment.externalCalendarEventId ? (
-          <span className="ml-2 opacity-80">
-            Event {appointment.externalCalendarEventId.slice(0, 10)}
-          </span>
-        ) : null}
-        {appointment.externalCalendarError ? (
-          <p className="mt-1 font-semibold opacity-80">
-            {appointment.externalCalendarError}
-          </p>
-        ) : null}
-      </div>
-
-      <div className="mt-4 grid gap-2 sm:grid-cols-2">
-        <button
-          className="cursor-not-allowed rounded-md border border-white/10 px-4 py-3 text-sm font-bold text-slate-500"
-          disabled
-          type="button"
-        >
-          Call via Platform
-        </button>
-        <button
-          className="cursor-not-allowed rounded-md border border-white/10 px-4 py-3 text-sm font-bold text-slate-500"
-          disabled
-          type="button"
-        >
-          Message via Platform
-        </button>
-      </div>
-
-      <div className="mt-4 flex flex-col gap-2 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
-        <span>Source: {formatServiceRequestSource(appointment.source)}</span>
-        <span>Created {formatServiceRequestDate(appointment.createdAt)}</span>
-      </div>
-
-      {appointment.request ? (
-        <Link
-          className="mt-4 inline-flex rounded-md bg-cyan-200 px-4 py-3 text-sm font-black text-slate-950 transition hover:bg-cyan-100"
-          href={`/dashboard/leads/${appointment.request.id}`}
-        >
-          Open Job Workspace
-        </Link>
-      ) : null}
-    </article>
-  );
-}
-
 export function TechnicianSchedule() {
-  const [state, setState] = useState<ScheduleState>({
-    status: "loading",
-    appointments: [],
-    error: null,
-  });
-  const [selectedDate, setSelectedDate] = useState(getTodayKey);
-  const [selectedTechnicianId, setSelectedTechnicianId] = useState("all");
-
-  useEffect(() => {
-    let isMounted = true;
-
-    async function loadAppointments() {
-      const supabase = getSupabaseBrowserClient();
-
-      if (!supabase) {
-        if (isMounted) {
-          setState({
-            status: "error",
-            appointments: [],
-            error: "Supabase is not configured for appointment schedules.",
-          });
-        }
-        return;
-      }
-
-      let { data, error } = await supabase
-        .from("appointments")
-        .select(
-            APPOINTMENT_WITH_CALENDAR_SELECT_COLUMNS.replace(
-              "service_requests(",
-              "service_requests!appointments_service_request_id_fkey(",
-            ),
-          )
-        .order("appointment_date", { ascending: true })
-        .order("window_start_time", { ascending: true });
-
-      if (
-        error &&
-        (error.message.includes("external_calendar") ||
-          error.message.includes("schema cache"))
-      ) {
-        const fallbackResult = await supabase
-          .from("appointments")
-          .select(
-            APPOINTMENT_SELECT_COLUMNS.replace(
-              "service_requests(",
-              "service_requests!appointments_service_request_id_fkey(",
-            ),
-          )
-          .order("appointment_date", { ascending: true })
-          .order("window_start_time", { ascending: true });
-
-        data = fallbackResult.data;
-        error = fallbackResult.error;
-      }
-
-      if (!isMounted) {
-        return;
-      }
-
-      if (error) {
-        setState({
-          status: "error",
-          appointments: [],
-          error: getScheduleReadError(error.message),
-        });
-        return;
-      }
-
-      setState({
-        status: "ready",
-        appointments: (
-          data as unknown as (AppointmentRow & {
-            service_requests?: ServiceRequestRow | null;
-          })[]
-        ).map(mapAppointmentRow),
-        error: null,
-      });
-    }
-
-    void loadAppointments();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  const technicianOptions = useMemo(() => {
-    const options = new Map<string, string>();
-
-    state.appointments.forEach((appointment) => {
-      options.set(appointment.technicianProfileId ?? "unassigned", getTechnicianLabel(appointment));
-    });
-
-    return Array.from(options.entries()).map(([id, label]) => ({ id, label }));
-  }, [state.appointments]);
-
-  const appointmentsForDay = useMemo(
-    () =>
-      state.appointments.filter(
-        (appointment) =>
-          appointment.appointmentDate === selectedDate &&
-          (selectedTechnicianId === "all" ||
-            (appointment.technicianProfileId ?? "unassigned") === selectedTechnicianId),
-      ),
-    [state.appointments, selectedDate, selectedTechnicianId],
-  );
-
-  const groupedAppointments = useMemo<TechnicianGroup[]>(() => {
-    const technicianIds =
-      selectedTechnicianId === "all"
-        ? technicianOptions.map((option) => option.id)
-        : [selectedTechnicianId];
-
-    return technicianIds.map((technicianProfileId) => {
-      const option = technicianOptions.find((item) => item.id === technicianProfileId);
-
-      return {
-        technicianProfileId,
-        label:
-          option?.label ??
-          `Technician ${technicianProfileId.slice(0, 8).toUpperCase()}`,
-        appointments: appointmentsForDay.filter(
-          (appointment) =>
-            (appointment.technicianProfileId ?? "unassigned") === technicianProfileId,
-        ),
-      };
-    });
-  }, [appointmentsForDay, selectedTechnicianId, technicianOptions]);
-
-  const todaysJobs = appointmentsForDay.filter((appointment) =>
-    activeAppointmentStatuses.has(appointment.status),
-  );
-
-  if (state.status === "loading") {
-    return (
-      <div className="rounded-lg border border-white/10 bg-slate-950 p-6 text-sm font-semibold text-slate-300">
-        Loading dispatch board...
-      </div>
-    );
-  }
-
-  if (state.status === "error") {
-    return (
-      <div className="rounded-lg border border-amber-300/20 bg-amber-300/10 p-6 text-sm leading-6 text-amber-50">
-        {state.error}
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-5">
-      <section className="rounded-lg border border-white/10 bg-slate-950 p-4">
-        <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
-          <div>
-            <p className="text-xs font-black uppercase tracking-[0.18em] text-cyan-200">
-              Dispatch Board
-            </p>
-            <h2 className="mt-2 text-2xl font-black text-white">
-              {formatDateLabel(selectedDate)}
-            </h2>
-            <p className="mt-2 text-sm leading-6 text-slate-400">
-              Internal CRM appointments are the source of truth. Google Calendar
-              is optional outbound sync only.
-            </p>
-          </div>
-          <div className="grid gap-2 sm:grid-cols-3">
-            <button
-              className="rounded-md border border-white/10 px-3 py-2 text-sm font-bold text-slate-200 transition hover:border-cyan-300/40 hover:text-cyan-100"
-              onClick={() => setSelectedDate(shiftDate(selectedDate, -1))}
-              type="button"
-            >
-              Previous day
-            </button>
-            <button
-              className="rounded-md bg-cyan-300 px-3 py-2 text-sm font-black text-slate-950 transition hover:bg-cyan-200"
-              onClick={() => setSelectedDate(getTodayKey())}
-              type="button"
-            >
-              Today
-            </button>
-            <button
-              className="rounded-md border border-white/10 px-3 py-2 text-sm font-bold text-slate-200 transition hover:border-cyan-300/40 hover:text-cyan-100"
-              onClick={() => setSelectedDate(shiftDate(selectedDate, 1))}
-              type="button"
-            >
-              Next day
-            </button>
-          </div>
-        </div>
-
-        <div className="mt-4 grid gap-3 md:grid-cols-2">
-          <label className="block">
-            <span className="text-sm font-bold text-slate-100">Date</span>
-            <input
-              className="mt-2 w-full rounded-md border border-white/10 bg-slate-900 px-3 py-3 text-sm text-white outline-none transition focus:border-cyan-300"
-              onChange={(event) => setSelectedDate(event.target.value)}
-              type="date"
-              value={selectedDate}
-            />
-          </label>
-          <label className="block">
-            <span className="text-sm font-bold text-slate-100">
-              Technician
-            </span>
-            <select
-              className="mt-2 w-full rounded-md border border-white/10 bg-slate-900 px-3 py-3 text-sm text-white outline-none transition focus:border-cyan-300"
-              onChange={(event) => setSelectedTechnicianId(event.target.value)}
-              value={selectedTechnicianId}
-            >
-              <option value="all">All technicians</option>
-              {technicianOptions.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-cyan-300/20 bg-cyan-300/10 p-4 md:hidden">
-        <p className="text-xs font-black uppercase tracking-[0.18em] text-cyan-100">
-          My Jobs Today
-        </p>
-        {todaysJobs.length > 0 ? (
-          <div className="mt-3 space-y-3">
-            {todaysJobs.map((appointment) => (
-              <AppointmentCard appointment={appointment} key={appointment.id} />
-            ))}
-          </div>
-        ) : (
-          <p className="mt-3 text-sm leading-6 text-cyan-50/80">
-            No active jobs are scheduled for this day and technician filter.
-          </p>
-        )}
-      </section>
-
-      {state.appointments.length === 0 ? (
-        <div className="rounded-lg border border-white/10 bg-slate-950 p-6">
-          <p className="text-sm font-bold text-white">No appointments yet.</p>
-          <p className="mt-2 text-sm leading-6 text-slate-400">
-            Book a dispatcher-recommended appointment from a job detail page to
-            see it here.
-          </p>
-        </div>
-      ) : null}
-
-      {state.appointments.length > 0 && groupedAppointments.length === 0 ? (
-        <div className="rounded-lg border border-white/10 bg-slate-950 p-6">
-          <p className="text-sm font-bold text-white">No technicians found.</p>
-          <p className="mt-2 text-sm leading-6 text-slate-400">
-            Change the technician filter or book an appointment first.
-          </p>
-        </div>
-      ) : null}
-
-      <section className="hidden gap-4 md:grid xl:grid-cols-2">
-        {groupedAppointments.map((group) => (
-          <div
-            className="rounded-lg border border-white/10 bg-slate-900 p-4"
-            key={group.technicianProfileId}
-          >
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">
-                  Technician
-                </p>
-                <h3 className="mt-2 text-xl font-bold text-white">
-                  {group.label}
-                </h3>
-              </div>
-              <span className="rounded-full border border-cyan-200/20 bg-cyan-200/10 px-3 py-1 text-xs font-black uppercase tracking-[0.14em] text-cyan-100">
-                {group.appointments.length} job
-                {group.appointments.length === 1 ? "" : "s"}
-              </span>
-            </div>
-
-            {group.appointments.length > 0 ? (
-              <div className="mt-4 space-y-3">
-                {group.appointments.map((appointment) => (
-                  <AppointmentCard
-                    appointment={appointment}
-                    key={appointment.id}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="mt-4 rounded-md border border-dashed border-white/10 bg-slate-950 p-4">
-                <p className="text-sm font-bold text-white">
-                  No jobs scheduled.
-                </p>
-                <p className="mt-2 text-sm leading-6 text-slate-500">
-                  This technician has no appointments for the selected day.
-                </p>
-              </div>
-            )}
-          </div>
-        ))}
-      </section>
-    </div>
-  );
+ const [date,setDate]=useState(()=>dateKey());const [view,setView]=useState<View>("Day");
+ const [rows,setRows]=useState<Appointment[]>([]);const [technicians,setTechnicians]=useState<Technician[]>([]);
+ const [loading,setLoading]=useState(true);const [error,setError]=useState("");const [retry,setRetry]=useState(0);
+ const [filters,setFilters]=useState(false);const [search,setSearch]=useState("");const [selectedTechs,setSelectedTechs]=useState<string[]>([]);const [status,setStatus]=useState("");const [selected,setSelected]=useState<string|null>(null);
+ const boardRef=useRef<HTMLDivElement>(null);
+ const dates=weekDates(date),start=dates[0],end=dates[6];
+ useEffect(()=>{
+  let active=true;const client=getSupabaseBrowserClient();
+  // Clear stale date results while a newly selected week loads.
+  void Promise.resolve().then(async()=>{
+   if(!active)return;setLoading(true);setError("");
+   try {if(!client)throw new Error("Schedule is unavailable: sign in and check your connection.");
+    const companies=await loadScheduleCompanies(client);
+    const [appointments,staff]=await Promise.all([loadAppointments(client,start,end,companies),loadTechnicians(client,companies)]);
+    if(active){setRows(appointments);setTechnicians(staff);}
+   }catch(e){if(active){setRows([]);setError(e instanceof Error?e.message:"Could not load Schedule.");}}
+   finally{if(active)setLoading(false);}
+  });return ()=>{active=false;};
+ },[start,end,retry]);
+ const allTechnicians=useMemo(()=>{
+  const map=new Map(technicians.map(t=>[t.id,t]));
+  rows.forEach(a=>{if(a.technicianProfileId&&!map.has(a.technicianProfileId))map.set(a.technicianProfileId,{id:a.technicianProfileId,display_name:null,business_name:null});});return [...map.values()];
+ },[rows,technicians]);
+ const shownTechnicians=allTechnicians.filter(t=>(!selectedTechs.length||selectedTechs.includes(t.id))&&technicianName(t).toLowerCase().includes(search.toLowerCase()));
+ const filtered=filterAppointments(rows,selectedTechs,status).filter(a=>!a.technicianProfileId||(!search||technicianName(allTechnicians.find(t=>t.id===a.technicianProfileId)).toLowerCase().includes(search.toLowerCase())));
+ const dayRows=filtered.filter(a=>a.appointmentDate===date);
+ const periodRows=view==="Week"?filtered:dayRows;
+ const columns=[{id:UNASSIGNED,name:"Unassigned"},...shownTechnicians.map(t=>({id:t.id,name:technicianName(t)}))];
+ const selectedAppointment=rows.find(a=>a.id===selected);
+ const hours=visibleHours(dayRows);const scale=1.3;const ticks=Array.from({length:(hours.end-hours.start)/60+1},(_,i)=>hours.start+i*60);
+ const statuses=[...new Set(rows.flatMap(a=>a.request?[a.request.status]:[]))];
+ function pick(id:string){setSelected(id);}
+ function closeDetails(){setSelected(null);boardRef.current?.focus();}
+ function changeDate(value:string){if(/^\d{4}-\d{2}-\d{2}$/.test(value)&&dateKey(new Date(value+"T12:00:00"))===value)setDate(value);}
+ const cards=(items:Appointment[])=>items.length?items.map(a=><Card key={a.id} a={a} onSelect={pick} selected={selected===a.id}/>):<p className={s.empty}>No appointments</p>;
+ return <div className={s.board}>
+  <header className={s.pageHeader}><div><h1>Schedule</h1><p>Manage appointments, assign technicians, and keep your team on track.</p></div><div className={s.headerActions}><button className={s.button} aria-expanded={filters} onClick={()=>setFilters(!filters)}>☷ Filters{selectedTechs.length||status?" · Active":""}</button><Link className={s.primary} href="/dashboard/leads?newJob=1" title="Create a Job in the existing Jobs workspace">＋ New Job</Link></div></header>
+  <div className={s.layout}><main className={s.main}>
+   <nav className={s.toolbar} aria-label="Schedule navigation"><div className={s.dateControls}><button className={s.button} aria-label="Previous day" onClick={()=>setDate(shiftDate(date,-1))}>‹</button><button className={s.button} aria-label="Next day" onClick={()=>setDate(shiftDate(date,1))}>›</button><input className={s.dateInput} type="date" value={date} aria-label="Schedule date" onChange={e=>changeDate(e.target.value)}/><button className={s.button} onClick={()=>setDate(dateKey())}>Today</button></div><div className={s.tabs} aria-label="Schedule view">{views.map(v=><button key={v} aria-pressed={view===v} className={view===v?s.activeTab:""} onClick={()=>setView(v)}>{v}</button>)}</div></nav>
+   {filters&&<section className={s.filters} aria-label="Schedule filters"><label>Technician search<input type="search" placeholder="Search technicians" value={search} onChange={e=>setSearch(e.target.value)}/></label><label>Job status<select value={status} onChange={e=>setStatus(e.target.value)}><option value="">All statuses</option>{statuses.map(v=><option key={v} value={v}>{SERVICE_REQUEST_STATUS_LABELS[v]??v}</option>)}</select></label><fieldset><legend>Technicians · select none for all</legend><div className={s.techChoices}>{[{id:UNASSIGNED,name:"Unassigned"},...allTechnicians.map(t=>({id:t.id,name:technicianName(t)}))].filter(t=>t.name.toLowerCase().includes(search.toLowerCase())||t.id===UNASSIGNED).map(t=><label key={t.id}><input type="checkbox" checked={selectedTechs.includes(t.id)} onChange={e=>setSelectedTechs(old=>e.target.checked?[...old,t.id]:old.filter(id=>id!==t.id))}/>{t.name}</label>)}</div></fieldset><button className={s.button} onClick={()=>{setSelectedTechs([]);setStatus("");setSearch("");}}>Clear filters</button></section>}
+   <div ref={boardRef} tabIndex={-1} className={s.content} aria-busy={loading}>
+    {loading?<p className={s.empty} role="status">Loading appointments…</p>:error?<div className={s.empty} role="alert"><p>{error}</p><button className={s.button} onClick={()=>setRetry(n=>n+1)}>Retry</button></div>:<>
+    {view==="Day"&&<><div className={s.desktopGrid}><div className={s.gridScroll} tabIndex={0} aria-label="Day grid. Scroll horizontally for more technicians."><div className={s.timeColumn}><div className={s.columnHeading}/><div className={s.timeBody} style={{height:(hours.end-hours.start)*scale+28}}>{ticks.map(t=><span key={t} style={{top:(t-hours.start)*scale}}>{timeLabel(`${Math.floor(t/60)}:${String(t%60).padStart(2,"0")}`)}</span>)}</div></div>{columns.map(column=>{
+     const items=dayRows.filter(a=>(a.technicianProfileId??UNASSIGNED)===column.id);const placed=positionAppointments(items);const lanes=Math.max(1,...placed.map(p=>p.lanes));
+     return <section key={column.id} className={`${s.gridColumn} ${column.id===UNASSIGNED?s.unassignedColumn:""}`} style={{width:Math.max(250,lanes*155)}}><header className={s.columnHeading}><span className={s.avatar}>{column.id===UNASSIGNED?"—":initials(column.name)}</span><div><strong>{column.name}</strong><small>{column.id===UNASSIGNED?"Jobs without a technician":"Appointments"}</small></div><span className={s.count}>{items.length}</span></header><div className={s.columnBody} style={{height:(hours.end-hours.start)*scale+28,backgroundSize:`100% ${60*scale}px`}}>{placed.map(p=><div key={p.appointment.id} className={s.placedCard} style={{top:(minutes(p.appointment.windowStartTime)-hours.start)*scale,height:Math.max(24,(minutes(p.appointment.windowEndTime)-minutes(p.appointment.windowStartTime))*scale-4),left:`calc(${p.lane/p.lanes*100}% + 4px)`,width:`calc(${100/p.lanes}% - 8px)`}}><Card a={p.appointment} onSelect={pick} selected={selected===p.appointment.id} compact/></div>)}</div></section>;
+    })}</div></div><div className={s.mobileDay}><h2>{dateLabel(date)}</h2>{cards(dayRows)}</div></>}
+    {view==="Week"&&<div className={s.week}>{dates.map(d=><section key={d}><button className={s.weekHeading} onClick={()=>{setDate(d);setView("Day");}} aria-label={`Open ${dateLabel(d)}`}>{dateLabel(d,true)}<small>{new Intl.DateTimeFormat("en-US",{weekday:"short"}).format(new Date(d+"T12:00:00"))}</small></button>{cards(filtered.filter(a=>a.appointmentDate===d))}</section>)}</div>}
+    {view==="Technicians"&&<div className={s.technicianView}>{columns.map(c=><section key={c.id}><header className={s.groupHeader}><span className={s.avatar}>{c.id===UNASSIGNED?"—":initials(c.name)}</span><h2>{c.name}</h2><span>{dayRows.filter(a=>(a.technicianProfileId??UNASSIGNED)===c.id).length}</span></header>{cards(dayRows.filter(a=>(a.technicianProfileId??UNASSIGNED)===c.id))}</section>)}</div>}
+    {view==="List"&&<section className={s.list}><h2>{dateLabel(date)}</h2>{cards(dayRows)}</section>}
+    </>}
+   </div>
+   <footer className={s.footer}><div className={s.legend}>{[["blue","Scheduled"],["green","In progress"],["gray","Completed"],["yellow","Unassigned"],["red","Needs attention"]].map(([tone,label])=><span key={tone}><i className={s[tone]}/>{label}</span>)}</div><span>{loading?"…":periodRows.length} appointments · {loading?"…":periodRows.filter(a=>!a.technicianProfileId).length} unassigned</span><Link href="/dashboard/leads">View all Jobs →</Link></footer>
+  </main><aside className={`${s.sidebar} ${selectedAppointment?s.hasSelection:""}`}><MiniCalendar key={date.slice(0,7)} date={date} onDate={changeDate}/>{selectedAppointment?<Details key={selectedAppointment.id} a={selectedAppointment} technicians={allTechnicians} onClose={closeDetails}/>:<div className={s.detailPlaceholder}>Select an appointment to view Job Details.</div>}</aside></div>
+ </div>;
 }

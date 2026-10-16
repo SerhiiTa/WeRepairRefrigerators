@@ -434,7 +434,7 @@ function requestMatchesDateFilter(
   return request.scheduledDate === getTodayKey();
 }
 
-export function ServiceRequestsInbox() {
+export function ServiceRequestsInbox({ initialNewJob = false }: { initialNewJob?: boolean } = {}) {
   const router = useRouter();
   const conversationSubmitRef = useRef(false);
   const editedFieldsRef = useRef(new Set<keyof NewJobForm>());
@@ -466,7 +466,7 @@ export function ServiceRequestsInbox() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedMonth, setSelectedMonth] = useState(() => getMonthKey(new Date()));
   const [showFilters, setShowFilters] = useState(false);
-  const [showNewJobWizard, setShowNewJobWizard] = useState(false);
+  const [showNewJobWizard, setShowNewJobWizard] = useState(initialNewJob);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [technicianFilter, setTechnicianFilter] = useState("All technicians");
   const [dateFilter, setDateFilter] = useState<DateFilter>("all");

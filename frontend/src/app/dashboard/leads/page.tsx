@@ -1,6 +1,7 @@
 import { ServiceRequestsInbox } from "@/components/dashboard/ServiceRequestsInbox";
 
-export default function DashboardLeadsPage() {
+export default async function DashboardLeadsPage({ searchParams }: { searchParams: Promise<{ newJob?: string; conversationId?: string; customerId?: string }> }) {
+  const query = await searchParams;
   return (
     <div className="w-full space-y-3">
       <header className="px-1">
@@ -9,7 +10,7 @@ export default function DashboardLeadsPage() {
         </h1>
       </header>
 
-      <ServiceRequestsInbox />
+      <ServiceRequestsInbox initialNewJob={query.newJob === "1" && !query.conversationId && !query.customerId} />
     </div>
   );
 }

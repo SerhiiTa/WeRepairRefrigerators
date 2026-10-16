@@ -14,6 +14,7 @@ export function DashboardTopbar() {
   const pathname = usePathname();
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [isGlobalSearchOpen, setIsGlobalSearchOpen] = useState(false);
+  const isSchedule = pathname === "/dashboard/technician-schedule";
   const isJobsCenter = pathname === "/dashboard/leads";
   const isJobWorkspace = /^\/dashboard\/leads\/[^/]+$/.test(pathname);
   const isCommunicationsWorkspace = pathname === "/dashboard/communications";
@@ -176,11 +177,13 @@ export function DashboardTopbar() {
   }
 
   return (
+    <>
+    {isSchedule ? <div className="flex h-14 items-center gap-3 border-b border-[#E5E7EB] bg-white px-4 lg:hidden" aria-label="Schedule app navigation"><DashboardMobileDrawer trigger="hamburger" /><span className="font-semibold text-[#0F172A]">HomeFixOS</span></div> : null}
     <header
       className={`border-b border-[#E5E7EB] bg-white px-4 py-4 shadow-[0_8px_24px_rgba(15,23,42,0.04)] sm:px-6 lg:px-8 ${
         isCustomerWorkspace
           ? "hidden"
-          : isJobWorkspace || isCommunicationLeadsWorkspace
+          : isJobWorkspace || isCommunicationLeadsWorkspace || isSchedule
             ? "hidden lg:block"
             : ""
       }`}
@@ -251,5 +254,6 @@ export function DashboardTopbar() {
         <DashboardNavigationLinks variant="mobile" />
       </nav>
     </header>
+    </>
   );
 }

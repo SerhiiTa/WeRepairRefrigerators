@@ -39,7 +39,7 @@ test('wrapper retains converted retry safety and changes only required technicia
  const old=fn(read('../../../../supabase/migrations/0146_communication_job_save_contract_apply_ready.sql'),'save_conversation_job_rpc');
  assert.equal(fn(migration,'save_conversation_job_rpc'),old.replace(' or edited.assigned_technician_id is null','').replace('date, start/end time and technician.','date and start/end time.'));
 });
-test('board safely groups nullable assignment and displays Job number',()=>{const board=read('../../components/dashboard/TechnicianSchedule.tsx');assert.match(board,/\?\? "unassigned"/);assert.match(board,/Job #/);assert.match(board,/: "Unassigned"/);});
+test('board safely groups nullable assignment and displays Job number',()=>{const board=read('../../components/dashboard/TechnicianSchedule.tsx');assert.match(board,/technicianProfileId\?\?UNASSIGNED/);assert.match(board,/request\?\.jobNumber/);assert.match(board,/name:"Unassigned"/);});
 
 test('non-manual booking retains exact verified Production body including company ZIP exemption',()=>{
  const updated=fn(migration,'book_service_request_appointment_rpc');
