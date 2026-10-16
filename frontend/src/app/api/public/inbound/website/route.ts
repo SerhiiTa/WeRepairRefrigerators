@@ -1,3 +1,4 @@
+import { wakePushAfterCommit } from "@/server/notifications/post-commit-wakeup";
 import { Buffer } from "node:buffer";
 
 import { NextResponse } from "next/server";
@@ -14,6 +15,7 @@ import { persistUnifiedInboundEvent } from "@/server/communications/unified-inbo
 import { processUnifiedInboundEvent } from "@/server/communications/unified-intake-gateway";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 const MAX_BODY_BYTES = 32_000;
 
@@ -455,6 +457,10 @@ export async function POST(request: Request) {
       { status: 503 },
     );
   }
+
+  // All persistence awaits have completed, including the timeline INSERT whose
+  // transaction creates the canonical notification and delivery queue entry.
+  wakePushAfterCommit();
 
   return NextResponse.json(
     {

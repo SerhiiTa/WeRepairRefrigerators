@@ -1,6 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { WebsiteRequestCard } from "./WebsiteRequestCard";
+import { canonicalWebsiteEvents } from "@/lib/communications/website-request";
+type RequestTimelineEvent = CommunicationTimelineEvent & {conversationId?: string; intakeRequestId?: string | null};
 import { CommunicationSourceIcon } from "./CommunicationSourceIcon";
 import { getConversationAttention, isConversationVisible, matchesInboxChannel, matchesInboxWorkflow } from "./communication-source";
 import { useRouter } from "next/navigation";
@@ -89,7 +92,8 @@ type ConversationDetailData = {
   attachmentsByMessageId: Record<string, SignedMessageAttachment[]>;
   calls: CommunicationCallRow[];
   transcripts: TranscriptRow[];
-  timelineEvents: CommunicationTimelineEvent[];
+  timelineEvents: RequestTimelineEvent[];
+  websiteRequests: IntakeRequestRow[];
 };
 
 type SignedMessageAttachment = MessageAttachmentRow & {
@@ -150,6 +154,8 @@ type HubConversation = CommunicationConversation & {
 };
 
 type TimelineRow = {
+  conversation_id: string;
+  intake_request_id: string | null;
   id: string;
   event_type: DatabaseCommunicationTimelineEventType;
   title: string;
@@ -173,6 +179,7 @@ const emptyDetailData: ConversationDetailData = {
   calls: [],
   transcripts: [],
   timelineEvents: [],
+  websiteRequests: [],
 };
 
 type ContextTab = "customer" | "lead" | "job" | "activity";
@@ -214,10 +221,12 @@ function mapConversation(row: ConversationRow): HubConversation {
   };
 }
 
-function mapTimelineEvent(row: TimelineRow): CommunicationTimelineEvent {
+function mapTimelineEvent(row: TimelineRow): RequestTimelineEvent {
   return {
     id: row.id,
     type: row.event_type,
+    conversationId: row.conversation_id,
+    intakeRequestId: row.intake_request_id,
     title: row.title,
     body: row.body,
     eventTime: row.event_time,
@@ -870,7 +879,7 @@ type ThreadEvent =
   | { id: string; occurredAt: string; session: CallSession; type: "call_session" }
   | { id: string; message: MessageRow; occurredAt: string; type: "message" }
   | { id: string; messages: MessageRow[]; occurredAt: string; type: "sms_group" }
-  | { event: CommunicationTimelineEvent; id: string; occurredAt: string; type: "timeline" };
+  | { event: RequestTimelineEvent; request?: IntakeRequestRow; id: string; occurredAt: string; type: "timeline" };
 
 type IconName =
   | "ai"
@@ -1106,17 +1115,20 @@ function buildThreadEvents({
   calls,
   messages,
   timelineEvents,
+  websiteRequests,
 }: {
   calls: CommunicationCallRow[];
   messages: MessageRow[];
-  timelineEvents: CommunicationTimelineEvent[];
+  timelineEvents: RequestTimelineEvent[];
+  websiteRequests: IntakeRequestRow[];
 }): ThreadEvent[] {
   const sessions = groupCallSessions(calls);
   const sessionById = new Map(sessions.map((session) => [session.id, { ...session }]));
   const hasCalls = calls.length > 0;
   const unattachedMessages: MessageRow[] = [];
 
-  for (const message of messages) {
+  const canonical = canonicalWebsiteEvents(timelineEvents, messages, websiteRequests);
+  for (const message of canonical.messages) {
     if (message.source_type !== "phone") {
       unattachedMessages.push(message);
       continue;
@@ -1152,10 +1164,11 @@ function buildThreadEvents({
     occurredAt: message.occurred_at,
     type: "message",
   }));
-  const timelineOnlyEvents: ThreadEvent[] = timelineEvents
+  const timelineOnlyEvents: ThreadEvent[] = canonical.timeline
     .filter((event) => !(hasCalls && event.type === "incoming_call"))
     .map((event) => ({
       event,
+      request: websiteRequests.find(request => request.id === event.intakeRequestId),
       id: `timeline:${event.id}`,
       occurredAt: event.eventTime,
       type: "timeline",
@@ -1651,7 +1664,7 @@ export function CommunicationsHub() {
           supabase
             .from("communication_timeline_events")
             .select(
-              "id,event_type,title,body,event_time,service_request_id,appointment_id,estimate_id,invoice_id",
+              "id,conversation_id,intake_request_id,event_type,title,body,event_time,service_request_id,appointment_id,estimate_id,invoice_id",
             )
             .in("conversation_id", conversationIds)
             .order("event_time", { ascending: false })
@@ -1698,6 +1711,20 @@ export function CommunicationsHub() {
         return;
       }
 
+      const requestIds = [...new Set(((timelineResult.data ?? []) as TimelineRow[])
+        .filter(event => event.event_type === "website_request")
+        .map(event => event.intake_request_id).filter((id): id is string => Boolean(id)))];
+      // Browser client retains existing staff RLS; load each submission, not just the
+      // latest Conversation request, so merged threads preserve distinct submissions.
+      const requestsResult = requestIds.length
+        ? await supabase.from("intake_requests").select("*").in("id", requestIds)
+        : {data: [], error: null};
+      if (!isMounted) return;
+      if (requestsResult.error) {
+        setDetailState({status: "error", data: emptyDetailData, error: "Request details are unavailable right now."});
+        return;
+      }
+      const websiteRequests = (requestsResult.data ?? []) as IntakeRequestRow[];
       const intake = (intakeResult.data ?? null) as IntakeRequestRow | null;
       const lead = (leadResult.data ?? null) as CommunicationLeadRow | null;
       const messages = (messagesResult.data ?? []) as MessageRow[];
@@ -1757,6 +1784,7 @@ export function CommunicationsHub() {
         status: "ready",
         data: {
           intake,
+          websiteRequests,
           lead,
           sourceAccount: (sourceAccountResult.data ?? null) as SourceAccountRow | null,
           customer: (customerResult.data ?? null) as CustomerRow | null,
@@ -1936,8 +1964,9 @@ export function CommunicationsHub() {
         calls: detail.calls,
         messages: detail.messages,
         timelineEvents: visibleTimeline,
+        websiteRequests: detail.websiteRequests,
       }),
-    [detail.calls, detail.messages, visibleTimeline],
+    [detail.calls, detail.messages, detail.websiteRequests, visibleTimeline],
   );
   const buildCommunicationsReturnTo = (conversationId = selectedConversationId) => {
     const params = new URLSearchParams();
@@ -3775,11 +3804,11 @@ function ThreadEventTimeline({
           return (
             <div key={event.id}>
               {showDateSeparator ? <DateSeparator label={currentDate} /> : null}
-              <MessageEventCard
+              {message.source_type === "website_form" ? <WebsiteRequestCard body={message.body} submittedAt={message.occurred_at} /> : <MessageEventCard
                 attachments={attachmentsByMessageId[message.id] ?? []}
                 message={message}
                 onPreviewAttachment={onPreviewAttachment}
-              />
+              />}
             </div>
           );
         }
@@ -3787,7 +3816,7 @@ function ThreadEventTimeline({
         return (
           <div key={event.id}>
             {showDateSeparator ? <DateSeparator label={currentDate} /> : null}
-            <TimelineEventCard event={event.event} />
+            {event.event.type === "website_request" ? <WebsiteRequestCard request={event.request} body={event.event.body} submittedAt={event.event.eventTime} /> : <TimelineEventCard event={event.event} />}
           </div>
         );
       })}
