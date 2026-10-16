@@ -1,3 +1,4 @@
+import { validateWebsiteSubmissionExtras, normalizeWebsiteAppointment } from "@/lib/communications/website-payload-validation";
 import { wakePushAfterCommit } from "@/server/notifications/post-commit-wakeup";
 import { Buffer } from "node:buffer";
 
@@ -21,6 +22,7 @@ const MAX_BODY_BYTES = 32_000;
 
 type PublicWebsiteInboundPayload = {
   formId?: unknown;
+  formFields?: unknown;
   customer?: {
     name?: unknown;
     firstName?: unknown;
@@ -251,39 +253,13 @@ function resolveEventTypeForPayload(
 }
 
 function validatePayload(payload: PublicWebsiteInboundPayload): string[] {
-  const errors: string[] = [];
-  const derivedCustomerName = [
-    cleanText(payload.customer?.firstName, 120),
-    cleanText(payload.customer?.lastName, 120),
-  ]
-    .filter(Boolean)
-    .join(" ");
-  const customerName =
-    cleanText(payload.customer?.name, 255) ?? derivedCustomerName;
-  const customerPhone = cleanText(payload.customer?.phone, 40);
-  const customerEmail = cleanText(payload.customer?.email, 320);
-  const formattedAddress = cleanText(payload.serviceAddress?.formatted, 500);
-  const postalCode = cleanText(payload.serviceAddress?.postalCode, 32);
-  const problemDescription = cleanText(
-    payload.requestedService?.problemDescription,
-    2_000,
-  );
-
-  if (!customerName.trim()) {
-    errors.push("customer.name is required.");
-  }
-  if (!customerPhone && !customerEmail) {
-    errors.push("customer.phone or customer.email is required.");
-  }
-  if (!formattedAddress) {
-    errors.push("serviceAddress.formatted is required.");
-  }
-  if (!postalCode) {
-    errors.push("serviceAddress.postalCode is required.");
-  }
-  if (!problemDescription) {
-    errors.push("requestedService.problemDescription is required.");
-  }
+  const errors: string[] = validateWebsiteSubmissionExtras(payload);
+  // Authenticated sources may submit contact requests before service details exist.
+  const hasFields = isRecord(payload.formFields) && Object.keys(payload.formFields).length > 0;
+  const hasContent = [payload.customer?.name, payload.customer?.firstName, payload.customer?.lastName,
+    payload.customer?.phone, payload.customer?.email, payload.message?.body, payload.message?.summary,
+    payload.requestedService?.problemDescription].some(value => typeof value === "string" && value.trim());
+  if (!hasFields && !hasContent) errors.push("Submission must contain contact information, a message or form fields.");
 
   return errors;
 }
@@ -407,19 +383,16 @@ export async function POST(request: Request) {
       serialNumber: cleanText(payload.requestedService?.serialNumber, 160),
       problemDescription,
     },
-    requestedAppointment: {
-      date: cleanText(payload.requestedAppointment?.date, 32),
-      windowStartTime: cleanText(payload.requestedAppointment?.windowStartTime, 32),
-      windowEndTime: cleanText(payload.requestedAppointment?.windowEndTime, 32),
-      preferredWindow: cleanText(payload.requestedAppointment?.preferredWindow, 255),
-      timezone: cleanText(payload.requestedAppointment?.timezone, 120),
-    },
+    requestedAppointment: normalizeWebsiteAppointment(payload.requestedAppointment).appointment,
     message: {
       subject: cleanText(payload.message?.subject, 255),
       body: cleanText(payload.message?.body, 10_000) ?? problemDescription,
       summary: cleanText(payload.message?.summary, 2_000),
     },
+    formFields: cleanJsonRecord(payload.formFields),
     providerMetadata: {
+      submittedRequestedAppointment: payload.requestedAppointment === undefined ? null : JSON.parse(JSON.stringify(payload.requestedAppointment)),
+      requestedAppointmentValidationErrors: normalizeWebsiteAppointment(payload.requestedAppointment).warnings,
       com06Endpoint: "public_website_inbound",
       authoritativeEventType: eventTypeResult.eventType,
       formId: eventTypeResult.formId ?? null,

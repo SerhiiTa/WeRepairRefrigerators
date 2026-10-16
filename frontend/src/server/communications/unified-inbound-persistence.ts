@@ -98,6 +98,7 @@ function buildRawPayload(event: UnifiedInboundEvent): Record<string, Json> {
     source: jsonRecord(event.source),
     attribution: jsonRecord(event.attribution),
     requested_appointment: jsonRecord(event.requestedAppointment),
+    form_fields: jsonRecord(event.formFields),
     provider_metadata: jsonRecord(event.providerMetadata),
   };
 }
@@ -113,6 +114,7 @@ function buildExtractedData(event: UnifiedInboundEvent): Record<string, Json> {
     service_address: jsonRecord(event.serviceAddress),
     requested_service: jsonRecord(event.requestedService),
     requested_appointment: jsonRecord(event.requestedAppointment),
+    form_fields: jsonRecord(event.formFields),
   };
 }
 

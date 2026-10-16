@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {validateWebsiteSubmissionExtras,normalizeWebsiteAppointment} from './website-payload-validation.ts';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
@@ -25,6 +26,7 @@ function load(path,mocks){const exports={};vm.runInNewContext(ts.transpileModule
 test('mobile and desktop card uses native keyboard/touch expandable details and escaped fields',()=>{const {WebsiteRequestCard}=load('../../components/dashboard/communications/WebsiteRequestCard.tsx',{'react/jsx-runtime':jsx,'@/lib/communications/website-request':{websiteRequestFields},'./CommunicationSourceIcon':load('../../components/dashboard/communications/CommunicationSourceIcon.tsx',{'react/jsx-runtime':jsx,'./communication-source':{getCommunicationSource}})});const html=renderToStaticMarkup(React.createElement(WebsiteRequestCard,{request:{...request,brand:'<script>unsafe</script>'},body:event.body,submittedAt:event.eventTime}));assert.match(html,/<details/);assert.match(html,/aria-label="Website"/);assert.match(html,/text-\[#7C3AED\]/);assert.match(html,/group-open:rotate-180/);assert.match(html,/min-h-11/);assert.match(html,/list-none/);assert.doesNotMatch(html,/Request reference|>r1</);assert.match(html,/<summary/);assert.match(html,/Requested appointment only/);assert.match(html,/&lt;script&gt;/);assert.doesNotMatch(html,/<script>|href=/);});
 async function routeScenario(mode){let committed=false,wakes=0,persistCalls=0;const route=load('../../app/api/public/inbound/website/route.ts',{
  'node:buffer':{Buffer},'next/server':{NextResponse:Response},
+ '@/lib/communications/website-payload-validation':{validateWebsiteSubmissionExtras,normalizeWebsiteAppointment},
  '@/lib/communications/unified-inbound-event':{createUnifiedInboundEvent:x=>x,normalizeUnifiedInboundAttribution:x=>x},
  '@/server/communications/inbound-source-credentials':{verifyInboundSourceCredential:async()=>mode==='unauthorized'?{ok:false}:{ok:true,credential:{channel:'website_form',companyId:'company',inboundSourceId:'source',metadata:{}}}},
  '@/server/communications/unified-intake-gateway':{processUnifiedInboundEvent:async event=>mode==='company'?{ok:false,code:'company_mismatch'}:{ok:true,event,route:{route:'lead'}}},

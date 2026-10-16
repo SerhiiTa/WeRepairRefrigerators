@@ -136,6 +136,7 @@ export type UnifiedInboundEvent = {
   message?: UnifiedInboundMessage;
   transcript?: UnifiedInboundTranscript;
   rawPayloadReference?: string;
+  formFields?: Record<string, Json>;
   providerMetadata?: Record<string, Json>;
 };
 
@@ -342,6 +343,7 @@ export function createUnifiedInboundEvent(
       ),
     }),
     rawPayloadReference: cleanOptionalString(input.rawPayloadReference, 2_000),
+    formFields: cleanJsonRecord(input.formFields),
     providerMetadata: cleanJsonRecord(input.providerMetadata),
   };
 }
