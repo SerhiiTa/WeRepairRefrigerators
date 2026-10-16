@@ -768,6 +768,9 @@ export function ManualEstimateEditor({
   const [isEstimateMenuOpen, setIsEstimateMenuOpen] = useState(false);
   const [isAddItemMenuOpen, setIsAddItemMenuOpen] = useState(false);
   const [isSendEstimateOpen, setIsSendEstimateOpen] = useState(false);
+  const estimateEmailSendLock = useRef(false);
+  const estimateEmailKeys = useRef<Record<string,string>>({});
+  const [estimateEmailOption,setEstimateEmailOption] = useState<{available:boolean;recipient:string|null}>({available:false,recipient:null});
   const [deliveryChannel, setDeliveryChannel] =
     useState<EstimateDeliveryChannel>("sms");
   const [deliveryRecipient, setDeliveryRecipient] = useState(
@@ -1081,6 +1084,7 @@ export function ManualEstimateEditor({
   const canConfirmEstimateDelivery =
     canAttemptSend &&
     deliveryRecipientIsValid &&
+    (deliveryChannel !== "email" || estimateEmailOption.available) &&
     (!customerEmailReplacementRequired || allowCustomerEmailReplacement);
   const estimateDeliveryMessagePreview = `${
     request.selectedTechnicianBusinessName ?? "HomeFix Appliance Repair"
@@ -1889,7 +1893,7 @@ export function ManualEstimateEditor({
     };
   }, [saveState.status]);
 
-  function openSendEstimateModal() {
+  async function openSendEstimateModal() {
     setValidationAttempted(true);
 
     if (sendReadinessErrors.length > 0 || sendingEstimateId !== null) {
@@ -1900,6 +1904,19 @@ export function ManualEstimateEditor({
       return;
     }
 
+    setEstimateEmailOption({available:false,recipient:null});
+    if(savedEstimateId) {
+      try {
+        const client=getSupabaseBrowserClient();
+        const session=await client?.auth.getSession();
+        const token=session?.data.session?.access_token;
+        if(token) {
+          const response=await fetch(`/api/estimates/${savedEstimateId}/send`,{headers:{Authorization:`Bearer ${token}`}});
+          const data=await response.json();
+          if(response.ok && data.ok) setEstimateEmailOption(data.email);
+        }
+      } catch { /* Email remains disabled; SMS is unchanged. */ }
+    }
     setDeliveryChannel("sms");
     setDeliveryRecipient(request.customerPhone ?? "");
     setDeliveryRecipientTouched(false);
@@ -1908,6 +1925,12 @@ export function ManualEstimateEditor({
   }
 
   async function sendToClient() {
+    if(estimateEmailSendLock.current) return;
+    if(deliveryChannel === "email" && (!estimateEmailOption.available || !deliveryRecipientIsValid)) {
+      setSaveState({status:"error",message:"Configure email delivery and enter a valid recipient before sending."});return;
+    }
+    estimateEmailSendLock.current=true;
+    try {
     setValidationAttempted(true);
 
     const savedEstimate =
@@ -1953,7 +1976,7 @@ export function ManualEstimateEditor({
       setSaveState({
         status: "error",
         message:
-          "Confirm that this successful send should replace the Customer email.",
+          "Confirm the corrected recipient for this send.",
       });
       return;
     }
@@ -1969,11 +1992,9 @@ export function ManualEstimateEditor({
           channel: deliveryChannel,
           recipient: normalizedDeliveryRecipient,
           messagePreview: estimateDeliveryMessagePreview,
-          idempotencyKey: createEstimateDeliveryIdempotencyKey(
-            savedEstimate.id,
-            deliveryChannel,
-            normalizedDeliveryRecipient,
-          ),
+          idempotencyKey: deliveryChannel === "email"
+            ? (estimateEmailKeys.current[`${savedEstimate.id}:${normalizedDeliveryRecipient}`] ??= createEstimateDeliveryIdempotencyKey(savedEstimate.id,deliveryChannel,normalizedDeliveryRecipient))
+            : createEstimateDeliveryIdempotencyKey(savedEstimate.id,deliveryChannel,normalizedDeliveryRecipient),
           allowCustomerEmailReplacement,
         },
       });
@@ -1981,7 +2002,7 @@ export function ManualEstimateEditor({
         setPendingAction(null);
         setSaveState({
           status: "error",
-          message: "Estimate could not be sent. Please try again.",
+          message: deliveryChannel === "email" ? "Email was not confirmed. Review the error and delivery history before retrying." : "Estimate could not be sent. Please try again.",
         });
         return;
       }
@@ -1990,15 +2011,16 @@ export function ManualEstimateEditor({
       }
       setIsSendEstimateOpen(false);
       setPendingAction(null);
-      setSaveState({ status: "success", message: "Estimate sent to customer." });
+      setSaveState({ status: "success", message: deliveryChannel === "email" ? "Accepted for sending" : "Estimate sent to customer." });
       await onSaved();
     } catch {
       setPendingAction(null);
       setSaveState({
         status: "error",
-        message: "Estimate could not be sent. Please try again.",
+        message: deliveryChannel === "email" ? "Email was not confirmed. Review the error and delivery history before retrying." : "Estimate could not be sent. Please try again.",
       });
     }
+    } finally { estimateEmailSendLock.current=false; }
   }
 
   async function approveForCustomer() {
@@ -3292,6 +3314,7 @@ export function ManualEstimateEditor({
                       ? "bg-white text-[#0F6BFF] shadow-sm"
                       : "text-[#64748B]"
                   }`}
+                  disabled={saveState.status === "saving" || (channel === "email" && !estimateEmailOption.available)}
                   key={channel}
                   onClick={() => {
                     setDeliveryChannel(channel);
@@ -3300,13 +3323,13 @@ export function ManualEstimateEditor({
                       setDeliveryRecipient(
                         channel === "sms"
                           ? request.customerPhone ?? ""
-                          : request.customerEmail ?? "",
+                          : estimateEmailOption.recipient ?? "",
                       );
                     }
                   }}
                   type="button"
                 >
-                  {channel === "sms" ? "SMS" : "Email"}
+                  {channel === "sms" ? "SMS" : estimateEmailOption.available ? "Email" : "Email (not configured)"}
                 </button>
               ))}
             </div>
@@ -3339,8 +3362,8 @@ export function ManualEstimateEditor({
             ) : null}
             {deliveryChannel === "email" && !request.customerEmail ? (
               <p className="mt-2 text-xs font-semibold leading-5 text-[#64748B]">
-                This Customer does not have an email yet. After a successful provider send,
-                HomeFixOS will save this email to the existing Customer record.
+                This Customer does not have an email yet;
+                the address is used for this send only; the Customer record is unchanged.
               </p>
             ) : null}
             {customerEmailReplacementRequired ? (
@@ -3353,8 +3376,7 @@ export function ManualEstimateEditor({
                   }
                   type="checkbox"
                 />
-                Replace the existing Customer email after this send is accepted by
-                the provider.
+                Use this corrected email for this send only.
               </label>
             ) : null}
 

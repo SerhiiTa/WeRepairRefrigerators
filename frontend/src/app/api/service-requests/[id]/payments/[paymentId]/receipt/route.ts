@@ -6,6 +6,9 @@ import { ensurePaymentReceipt } from "@/server/finance/payment-receipts";
 import { sendConversationSms } from "@/server/communications/telnyx-sms-transport";
 import { requireHomeFixPrivateAccess } from "@/server/security/homefix-private-access";
 
+import { emailConfiguration } from "@/server/communications/telnyx-email-transport";
+import { deliverPaymentReceiptEmail, receiptEmailRecipient } from "@/server/finance/receipt-email-delivery";
+
 type ReceiptSendRouteProps = {
   params: Promise<{
     id: string;
@@ -340,8 +343,9 @@ export async function GET(
     ok: true,
     deliveryOptions: {
       email: {
-        available: false,
-        reason: "Receipt email delivery is not configured yet.",
+        available: Boolean(emailConfiguration()),
+        recipient: await receiptEmailRecipient(serviceRequestId),
+        reason: emailConfiguration() ? null : "Receipt email delivery is not configured.",
       },
       sms: {
         available: Boolean(conversation?.customer_phone),
@@ -431,7 +435,10 @@ export async function POST(
   }
 
   if (channel === "email") {
-    return fail("Receipt email delivery is not configured yet.", 503);
+    const origin = getReceiptPublicOrigin();
+    if (!origin || !access.payment.company_id) return fail("Receipt email delivery is not configured.", 503);
+    const result = await deliverPaymentReceiptEmail({jobId:serviceRequestId,paymentId,companyId:access.payment.company_id,actorId:access.context.userId,recipient,idempotencyKey,origin});
+    return NextResponse.json(result.body,{status:result.status});
   }
 
   const receiptData = await buildReceiptResponse(paymentId, serviceRequestId);

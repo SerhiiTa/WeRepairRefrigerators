@@ -58,8 +58,8 @@ includesAll(editor, [
   "Email",
   "Message preview",
   "Send Estimate",
-  "This Customer does not have an email yet.",
-  "Replace the existing Customer email after this send is accepted by",
+  "This Customer does not have an email yet;",
+  "Use this corrected email for this send only.",
 ]);
 
 assert.match(
@@ -69,8 +69,8 @@ assert.match(
 );
 assert.match(
   editor,
-  /channel === "sms"[\s\S]*request\.customerPhone[\s\S]*request\.customerEmail/,
-  "Changing channels should prefill phone or email from the current request.",
+  /channel === "sms"[\s\S]*request\.customerPhone[\s\S]*estimateEmailOption\.recipient/,
+  "Changing channels preserves SMS prefill and uses canonical server email.",
 );
 assert.match(
   editor,
@@ -110,7 +110,7 @@ includesAll(sendRoute, [
   "send_service_request_estimate_to_customer_rpc",
   "Estimate sent by SMS.",
   "provider_unavailable",
-  "Email estimate delivery is not configured yet. Choose SMS for this send.",
+  "sendEstimateEmail",
 ]);
 assert.ok(
   !sendRoute.includes("telnyxCommunicationProvider"),

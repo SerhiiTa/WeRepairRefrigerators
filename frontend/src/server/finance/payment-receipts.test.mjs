@@ -148,7 +148,7 @@ test("receipt delivery is manual staff action only", () => {
   assert.match(receiptRoute, /deliveryOptions/);
   assert.match(receiptRoute, /findLatestConversation/);
   assert.match(receiptRoute, /available: Boolean\(conversation\?\.customer_phone\)/);
-  assert.match(receiptRoute, /Receipt email delivery is not configured yet/);
+  assert.match(receiptRoute, /deliverPaymentReceiptEmail/);
   assert.ok(
     receiptRoute.indexOf('if (channel === "email")') <
       receiptRoute.indexOf("const receiptData = await buildReceiptResponse"),
@@ -161,11 +161,11 @@ test("receipt delivery is manual staff action only", () => {
 test("dashboard exposes manual receipt view and delivery controls", () => {
   assert.match(serviceRequestDetail, /View Receipt/);
   assert.match(serviceRequestDetail, /Send Receipt via SMS/);
-  assert.match(serviceRequestDetail, /Send Receipt via Email \(Coming Soon\)/);
-  assert.match(serviceRequestDetail, /Email delivery coming soon/);
+  assert.match(serviceRequestDetail, /Send Receipt via Email/);
+  assert.match(serviceRequestDetail, /receiptEmailOption.available/);
   assert.match(serviceRequestDetail, /Confirm Send/);
   assert.match(serviceRequestDetail, /Delivery History/);
-  assert.match(serviceRequestDetail, /Receipt email delivery is not configured yet/);
+  assert.match(serviceRequestDetail, /Receipt email delivery is not configured/);
   assert.match(serviceRequestDetail, /controlled recipient gate/);
   assert.match(serviceRequestDetail, /Receipt history is unavailable:/);
   assert.match(serviceRequestDetail, /Receipt delivery history is unavailable:/);

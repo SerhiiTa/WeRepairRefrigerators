@@ -1,3 +1,6 @@
+import { sendEstimateEmail, estimateEmailOrigin } from "@/server/finance/estimate-email-delivery";
+import { emailConfiguration } from "@/server/communications/telnyx-email-transport";
+import { receiptEmailRecipient } from "@/server/finance/receipt-email-delivery";
 import { NextResponse } from "next/server";
 
 import { sendEstimateRevisionSms } from "@/server/finance/estimate-communications-delivery";
@@ -197,11 +200,8 @@ export async function POST(
   }
 
   if (channel === "email") {
-    return fail("Email estimate delivery is not configured yet. Choose SMS for this send.", 503, {
-      category: "provider_unavailable",
-      estimateId: id,
-      details: "Outbound estimate email has no configured provider.",
-    });
+    const result=await sendEstimateEmail({estimateId:id,recipient,idempotencyKey,userClient:supabase}).catch(()=>({status:503,body:{ok:false,message:"Estimate email outcome could not be confirmed. Do not resend until reviewed."}}));
+    return NextResponse.json(result.body,{status:result.status});
   }
 
   const deliveryResult = await sendEstimateRevisionSms({
@@ -276,4 +276,18 @@ export async function POST(
       estimate_status: "sent",
     },
   });
+}
+
+export async function GET(request:Request,{params}:EstimateSendRouteProps) {
+ const token=extractBearerToken(request);
+ if(!token) return fail("Authentication required.",401);
+ const client=createUserScopedServerClient(token);
+ if(!client || !(await client.auth.getUser(token)).data.user) return fail("Authentication required.",401);
+ const {id}=await params;
+ if(!isUuid(id)) return fail("Invalid Estimate.");
+ const {data:estimate,error}=await client.from('service_request_estimates').select('service_request_id').eq('id',id).maybeSingle();
+ if(error || !estimate) return fail("Estimate unavailable.",403);
+ const {data:allowed}=await client.rpc('can_view_service_request' as never,{target_service_request_id:estimate.service_request_id} as never);
+ if(allowed!==true) return fail("Estimate unavailable.",403);
+ return NextResponse.json({ok:true,email:{available:Boolean(emailConfiguration()&&estimateEmailOrigin()),recipient:await receiptEmailRecipient(estimate.service_request_id)}});
 }

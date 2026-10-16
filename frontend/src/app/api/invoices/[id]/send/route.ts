@@ -1,3 +1,8 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { sendInvoiceEmail, invoiceEmailOrigin } from "@/server/finance/invoice-email-delivery";
+import { emailConfiguration } from "@/server/communications/telnyx-email-transport";
+import { receiptEmailRecipient } from "@/server/finance/receipt-email-delivery";
+import { getSupabaseServiceRoleClient } from "@/lib/supabase/service-role";
 import { NextResponse } from "next/server";
 
 import { sendInvoiceToCustomer } from "@/server/finance/invoice-communications-delivery";
@@ -142,6 +147,11 @@ export async function POST(request: Request, { params }: InvoiceSendRouteProps) 
     return fail("Send Invoice requires an idempotency key.");
   }
 
+  if (channel === "email") {
+    const result = await sendInvoiceEmail({invoiceId:id,recipient,idempotencyKey,userClient:supabase}).catch(() => ({status:503,body:{ok:false,message:"Invoice email outcome could not be confirmed. Do not resend until reviewed."}}));
+    return NextResponse.json(result.body,{status:result.status});
+  }
+
   const deliveryResult = await sendInvoiceToCustomer({
     channel,
     idempotencyKey,
@@ -202,4 +212,22 @@ export async function POST(request: Request, { params }: InvoiceSendRouteProps) 
       invoice_status: "sent",
     },
   });
+}
+
+export async function GET(request: Request, {params}: InvoiceSendRouteProps) {
+  const token=extractBearerToken(request);
+  if(!token) return fail("Authentication required.",401);
+  const client=createUserScopedServerClient(token);
+  if(!client || !(await client.auth.getUser(token)).data.user) return fail("Authentication required.",401);
+  const {id}=await params;
+  if(!isUuid(id)) return fail("Invalid invoice.");
+  const {data:invoice,error}=await client.from('service_request_invoices').select('service_request_id').eq('id',id).maybeSingle();
+  if(error || !invoice) return fail("Invoice unavailable.",403);
+  const {data:allowed}=await client.rpc('can_record_service_request_payment' as never,{target_service_request_id:invoice.service_request_id} as never);
+  if(allowed!==true) return fail("Invoice unavailable.",403);
+  const db=getSupabaseServiceRoleClient();
+  if(!db) return fail("Invoice unavailable.",503);
+  const {data:history,error:historyError}=await (db as any).from('service_request_invoice_deliveries').select('id,delivery_channel,recipient,delivery_status,provider_status,created_at').eq('invoice_id',id).order('created_at',{ascending:false}).limit(20);
+  if(historyError) return fail("Delivery history unavailable.",503);
+  return NextResponse.json({ok:true,email:{available:Boolean(emailConfiguration()&&invoiceEmailOrigin()),recipient:await receiptEmailRecipient(invoice.service_request_id)},history});
 }

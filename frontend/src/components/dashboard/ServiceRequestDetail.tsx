@@ -2119,6 +2119,9 @@ export function ServiceRequestDetail({
   const [invoiceActionId, setInvoiceActionId] = useState<string | null>(null);
   const [invoiceActionState, setInvoiceActionState] =
     useState<InvoiceActionState>({ status: "idle", message: null });
+  const invoiceSendLock = useRef(false);
+  const [invoiceEmailOption, setInvoiceEmailOption] = useState<{available:boolean;recipient:string|null}>({available:false,recipient:null});
+  const [invoiceDeliveryHistory, setInvoiceDeliveryHistory] = useState<Array<{id:string;delivery_channel:string;recipient:string;delivery_status:string;provider_status:string|null;created_at:string}>>([]);
   const [invoiceDeliveryDraft, setInvoiceDeliveryDraft] =
     useState<InvoiceDeliveryDraft | null>(null);
   const [invoicePreviewId, setInvoicePreviewId] = useState<string | null>(null);
@@ -2147,6 +2150,8 @@ export function ServiceRequestDetail({
     useState<PaymentRefundDraft | null>(null);
   const [paymentRefundState, setPaymentRefundState] =
     useState<PaymentRefundState>({ status: "idle", message: null });
+  const receiptSendLock = useRef(false);
+  const [receiptEmailOption, setReceiptEmailOption] = useState<{available:boolean;recipient:string|null}>({available:false,recipient:null});
   const [receiptDeliveryDraft, setReceiptDeliveryDraft] =
     useState<ReceiptDeliveryDraft | null>(null);
   const [receiptDeliveryState, setReceiptDeliveryState] =
@@ -5301,6 +5306,17 @@ export function ServiceRequestDetail({
       return false;
     }
 
+    if (delivery.channel === "email") {
+      setSendingEstimateId(null);
+      if (!response.ok || !payload?.ok) {
+        setEstimateSaveState({status:"error",message:payload?.message ?? "Email outcome uncertain. Do not resend until reviewed."});
+        return false;
+      }
+      setEstimateSaveState({status:"success",message:payload.message ?? "Accepted for sending"});
+      await loadEstimates();
+      void loadNotes();
+      return true;
+    }
     if (!response.ok || !payload?.ok || !payload.approvalUrl) {
       setSendingEstimateId(null);
       setEstimateSaveState({
@@ -6110,7 +6126,7 @@ export function ServiceRequestDetail({
     ].join("\n");
   }
 
-  function openInvoiceDelivery(invoice: DashboardServiceRequestInvoice) {
+  async function openInvoiceDelivery(invoice: DashboardServiceRequestInvoice) {
     if (state.status !== "ready") {
       setInvoiceActionState({
         status: "error",
@@ -6119,13 +6135,26 @@ export function ServiceRequestDetail({
       return;
     }
 
+    setInvoiceEmailOption({available:false,recipient:null});
+    setInvoiceDeliveryHistory([]);
+    const client=getSupabaseBrowserClient();
+    const session=client ? await getDashboardActionSession(client) : null;
+    const token=session?.ok ? session.response.data.session?.access_token : null;
+    let email={available:false,recipient:null as string|null};
+    if(token) {
+      try {
+        const response=await fetch(`/api/invoices/${invoice.id}/send`,{headers:{Authorization:`Bearer ${token}`}});
+        const data=await response.json();
+        if(response.ok && data.ok) { email=data.email;setInvoiceEmailOption(email);setInvoiceDeliveryHistory(data.history??[]); }
+      } catch { /* Email stays disabled; existing SMS remains available. */ }
+    }
     const defaultChannel: InvoiceDeliveryChannel = state.request.customerPhone
       ? "sms"
       : "email";
     const recipient =
       defaultChannel === "sms"
         ? state.request.customerPhone ?? ""
-        : state.request.customerEmail ?? "";
+        : email.recipient ?? "";
 
     setInvoiceActionState({ status: "idle", message: null });
     setInvoiceDeliveryDraft({
@@ -6156,107 +6185,114 @@ export function ServiceRequestDetail({
       return;
     }
 
-    const recipient = invoiceDeliveryDraft.recipient.trim();
-
-    if (!recipient) {
-      setInvoiceActionState({
-        status: "error",
-        message:
-          invoiceDeliveryDraft.channel === "sms"
-            ? "Enter a customer phone number before sending."
-            : "Enter a customer email before sending.",
-      });
-      return;
+    if(invoiceSendLock.current) return;
+    if(invoiceDeliveryDraft.channel === "email" && !invoiceEmailOption.available) {
+      setInvoiceActionState({status:"error",message:"Invoice email delivery is not configured."});return;
     }
-
-    const supabase = getSupabaseBrowserClient();
-
-    if (!supabase) {
-      setInvoiceActionState({
-        status: "error",
-        message: "Invoice delivery is not available for this workspace.",
-      });
-      return;
-    }
-
-    const sessionResult = await getDashboardActionSession(supabase);
-
-    if (!sessionResult.ok) {
-      setInvoiceActionState({
-        status: "error",
-        message: sessionResult.message,
-      });
-      return;
-    }
-
-    const { data: sessionData, error: sessionError } = sessionResult.response;
-    const accessToken = sessionData.session?.access_token;
-
-    if (sessionError || !accessToken) {
-      setInvoiceActionState({
-        status: "error",
-        message: "Log in again before sending this Invoice.",
-      });
-      return;
-    }
-
-    setInvoiceActionId(invoice.id);
-    setInvoiceActionState({
-      status: "saving",
-      message: `Sending ${invoice.invoiceNumber}...`,
-    });
-
-    let response: Response;
-    let payload: {
-      invoiceUrl?: string;
-      message?: string;
-      ok?: boolean;
-    } | null;
-
+    invoiceSendLock.current=true;
     try {
-      response = await fetch(`/api/invoices/${invoice.id}/send`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          channel: invoiceDeliveryDraft.channel,
-          recipient,
-          messagePreview: buildInvoiceDeliveryPreview(invoice),
-          idempotencyKey: invoiceDeliveryDraft.idempotencyKey,
-        }),
+      const recipient = invoiceDeliveryDraft.recipient.trim();
+
+      if (!recipient) {
+        setInvoiceActionState({
+          status: "error",
+          message:
+            invoiceDeliveryDraft.channel === "sms"
+              ? "Enter a customer phone number before sending."
+              : "Enter a customer email before sending.",
+        });
+        return;
+      }
+
+      const supabase = getSupabaseBrowserClient();
+
+      if (!supabase) {
+        setInvoiceActionState({
+          status: "error",
+          message: "Invoice delivery is not available for this workspace.",
+        });
+        return;
+      }
+
+      const sessionResult = await getDashboardActionSession(supabase);
+
+      if (!sessionResult.ok) {
+        setInvoiceActionState({
+          status: "error",
+          message: sessionResult.message,
+        });
+        return;
+      }
+
+      const { data: sessionData, error: sessionError } = sessionResult.response;
+      const accessToken = sessionData.session?.access_token;
+
+      if (sessionError || !accessToken) {
+        setInvoiceActionState({
+          status: "error",
+          message: "Log in again before sending this Invoice.",
+        });
+        return;
+      }
+
+      setInvoiceActionId(invoice.id);
+      setInvoiceActionState({
+        status: "saving",
+        message: `Sending ${invoice.invoiceNumber}...`,
       });
-      payload = (await response.json().catch(() => null)) as typeof payload;
-    } catch (error) {
+
+      let response: Response;
+      let payload: {
+        invoiceUrl?: string;
+        message?: string;
+        ok?: boolean;
+      } | null;
+
+      try {
+        response = await fetch(`/api/invoices/${invoice.id}/send`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            channel: invoiceDeliveryDraft.channel,
+            recipient,
+            messagePreview: buildInvoiceDeliveryPreview(invoice),
+            idempotencyKey: invoiceDeliveryDraft.idempotencyKey,
+          }),
+        });
+        payload = (await response.json().catch(() => null)) as typeof payload;
+      } catch (error) {
+        setInvoiceActionId(null);
+        setInvoiceActionState({
+          status: "error",
+          message:
+            error instanceof Error
+              ? error.message
+              : "The Invoice send request did not reach the server.",
+        });
+        return;
+      }
+
       setInvoiceActionId(null);
+
+      if (!response.ok || !payload?.ok) {
+        setInvoiceActionState({
+          status: "error",
+          message: payload?.message ?? "Invoice could not be sent. Please try again.",
+        });
+        return;
+      }
+
+      setInvoiceDeliveryDraft(null);
       setInvoiceActionState({
-        status: "error",
-        message:
-          error instanceof Error
-            ? error.message
-            : "The Invoice send request did not reach the server.",
+        status: "success",
+        message: payload.message ?? `${invoice.invoiceNumber} sent.`,
       });
-      return;
-    }
-
-    setInvoiceActionId(null);
-
-    if (!response.ok || !payload?.ok) {
-      setInvoiceActionState({
-        status: "error",
-        message: payload?.message ?? "Invoice could not be sent. Please try again.",
-      });
-      return;
-    }
-
-    setInvoiceDeliveryDraft(null);
-    setInvoiceActionState({
-      status: "success",
-      message: payload.message ?? `${invoice.invoiceNumber} sent.`,
-    });
-    void Promise.all([loadInvoices(), loadPayments(), loadEstimates()]);
-    void loadNotes();
+      void Promise.all([loadInvoices(), loadPayments(), loadEstimates()]);
+      void loadNotes();
+    } finally { invoiceSendLock.current=false; }
   }
 
   async function deleteInvoice(invoice: DashboardServiceRequestInvoice) {
@@ -9358,6 +9394,7 @@ export function ServiceRequestDetail({
       | {
           ok?: boolean;
           message?: string;
+          deliveryOptions?: {email?: {available:boolean;recipient:string|null}};
           receipt?: {
             receiptNumber?: string;
             receiptUrl?: string;
@@ -9374,7 +9411,9 @@ export function ServiceRequestDetail({
     }
 
     await loadPayments();
-    return payload.receipt;
+    const email = payload.deliveryOptions?.email ?? {available:false,recipient:null};
+    setReceiptEmailOption(email);
+    return {...payload.receipt, email};
   }
 
   async function viewPaymentReceipt(paymentId: string) {
@@ -9394,14 +9433,6 @@ export function ServiceRequestDetail({
       return;
     }
 
-    if (channel === "email") {
-      setReceiptDeliveryState({
-        status: "error",
-        message: "Email delivery coming soon.",
-      });
-      return;
-    }
-
     setReceiptDeliveryState({ status: "loading", message: "Preparing receipt..." });
     const receipt = await loadReceiptForPayment(paymentId);
 
@@ -9409,13 +9440,17 @@ export function ServiceRequestDetail({
       return;
     }
 
+    if (channel === "email" && !receipt.email.available) {
+      setReceiptDeliveryState({status:"error",message:"Receipt email delivery is not configured."});
+      return;
+    }
     setReceiptDeliveryDraft({
       paymentId,
       channel,
       recipient:
         channel === "sms"
           ? state.request.customerPhone ?? ""
-          : state.request.customerEmail ?? "",
+          : receipt.email.recipient ?? "",
       idempotencyKey: buildPaymentIdempotencyKey(),
     });
     setReceiptDeliveryState({ status: "idle", message: null });
@@ -9426,86 +9461,84 @@ export function ServiceRequestDetail({
       return;
     }
 
-    if (receiptDeliveryDraft.channel === "email") {
+    if (receiptSendLock.current) return;
+    receiptSendLock.current = true;
+    try {
+      const supabase = getSupabaseBrowserClient();
+
+      if (!supabase) {
+        setReceiptDeliveryState({
+          status: "error",
+          message: "Receipt delivery is not available for this workspace.",
+        });
+        return;
+      }
+
+      const sessionResult = await getDashboardActionSession(supabase);
+
+      if (!sessionResult.ok) {
+        setReceiptDeliveryState({
+          status: "error",
+          message: sessionResult.message,
+        });
+        return;
+      }
+
+      const accessToken = sessionResult.response.data.session?.access_token;
+
+      if (!accessToken) {
+        setReceiptDeliveryState({
+          status: "error",
+          message: "Log in again before sending this receipt.",
+        });
+        return;
+      }
+
       setReceiptDeliveryState({
-        status: "error",
-        message: "Email delivery coming soon.",
+        status: "sending",
+        message: "Sending receipt...",
       });
-      return;
-    }
 
-    const supabase = getSupabaseBrowserClient();
-
-    if (!supabase) {
-      setReceiptDeliveryState({
-        status: "error",
-        message: "Receipt delivery is not available for this workspace.",
-      });
-      return;
-    }
-
-    const sessionResult = await getDashboardActionSession(supabase);
-
-    if (!sessionResult.ok) {
-      setReceiptDeliveryState({
-        status: "error",
-        message: sessionResult.message,
-      });
-      return;
-    }
-
-    const accessToken = sessionResult.response.data.session?.access_token;
-
-    if (!accessToken) {
-      setReceiptDeliveryState({
-        status: "error",
-        message: "Log in again before sending this receipt.",
-      });
-      return;
-    }
-
-    setReceiptDeliveryState({
-      status: "sending",
-      message: "Sending receipt...",
-    });
-
-    const response = await fetch(
-      `/api/service-requests/${state.request.id}/payments/${receiptDeliveryDraft.paymentId}/receipt`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
+      const response = await fetch(
+        `/api/service-requests/${state.request.id}/payments/${receiptDeliveryDraft.paymentId}/receipt`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify(receiptDeliveryDraft),
         },
-        body: JSON.stringify(receiptDeliveryDraft),
-      },
-    );
-    const payload = (await response.json().catch(() => null)) as
-      | { ok?: boolean; message?: string; deliveryStatus?: string }
-      | null;
+      );
+      const payload = (await response.json().catch(() => null)) as
+        | { ok?: boolean; message?: string; deliveryStatus?: string }
+        | null;
 
-    await loadPayments();
+      await loadPayments();
 
-    if (!response.ok || !payload?.ok) {
+      if (!response.ok || !payload?.ok) {
+        setReceiptDeliveryState({
+          status: "error",
+          message: payload?.message ?? "Receipt could not be sent.",
+        });
+        return;
+      }
+
       setReceiptDeliveryState({
-        status: "error",
-        message: payload?.message ?? "Receipt could not be sent.",
+        status: "success",
+        message: receiptDeliveryDraft.channel === "email" ? "Accepted for sending" : "Receipt send request accepted.",
       });
-      return;
-    }
-
-    setReceiptDeliveryState({
-      status: "success",
-      message: "Receipt send request accepted.",
-    });
-    setReceiptDeliveryDraft((current) =>
-      current
-        ? {
-            ...current,
-            idempotencyKey: buildPaymentIdempotencyKey(),
-          }
-        : current,
-    );
+      setReceiptDeliveryDraft((current) =>
+        current
+          ? {
+              ...current,
+              idempotencyKey: current.channel === "email" ? current.idempotencyKey : buildPaymentIdempotencyKey(),
+            }
+          : current,
+      );
+    } catch {
+      setReceiptDeliveryState({status:"error",message:"Delivery outcome is not confirmed. Do not resend until reviewed."});
+    } finally { receiptSendLock.current = false; }
   }
 
   function openManualPayment(target?: ManualPaymentTarget) {
@@ -11607,11 +11640,11 @@ export function ServiceRequestDetail({
                     </button>
                     <button
                       className="rounded-full border border-[#E5E7EB] px-3 py-1.5 text-xs font-black text-[#94A3B8] opacity-80"
-                      disabled
-                      title="Email delivery coming soon"
+                      disabled={receiptDeliveryState.status === "loading" || receiptDeliveryState.status === "sending"}
+                      onClick={() => void openReceiptDelivery(entry.payment.id, "email")}
                       type="button"
                     >
-                      Send Receipt via Email (Coming Soon)
+                      Send Receipt via Email
                     </button>
                   </div>
                   <div className="rounded-2xl bg-[#F8FAFC] p-3">
@@ -11829,11 +11862,11 @@ export function ServiceRequestDetail({
                     </button>
                     <button
                       className="min-h-11 max-w-full lg:min-h-0 rounded-full border border-[#E5E7EB] px-3 py-1.5 text-xs font-black text-[#94A3B8] opacity-80"
-                      disabled
-                      title="Email delivery coming soon"
+                      disabled={receiptDeliveryState.status === "loading" || receiptDeliveryState.status === "sending"}
+                      onClick={() => void openReceiptDelivery(entry.payment.id, "email")}
                       type="button"
                     >
-                      Send Receipt via Email (Coming Soon)
+                      Send Receipt via Email
                     </button>
                   </div>
                   <div data-testid="payment-receipt-details" className={`${entry.receipt || entry.receiptDeliveries.length > 0 ? "block" : "hidden"} border-t border-[#EEF2F7] pt-2 lg:block lg:border-0 lg:rounded-2xl lg:bg-[#F8FAFC] lg:p-3`}>
@@ -18698,7 +18731,7 @@ export function ServiceRequestDetail({
                       ? "border-[#0F6BFF] bg-blue-50 text-[#0F6BFF]"
                       : "border-[#D7DEE8] text-[#334155] hover:border-[#0F6BFF]"
                   }`}
-                  disabled={invoiceActionState.status === "saving"}
+                  disabled={invoiceActionState.status === "saving" || (channel === "email" && !invoiceEmailOption.available)}
                   key={channel}
                   onClick={() =>
                     setInvoiceDeliveryDraft((current) =>
@@ -18711,9 +18744,7 @@ export function ServiceRequestDetail({
                                 ? state.status === "ready"
                                   ? state.request.customerPhone ?? ""
                                   : ""
-                                : state.status === "ready"
-                                  ? state.request.customerEmail ?? ""
-                                  : "",
+                                : invoiceEmailOption.recipient ?? "",
                             idempotencyKey: `invoice-send-${current.invoiceId}-${Date.now()}-${Math.random()
                               .toString(36)
                               .slice(2)}`,
@@ -18723,7 +18754,7 @@ export function ServiceRequestDetail({
                   }
                   type="button"
                 >
-                  {channel === "sms" ? "SMS" : "Email"}
+                  {channel === "sms" ? "SMS" : invoiceEmailOption.available ? "Email" : "Email (not configured)"}
                 </button>
               ))}
             </div>
@@ -18765,6 +18796,10 @@ export function ServiceRequestDetail({
               </p>
             </div>
 
+            {invoiceDeliveryHistory.length>0 ? <div className="mt-4 max-h-40 overflow-auto rounded-xl bg-slate-50 p-3 text-xs">
+              <p className="font-bold">Delivery History</p>
+              {invoiceDeliveryHistory.map(d=><p key={d.id}>{d.delivery_channel.toUpperCase()} · {d.recipient} · {d.delivery_status==='sent' && d.delivery_channel==='email'?'Accepted for sending':d.delivery_status} · {d.provider_status} · {new Date(d.created_at).toLocaleString()}</p>)}
+            </div> : null}
             {invoiceActionState.message ? (
               <p
                 className={`mt-4 rounded-xl border px-3 py-2 text-sm font-bold ${
@@ -18790,7 +18825,7 @@ export function ServiceRequestDetail({
               </button>
               <button
                 className="rounded-xl bg-[#0F6BFF] px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={invoiceActionState.status === "saving" || !invoice}
+                disabled={invoiceActionState.status === "saving" || !invoice || (invoiceDeliveryDraft.channel === "email" && !invoiceEmailOption.available)}
                 onClick={() => void sendInvoiceDelivery()}
                 type="button"
               >
@@ -18815,7 +18850,7 @@ export function ServiceRequestDetail({
                 "View receipt:",
                 "[secure receipt link]",
               ].join("\n")
-            : "Receipt email delivery is not configured yet.";
+            : `HomeFix Appliance Repair: Your payment receipt for ${formatServiceRequestMoney(amount)} with a secure View Receipt link.`;
 
         return (
           <div className="fixed inset-0 z-[140] flex items-end justify-center bg-[#0F172A]/55 px-3 py-4 backdrop-blur-sm sm:items-center">
@@ -18852,11 +18887,11 @@ export function ServiceRequestDetail({
                     className={`rounded-xl border px-3 py-2 text-sm font-black transition ${
                       receiptDeliveryDraft.channel === channel
                         ? "border-[#0F6BFF] bg-blue-50 text-[#0F6BFF]"
-                        : channel === "email"
+                        : channel === "email" && !receiptEmailOption.available
                           ? "border-[#E5E7EB] text-[#94A3B8]"
                           : "border-[#D7DEE8] text-[#334155] hover:border-[#0F6BFF]"
                     }`}
-                    disabled={receiptDeliveryState.status === "sending" || channel === "email"}
+                    disabled={receiptDeliveryState.status === "sending" || (channel === "email" && !receiptEmailOption.available)}
                     key={channel}
                     onClick={() =>
                       setReceiptDeliveryDraft((current) =>
@@ -18869,9 +18904,7 @@ export function ServiceRequestDetail({
                                   ? state.status === "ready"
                                     ? state.request.customerPhone ?? ""
                                     : ""
-                                  : state.status === "ready"
-                                    ? state.request.customerEmail ?? ""
-                                    : "",
+                                  : receiptEmailOption.recipient ?? "",
                               idempotencyKey: buildPaymentIdempotencyKey(),
                             }
                           : current,
@@ -18879,7 +18912,7 @@ export function ServiceRequestDetail({
                     }
                     type="button"
                   >
-                    {channel === "sms" ? "SMS" : "Email (coming soon)"}
+                    {channel === "sms" ? "SMS" : (receiptEmailOption.available ? "Email" : "Email (not configured)")}
                   </button>
                 ))}
               </div>
@@ -18932,7 +18965,8 @@ export function ServiceRequestDetail({
                     {selectedReceiptDeliveryEntry.receiptDeliveries.map((delivery) => (
                       <p className="text-xs font-semibold text-[#475569]" key={delivery.id}>
                         {delivery.channel.toUpperCase()} to {delivery.recipient}:{" "}
-                        {formatServiceRequestSource(delivery.status)}
+                        {delivery.channel === "email" && delivery.status === "sent" ? "Accepted for sending" : formatServiceRequestSource(delivery.status)}
+                        {delivery.channel === "email" ? ` · ${new Date(delivery.createdAt).toLocaleString()} · ${delivery.providerStatus ?? delivery.status}` : ""}
                         {delivery.providerError ? ` · ${delivery.providerError}` : ""}
                       </p>
                     ))}
@@ -18970,7 +19004,7 @@ export function ServiceRequestDetail({
                   className="rounded-xl bg-[#0F6BFF] px-4 py-3 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50"
                   disabled={
                     receiptDeliveryState.status === "sending" ||
-                    receiptDeliveryDraft.channel === "email" ||
+                    (receiptDeliveryDraft.channel === "email" && (!receiptEmailOption.available || receiptDeliveryState.status === "success")) ||
                     receiptDeliveryDraft.recipient.trim().length === 0
                   }
                   onClick={() => void sendPaymentReceipt()}
