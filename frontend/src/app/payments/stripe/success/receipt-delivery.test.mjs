@@ -54,13 +54,14 @@ test('API availability controls Email; canonical prefill is editable and validat
   h.button('Confirm Send').props.onClick(); await h.settle();
   const body = JSON.parse(h.calls.find(c => c.method === 'POST').body);
   assert.equal(body.channel, 'email'); assert.equal(body.recipient, 'edited@example.com'); assert.match(body.idempotencyKey, /-email$/);
-  assert.match(h.text(), /Accepted for sending/); assert.match(h.text(), /Delivery History/);
+  assert.match(h.text(), /Email sent successfully\./); assert.match(h.text(), /Delivery History/);
 });
 test('unconfigured Email stays disabled and SMS payload is preserved', async () => {
   const h = harness({ available: false }); await h.open(); assert.equal(h.checkbox(1).props.disabled, true);
   h.button('Confirm Send').props.onClick(); await h.settle();
   const sends = h.calls.filter(c => c.method === 'POST'); assert.equal(sends.length, 1);
   assert.equal(JSON.parse(sends[0].body).channel, 'sms'); assert.equal(JSON.parse(sends[0].body).recipient, '+15555550100');
+  assert.match(h.text(), /SMS: Accepted for sending\. Delivery is not yet confirmed\./);
 });
 test('loading lock prevents concurrent clicks; completed attempt cannot be resubmitted', async () => {
   let finish; const h = harness({ post: () => new Promise(resolve => { finish = resolve; }) }); await h.open();

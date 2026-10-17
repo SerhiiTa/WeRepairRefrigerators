@@ -1,3 +1,4 @@
+import { EmailHistoryError, readDocumentEmailHistory } from "@/server/communications/document-email-history";
 import { NextResponse } from "next/server";
 
 import {
@@ -114,4 +115,18 @@ export async function POST(
     messageId: result.messageId,
     providerMessageId: result.providerMessageId,
   });
+}
+
+// Read-only document Email projection. SMS POST remains unchanged.
+export async function GET(request: Request, { params }: ConversationMessagesRouteProps) {
+  const access = await requireHomeFixPrivateAccess(request);
+  if (!access.ok) return access.response;
+  try {
+    const { id } = await params;
+    const emails = await readDocumentEmailHistory(access.context.supabase, id, process.env.HOMEFIXOS_PUBLIC_ORIGIN);
+    return NextResponse.json({ ok: true, emails }, { headers: { "Cache-Control": "private, no-store" } });
+  } catch (error) {
+    return NextResponse.json({ ok: false, message: error instanceof EmailHistoryError ? error.message : "Email history is unavailable." },
+      { status: error instanceof EmailHistoryError ? error.status : 503, headers: { "Cache-Control": "private, no-store" } });
+  }
 }

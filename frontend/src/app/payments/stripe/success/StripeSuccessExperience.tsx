@@ -577,9 +577,11 @@ export function StripeSuccessExperience({
           const payload = await response.json().catch(() => null) as { ok?: boolean; message?: string } | null;
           return {
             ok: response.ok && payload?.ok === true,
-            message: `${channel.toUpperCase()}: ${response.ok && payload?.ok === true
-              ? "Accepted for sending. Delivery is not yet confirmed."
-              : payload?.message ?? "Delivery outcome is not confirmed. Review history before retrying."}`,
+            message: response.ok && payload?.ok === true && channel === "email"
+              ? "Email sent successfully."
+              : `${channel.toUpperCase()}: ${response.ok && payload?.ok === true
+                ? "Accepted for sending. Delivery is not yet confirmed."
+                : payload?.message ?? "Delivery outcome is not confirmed. Review history before retrying."}`,
           };
         } catch {
           return { ok: false, message: `${channel.toUpperCase()}: Delivery outcome is not confirmed. Do not resend until reviewed.` };

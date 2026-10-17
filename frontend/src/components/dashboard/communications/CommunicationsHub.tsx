@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import type { DocumentEmail } from "@/server/communications/document-email-history";
 import { WebsiteRequestCard } from "./WebsiteRequestCard";
 import { canonicalWebsiteEvents } from "@/lib/communications/website-request";
 type RequestTimelineEvent = CommunicationTimelineEvent & {conversationId?: string; intakeRequestId?: string | null};
@@ -876,6 +877,7 @@ type CallSession = {
 };
 
 type ThreadEvent =
+  | { id: string; occurredAt: string; email: DocumentEmail; type: "document_email" }
   | { id: string; occurredAt: string; session: CallSession; type: "call_session" }
   | { id: string; message: MessageRow; occurredAt: string; type: "message" }
   | { id: string; messages: MessageRow[]; occurredAt: string; type: "sms_group" }
@@ -1116,11 +1118,13 @@ function buildThreadEvents({
   messages,
   timelineEvents,
   websiteRequests,
+  emails = [],
 }: {
   calls: CommunicationCallRow[];
   messages: MessageRow[];
   timelineEvents: RequestTimelineEvent[];
   websiteRequests: IntakeRequestRow[];
+  emails?: DocumentEmail[];
 }): ThreadEvent[] {
   const sessions = groupCallSessions(calls);
   const sessionById = new Map(sessions.map((session) => [session.id, { ...session }]));
@@ -1174,7 +1178,8 @@ function buildThreadEvents({
       type: "timeline",
     }));
 
-  const sortedEvents = [...callEvents, ...messageEvents, ...timelineOnlyEvents].sort(
+  const emailEvents: ThreadEvent[] = [...new Map(emails.map(email => [email.id, email])).values()].map(email => ({ id: email.id, occurredAt: email.occurredAt, email, type: "document_email" }));
+  const sortedEvents = [...callEvents, ...messageEvents, ...timelineOnlyEvents, ...emailEvents].sort(
     (left, right) =>
       (Date.parse(right.occurredAt) || 0) - (Date.parse(left.occurredAt) || 0),
   );
@@ -1303,6 +1308,7 @@ export function CommunicationsHub() {
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(() =>
     getInitialQueryParam("conversation"),
   );
+  const [emailHistory, setEmailHistory] = useState<{ key: string; emails: DocumentEmail[]; error: string | null }>({ key: "", emails: [], error: null });
   const [detailState, setDetailState] = useState<DetailState>({
     status: "idle",
     data: emptyDetailData,
@@ -1958,6 +1964,46 @@ export function CommunicationsHub() {
       eventBody === summary
     );
   }), [detail.timelineEvents, selectedConversation?.sourceType, selectedConversation?.summary]);
+  const emailConversationKey = selectedConversation
+    ? [...new Set([selectedConversation.id, ...selectedConversation.threadConversationIds])].sort().join(",")
+    : "";
+  useEffect(() => {
+    if (!emailConversationKey) return;
+    const controller = new AbortController();
+    let busy = false;
+    let polls = 0;
+    async function refreshEmails() {
+      if (busy || controller.signal.aborted || document.visibilityState !== "visible") return;
+      busy = true;
+      try {
+        const client = getSupabaseBrowserClient();
+        const session = client ? await client.auth.getSession() : null;
+        const token = session?.data.session?.access_token;
+        if (!token) throw new Error("unavailable");
+        const lists = await Promise.all(emailConversationKey.split(",").map(async id => {
+          const response = await fetch(`/api/communications/conversations/${id}/messages`, {
+            cache: "no-store", headers: { Authorization: `Bearer ${token}` }, signal: controller.signal,
+          });
+          const payload = await response.json() as { ok?: boolean; emails?: DocumentEmail[] };
+          if (!response.ok || !payload.ok || !Array.isArray(payload.emails)) throw new Error("unavailable");
+          return payload.emails;
+        }));
+        if (!controller.signal.aborted) setEmailHistory({ key: emailConversationKey, emails: [...new Map(lists.flat().map(email => [email.id, email])).values()], error: null });
+      } catch {
+        // Clear stale links when authorization or refresh fails.
+        if (!controller.signal.aborted) setEmailHistory({ key: emailConversationKey, emails: [], error: "Email history is unavailable. Reopen this conversation to retry." });
+      } finally { busy = false; }
+    }
+    void refreshEmails();
+    const focus = () => { void refreshEmails(); };
+    window.addEventListener("focus", focus);
+    document.addEventListener("visibilitychange", focus);
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible" && ++polls <= 12) void refreshEmails();
+      if (polls >= 12) window.clearInterval(timer);
+    }, 10000);
+    return () => { controller.abort(); window.clearInterval(timer); window.removeEventListener("focus", focus); document.removeEventListener("visibilitychange", focus); };
+  }, [emailConversationKey]);
   const threadEvents = useMemo(
     () =>
       buildThreadEvents({
@@ -1965,8 +2011,9 @@ export function CommunicationsHub() {
         messages: detail.messages,
         timelineEvents: visibleTimeline,
         websiteRequests: detail.websiteRequests,
+        emails: emailHistory.key === emailConversationKey ? emailHistory.emails : [],
       }),
-    [detail.calls, detail.messages, detail.websiteRequests, visibleTimeline],
+    [detail.calls, detail.messages, detail.websiteRequests, visibleTimeline, emailHistory, emailConversationKey],
   );
   const buildCommunicationsReturnTo = (conversationId = selectedConversationId) => {
     const params = new URLSearchParams();
@@ -2696,6 +2743,7 @@ export function CommunicationsHub() {
                 <>
                   <ThreadEventTimeline
                     attachmentsByMessageId={detail.attachmentsByMessageId}
+                    emailError={emailHistory.key === emailConversationKey ? emailHistory.error : null}
                     events={threadEvents}
                     expandedTranscriptByCallId={expandedTranscriptByCallId}
                     onLoadRecording={(callId) => void handleLoadRecording(callId)}
@@ -3007,7 +3055,8 @@ export function CommunicationsHub() {
 
                     <ThreadEventTimeline
                       attachmentsByMessageId={detail.attachmentsByMessageId}
-                      events={threadEvents}
+                      emailError={emailHistory.key === emailConversationKey ? emailHistory.error : null}
+                    events={threadEvents}
                       expandedTranscriptByCallId={expandedTranscriptByCallId}
                       onLoadRecording={(callId) => void handleLoadRecording(callId)}
                       onPreviewAttachment={setPreviewAttachment}
@@ -3734,6 +3783,7 @@ function Panel({ title, children }: { title: string; children: ReactNode }) {
 }
 
 function ThreadEventTimeline({
+  emailError,
   attachmentsByMessageId,
   events,
   expandedTranscriptByCallId,
@@ -3747,6 +3797,7 @@ function ThreadEventTimeline({
 }: {
   attachmentsByMessageId: Record<string, SignedMessageAttachment[]>;
   events: ThreadEvent[];
+  emailError?: string | null;
   expandedTranscriptByCallId: ExpandedTranscriptByCallId;
   onLoadRecording: (callId: string) => void;
   onPreviewAttachment: (attachment: SignedMessageAttachment) => void;
@@ -3756,17 +3807,26 @@ function ThreadEventTimeline({
   retryingTranscriptCallId: string | null;
   transcriptsById: Map<string, TranscriptRow>;
 }) {
-  if (events.length === 0) {
+  if (events.length === 0 && !emailError) {
     return null;
   }
 
   return (
     <div className="space-y-3">
+      {emailError ? <p role="status" className="text-sm text-amber-700">{emailError}</p> : null}
       {events.map((event, index) => {
         const currentDate = formatDateSeparator(event.occurredAt);
         const previousDate =
           index > 0 ? formatDateSeparator(events[index - 1].occurredAt) : null;
         const showDateSeparator = index === 0 || currentDate !== previousDate;
+
+        if (event.type === "document_email") {
+          const email = event.email;
+          return <div key={event.id}>
+            {showDateSeparator ? <DateSeparator label={currentDate} /> : null}
+            <DocumentEmailCard email={email} />
+          </div>;
+        }
 
         if (event.type === "call_session") {
           return (
@@ -3966,6 +4026,30 @@ function MessageBodyWithLinks({
     </div>
   );
 }
+function DocumentEmailCard({ email }: { email: DocumentEmail }) {
+  const [opened, setOpened] = useState(false);
+  const preview = email.preview.replace(/\s+/g, " ").trim();
+  const shortPreview = preview.length > 140 ? `${preview.slice(0, 140)}…` : preview;
+  return <section className="rounded-xl border border-[#E5E7EB] bg-white p-3 text-sm">
+    <button type="button" aria-expanded={opened} aria-label={opened ? "Close Email details" : "Open Email details"}
+      className="flex min-h-11 w-full items-center gap-3 text-left" onClick={() => setOpened(value => !value)}>
+      <CommunicationSourceIcon source="email" />
+      <span className="min-w-0 flex-1">
+        <span className="block break-words font-medium text-[#0F172A]">{shortPreview}</span>
+        <span className="mt-1 block text-xs text-[#64748B]">{email.sentAt ? "Sent" : "Requested"} {formatServiceRequestDate(email.occurredAt)} · {formatTimeOnly(email.occurredAt)} · <span className="capitalize">{email.status}</span></span>
+      </span>
+    </button>
+    {opened ? <div className="mt-3 border-t border-[#E5E7EB] pt-3">
+      {email.jobNumber ? <p className="font-medium">Job #{email.jobNumber}</p> : null}
+      <p className="mt-2 break-words">From: {email.sender}</p><p className="break-words">To: {email.recipient}</p>
+      <p className="mt-2 break-words font-semibold">{email.subject}</p>
+      <p className="mt-2 whitespace-pre-wrap break-words">{email.preview}</p>
+      {email.url ? <a className="mt-3 inline-flex min-h-11 items-center font-semibold text-blue-600" href={email.url} target="_blank" rel="noopener noreferrer">View {email.documentType === "estimate" ? "Estimate" : email.documentType === "invoice" ? "Invoice" : "Receipt"}</a>
+        : <p className="mt-3 text-slate-500">Document unavailable.</p>}
+    </div> : null}
+  </section>;
+}
+
 function SmsMessageGroup({
   attachmentsByMessageId,
   messages,
