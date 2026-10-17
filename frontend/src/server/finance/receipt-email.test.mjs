@@ -53,7 +53,7 @@ test('actual Ed25519 verification and email endpoint reject tampering/stale time
  const env={TELNYX_WEBHOOK_PUBLIC_KEY:publicKey.export({format:'der',type:'spki'}).subarray(-32).toString('base64')};
  const verifier=load('server/communications/telnyx-sms-transport.ts',{'@/lib/supabase/service-role':{},'./phone-identity':{}},{process:{env}});
  let calls=0;
- const route=load('app/api/communications/telnyx-email/route.ts',{'next/server':{NextResponse:Response},'@/server/communications/telnyx-sms-transport':verifier,'@/server/finance/receipt-email-webhook':{applyReceiptEmailEvent:async()=>{calls++;return 200}}});
+ const route=load('app/api/communications/telnyx-email/route.ts',{'next/server':{NextResponse:Response},'@/server/communications/telnyx-sms-transport':verifier,'@/server/finance/receipt-email-webhook':{applyDocumentEmailWebhookEvent:async()=>{calls++;return 200}}});
  const body=JSON.stringify(event());const timestamp=String(Math.floor(Date.now()/1000));
  const signature=crypto.sign(null,Buffer.from(`${timestamp}|${body}`),privateKey).toString('base64');
  const req=(b,t=timestamp)=>new Request('https://example.com',{method:'POST',headers:{'telnyx-signature-ed25519':signature,'telnyx-timestamp':t},body:b});

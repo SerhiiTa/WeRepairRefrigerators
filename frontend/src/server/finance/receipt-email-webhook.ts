@@ -18,15 +18,37 @@ const states: Record<string, string> = { queued: 'sent', sent: 'sent', deferred:
 // Only called after signature verification. Provider ID + recipient correlation is
 // authoritative; no company or receipt IDs from the callback are trusted.
 export async function applyReceiptEmailEvent(body: any): Promise<number> {
-    return applyEmailEvent(body, "service_request_payment_receipt_deliveries");
+    return applyDocumentEmailEvent(body, "service_request_payment_receipt_deliveries");
 }
 export async function applyInvoiceEmailEvent(body: any): Promise<number> {
-    return applyEmailEvent(body, "service_request_invoice_deliveries");
+    return applyDocumentEmailEvent(body, "service_request_invoice_deliveries");
 }
 export async function applyEstimateEmailEvent(body: any): Promise<number> {
- return applyEmailEvent(body,'service_request_estimate_revision_deliveries');
+ return applyDocumentEmailEvent(body, 'service_request_estimate_revision_deliveries');
 }
-async function applyEmailEvent(body: any, table: DeliveryTable): Promise<number> {
+// Only a genuine missing row permits cross-document fallback. Lookup/update
+// failures retain their original table and retryable response.
+export async function applyDocumentEmailWebhookEvent(body: any): Promise<number> {
+    for (const table of [
+        'service_request_payment_receipt_deliveries',
+        'service_request_invoice_deliveries',
+        'service_request_estimate_revision_deliveries',
+    ] as const) {
+        const status = await applyEmailEvent(body, table);
+        if (status !== null) return status;
+    }
+    // A provider callback can precede persistence of its message ID. Never
+    // acknowledge an uncorrelated event; allow the provider to retry later.
+    logEmailWebhookDiagnostic('delivery_not_found', undefined, body);
+    return 503;
+}
+async function applyDocumentEmailEvent(body: any, table: DeliveryTable): Promise<number> {
+    const status = await applyEmailEvent(body, table);
+    if (status !== null) return status;
+    logEmailWebhookDiagnostic('delivery_not_found', table, body);
+    return 503;
+}
+async function applyEmailEvent(body: any, table: DeliveryTable): Promise<number | null> {
     const diagnostic = (stage: string, error?: any) => logEmailWebhookDiagnostic(stage, table, body, error);
     const event = body?.data;
     const kind = typeof event?.event_type === 'string' ? event.event_type.replace(/^email\./, '') : '';
@@ -53,9 +75,13 @@ async function applyEmailEvent(body: any, table: DeliveryTable): Promise<number>
     for (let attempt = 0; attempt < 3; attempt++) {
         const { data: row, error } = await db.from(table).select('*').eq('provider', 'telnyx-email').eq('delivery_channel', 'email').eq('provider_message_id', payload.id).maybeSingle();
         // The callback may arrive before the send response has been persisted.
-        if (error || !row) {
-            diagnostic(error ? 'delivery_lookup_failed' : 'delivery_not_found', error);
+        if (error) {
+            diagnostic('delivery_lookup_failed', error);
             return 503;
+        }
+        if (!row) {
+            diagnostic('delivery_table_no_match');
+            return null;
         }
         if (row.recipient.toLowerCase() !== recipient.toLowerCase()) {
             diagnostic('recipient_mismatch');
