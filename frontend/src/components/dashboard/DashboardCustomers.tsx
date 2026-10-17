@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { customerCommunicationsHref, enterCustomerCommunications } from "./communications/hub-navigation";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
@@ -2706,6 +2707,7 @@ type CustomerOverviewIconName =
   | "mail"
   | "map"
   | "message"
+  | "messages-square"
   | "more"
   | "payment"
   | "phone"
@@ -2761,6 +2763,16 @@ function CustomerOverviewIcon({
     return (
       <svg className={className} fill="none" viewBox="0 0 24 24" aria-hidden="true">
         <path d="M7.2 4.8 9 8.9l-1.5 1.2c1 2.1 2.5 3.7 4.6 4.6L13.4 13l4.2 1.9-.4 3.3c-.1.8-.8 1.4-1.6 1.3C9.4 19 5 14.6 4.5 8.4c-.1-.8.5-1.5 1.3-1.6l1.4-.2Z" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+      </svg>
+    );
+  }
+
+  // Lucide messages-square, rendered inline like the existing Customer icons.
+  if (name === "messages-square") {
+    return (
+      <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M16 10a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+        <path d="M20 8a2 2 0 0 1 2 2v12l-4-4h-8a2 2 0 0 1-2-2v-2" />
       </svg>
     );
   }
@@ -2915,25 +2927,25 @@ function CustomerQuickAction({
   onClick,
 }: {
   href?: string;
-  label: "Call" | "Text" | "Email" | "More";
+  label: "Call" | "Text" | "Email" | "Communications";
   onClick?: () => void;
 }) {
   const iconName: Record<typeof label, CustomerOverviewIconName> = {
     Call: "phone",
     Text: "message",
     Email: "mail",
-    More: "more",
+    Communications: "messages-square",
   };
   const content = (
     <>
       <span className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white text-[#0F6BFF] shadow-[0_8px_20px_rgba(15,23,42,0.06)]">
         <CustomerOverviewIcon className="h-[18px] w-[18px]" name={iconName[label]} />
       </span>
-      <span className="text-xs font-black text-slate-700">{label}</span>
+      <span className={label === "Communications" ? "max-w-full break-words text-center text-[10px] font-black leading-4 tracking-tight text-slate-700" : "text-xs font-black text-slate-700"}>{label}</span>
     </>
   );
   const className =
-    "flex flex-col items-center justify-center gap-1.5 transition hover:text-[#0F6BFF]";
+    "flex min-w-0 flex-col items-center justify-center gap-1.5 transition hover:text-[#0F6BFF]";
 
   if (href) {
     return (
@@ -5303,7 +5315,7 @@ export function DashboardCustomerDetail({
         />
         <CustomerQuickAction href={customerSmsHref} label="Text" />
         <CustomerQuickAction href={customerEmailHref} label="Email" />
-        <CustomerQuickAction label="More" onClick={openCustomerActions} />
+        <CustomerQuickAction label="Communications" onClick={() => enterCustomerCommunications(window, customerId, undefined, href => router.push(href))} />
       </section>
 
       {isBrowserCallOpen ? (
@@ -8148,6 +8160,7 @@ function InvoiceList({
 }
 
 function ConversationList({ conversations }: { conversations: CommunicationConversationRow[] }) {
+  const router = useRouter();
   if (conversations.length === 0) {
     return <EmptyMessage>No communication history linked yet.</EmptyMessage>;
   }
@@ -8157,7 +8170,8 @@ function ConversationList({ conversations }: { conversations: CommunicationConve
       {conversations.map((conversation) => (
         <Link
           key={conversation.id}
-          href="/dashboard/communications"
+          href={conversation.customer_id ? customerCommunicationsHref(conversation.customer_id) : `/dashboard/communications?conversation=${conversation.id}&view=detail`}
+          onClick={event => { if (conversation.customer_id && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) { event.preventDefault(); enterCustomerCommunications(window, conversation.customer_id, undefined, href => router.push(href)); } }}
           className="rounded-2xl border border-slate-200 bg-[#F7F9FC] p-4 transition hover:border-[#0F6BFF] hover:bg-blue-50"
         >
           <div className="flex flex-wrap items-start justify-between gap-3">

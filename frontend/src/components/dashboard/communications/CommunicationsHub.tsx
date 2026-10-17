@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { HUB_NAVIGATION_EVENT, claimHubOrigin, resolveCustomerThread, workspaceReturnTo, hubTab, navigateHub, backToHubList, saveHubScroll, readHubScroll } from "./hub-navigation";
 import type { DocumentEmail, DocumentViewSummary } from "@/server/communications/document-email-history";
 import { WebsiteRequestCard } from "./WebsiteRequestCard";
 import { canonicalWebsiteEvents } from "@/lib/communications/website-request";
@@ -111,6 +112,7 @@ type RetellRecording = {
 };
 
 type ConversationRow = {
+  company_id: string | null;
   id: string;
   primary_source_type: DatabaseCommunicationSourceType;
   status: CommunicationConversation["status"];
@@ -140,6 +142,7 @@ type ConversationRow = {
 };
 
 type HubConversation = CommunicationConversation & {
+  companyId: string | null;
   sourceAccountId: string | null;
   inboundSourceId: string | null;
   attribution: Json | null;
@@ -189,6 +192,7 @@ type WorkflowFilter = "inbox" | "assigned" | "archived" | "unread" | "needs_acti
 
 function mapConversation(row: ConversationRow): HubConversation {
   return {
+    companyId: row.company_id,
     id: row.id,
     sourceType: row.primary_source_type,
     status: row.status,
@@ -325,21 +329,9 @@ function normalizeThreadPhone(value: string | null): string | null {
 }
 
 function getCustomerThreadKey(conversation: HubConversation): string {
-  if (conversation.customerId) {
-    return `customer:${conversation.customerId}`;
-  }
-
-  const phone = normalizeThreadPhone(conversation.customerPhone);
-  if (phone) {
-    return `phone:${phone}`;
-  }
-
-  const email = conversation.customerEmail?.trim().toLowerCase();
-  if (email) {
-    return `email:${email}`;
-  }
-
-  return `conversation:${conversation.id}`;
+  return conversation.customerId && conversation.companyId
+    ? `company:${conversation.companyId}:customer:${conversation.customerId}`
+    : `conversation:${conversation.id}`;
 }
 
 function getConversationStatusRank(status: HubConversation["status"]): number {
@@ -434,7 +426,7 @@ function aggregateCustomerThreads(conversations: HubConversation[]): HubConversa
     Array.from(groups.values()).map((threadConversations) =>
       mergeCustomerThread(threadConversations),
     ),
-  ).slice(0, 50);
+  );
 }
 
 function sortMessagesByNewest(messages: MessageRow[]) {
@@ -480,7 +472,7 @@ function applyConversationUpdate(
       )
     : [merged, ...conversations];
 
-  return sortConversationsByActivity(nextConversations).slice(0, 50);
+  return sortConversationsByActivity(nextConversations);
 }
 
 function applyMessageUpdate(
@@ -1308,6 +1300,7 @@ function getHubReadError(message: string) {
 export function CommunicationsHub() {
   const router = useRouter();
   const leadNavigationPendingRef = useRef(false);
+  const [navigationContext, setNavigationContext] = useState(() => `${getInitialQueryParam("customer") ?? ""}:${getInitialQueryParam("job") ?? ""}`);
   const [hubState, setHubState] = useState<HubState>({
     status: "loading",
     conversations: [],
@@ -1333,11 +1326,11 @@ export function CommunicationsHub() {
   const [searchQuery, setSearchQuery] = useState(() => getInitialQueryParam("q") ?? "");
   const [, setContextTab] = useState<ContextTab>("customer");
   const [mobileDetailOpen, setMobileDetailOpen] = useState(
-    () => getInitialQueryParam("view") === "detail" && Boolean(getInitialQueryParam("conversation")),
+    () => getInitialQueryParam("view") === "detail" && Boolean(getInitialQueryParam("conversation") || getInitialQueryParam("customer")),
   );
   const [mobileDetailTab, setMobileDetailTab] = useState<
     "conversation" | ContextTab
-  >("conversation");
+  >(() => hubTab(getInitialQueryParam("tab")));
   const [detailReloadToken, setDetailReloadToken] = useState(0);
   const [createdLeadId, setCreatedLeadId] = useState<string | null>(null);
   const [createJobState, setCreateJobState] = useState<CreateJobState>({
@@ -1367,16 +1360,20 @@ export function CommunicationsHub() {
       if (window.location.pathname !== "/dashboard/communications") return;
       leadNavigationPendingRef.current = false;
       startTransition(() => {
+        setNavigationContext(`${getInitialQueryParam("customer") ?? ""}:${getInitialQueryParam("job") ?? ""}`);
         setSelectedConversationId(getInitialQueryParam("conversation"));
-        setMobileDetailOpen(getInitialQueryParam("view") === "detail" && Boolean(getInitialQueryParam("conversation")));
+        setMobileDetailOpen(getInitialQueryParam("view") === "detail" && Boolean(getInitialQueryParam("conversation") || getInitialQueryParam("customer")));
+        setMobileDetailTab(hubTab(getInitialQueryParam("tab")));
         setActiveFilter(getInitialChannelFilter());
         setInboxTab(getInitialInboxTab());
         setSearchQuery(getInitialQueryParam("q") ?? "");
       });
     };
+    claimHubOrigin(window);
     restoreConversationUrl();
     window.addEventListener("popstate", restoreConversationUrl);
-    return () => window.removeEventListener("popstate", restoreConversationUrl);
+    window.addEventListener(HUB_NAVIGATION_EVENT, restoreConversationUrl);
+    return () => { window.removeEventListener("popstate", restoreConversationUrl); window.removeEventListener(HUB_NAVIGATION_EVENT, restoreConversationUrl); };
   }, []);
 
   useEffect(() => {
@@ -1399,7 +1396,7 @@ export function CommunicationsHub() {
       const { data, error } = await supabase
         .from("communication_conversations")
         .select(
-          "id,primary_source_type,status,provider_name,customer_display_name,customer_id,customer_phone,customer_email,service_address,summary,next_action,last_event_at,call_started_at,call_ended_at,intake_request_id,service_request_id,source_account_id,inbound_source_id,attribution,provider_metadata,unread_count,last_read_at,last_inbound_at,last_outbound_at,created_at,updated_at",
+          "id,company_id,primary_source_type,status,provider_name,customer_display_name,customer_id,customer_phone,customer_email,service_address,summary,next_action,last_event_at,call_started_at,call_ended_at,intake_request_id,service_request_id,source_account_id,inbound_source_id,attribution,provider_metadata,unread_count,last_read_at,last_inbound_at,last_outbound_at,created_at,updated_at",
         )
         .order("updated_at", { ascending: false })
         .limit(50);
@@ -1417,22 +1414,36 @@ export function CommunicationsHub() {
         return;
       }
 
+      const customerId = getInitialQueryParam("customer");
+      const directId = getInitialQueryParam("conversation") ?? (customerId ? null : selectedConversationId);
+      const jobId = getInitialQueryParam("job");
+      let directRows: ConversationRow[] = [];
+      if (directId || customerId || jobId) {
+        try {
+          directRows = await resolveCustomerThread(supabase, { customer: customerId, job: jobId, conversation: directId }) as ConversationRow[];
+        } catch {
+          if (isMounted) { setHubState({ status: "error", conversations: [], error: "This customer conversation is unavailable or not authorized." }); setSelectedConversationId(null); }
+          return;
+        }
+        if (!isMounted) return;
+      }
+      const rows = [...new Map([...(data ?? []), ...directRows].map(row => [row.id, row])).values()];
       const conversations = await hydrateLatestMessagePreviews(
-        sortConversationsByActivity(((data ?? []) as ConversationRow[]).map(mapConversation)),
+        sortConversationsByActivity((rows as ConversationRow[]).map(mapConversation)),
       );
       const threads = aggregateCustomerThreads(conversations);
+      if (directId && !threads.some(thread => thread.threadConversationIds.includes(directId))) {
+        const direct = conversations.find(row => row.id === directId);
+        if (direct) threads.push(mergeCustomerThread(conversations.filter(row => getCustomerThreadKey(row) === getCustomerThreadKey(direct))));
+      }
 
       setRawConversations(conversations);
       setHubState({ status: "ready", conversations: threads, error: null });
-      setSelectedConversationId((current) => {
-        if (!current) {
-          return threads[0]?.id ?? null;
-        }
-        return (
-          threads.find((thread) => thread.threadConversationIds.includes(current))?.id ??
-          current
-        );
-      });
+      if (customerId && !directId) {
+        const target = directRows[0]?.id ?? null;
+        setSelectedConversationId(target);
+        if (target) navigateHub(window, { conversation: target }, "replace");
+      } else setSelectedConversationId(current => current ?? (customerId || directId ? null : threads[0]?.id ?? null));
     }
 
     void loadConversations();
@@ -1440,7 +1451,7 @@ export function CommunicationsHub() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [selectedConversationId, navigationContext]);
 
   useEffect(() => {
     const supabase = getSupabaseBrowserClient();
@@ -1631,7 +1642,7 @@ export function CommunicationsHub() {
       }
 
       const conversation =
-        hubState.conversations.find((item) => item.id === selectedConversationId) ?? null;
+        hubState.conversations.find((item) => item.id === selectedConversationId || item.threadConversationIds.includes(selectedConversationId ?? "")) ?? null;
 
       if (!conversation) {
         setDetailState({ status: "idle", data: emptyDetailData, error: null });
@@ -2024,11 +2035,25 @@ export function CommunicationsHub() {
       }),
     [detail.calls, detail.messages, detail.websiteRequests, visibleTimeline, emailHistory, emailConversationKey],
   );
+  useEffect(() => {
+    if (detailState.status === "loading") return;
+    const frame = requestAnimationFrame(() => {
+      document.querySelectorAll<HTMLElement>("[data-hub-scroll]").forEach(panel => {
+        panel.scrollTop = readHubScroll(window, panel.dataset.hubScroll!);
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [selectedConversationId, mobileDetailOpen, mobileDetailTab, detailState.status, hubState.status]);
+  const changeHubTab = (tab: typeof mobileDetailTab) => {
+    if (selectedConversationId) navigateHub(window, { conversation: selectedConversationId, view: "detail", tab });
+  };
+  const changeHubFilter = (changes: Record<string, string | null>) => navigateHub(window, changes, "replace");
   const buildCommunicationsReturnTo = (conversationId = selectedConversationId) => {
     const params = new URLSearchParams();
     if (conversationId) {
       params.set("conversation", conversationId);
       params.set("view", "detail");
+      if (mobileDetailTab !== "conversation") params.set("tab", mobileDetailTab);
     }
     if (activeFilter !== "all") {
       params.set("channel", activeFilter);
@@ -2044,6 +2069,7 @@ export function CommunicationsHub() {
     return query ? `/dashboard/communications?${query}` : "/dashboard/communications";
   };
   const openConversation = (conversationId: string) => {
+    if (mobileDetailOpen && selectedConversation && (selectedConversation.id === conversationId || selectedConversation.threadConversationIds.includes(conversationId))) return;
     setSelectedConversationId(conversationId);
     setCreatedLeadId(null);
     setCreateJobState({ status: "idle", message: null });
@@ -2061,7 +2087,7 @@ export function CommunicationsHub() {
     setMobileDetailOpen(true);
     setMobileDetailTab("conversation");
     if (typeof window !== "undefined") {
-      window.history.pushState(null, "", buildCommunicationsReturnTo(conversationId));
+      navigateHub(window, { conversation: conversationId, customer: null, job: null, view: "detail", tab: "conversation" });
     }
   };
   const destinationReturnTo = buildCommunicationsReturnTo();
@@ -2338,7 +2364,7 @@ export function CommunicationsHub() {
       setDetailReloadToken((value) => value + 1);
       setCreatedLeadId(leadId);
       setContextTab("lead");
-      setMobileDetailTab("lead");
+      changeHubTab("lead");
       setCreateLeadState({
         status: "success",
         message:
@@ -2497,6 +2523,8 @@ export function CommunicationsHub() {
   return (
     <>
     <main className="space-y-4">
+      {workspaceReturnTo(getInitialQueryParam("returnTo")) ? <button type="button" className="min-h-11 text-sm font-semibold text-[#0F6BFF]" onClick={() => backToHubList(window)}>‹ Back to Customer / Job</button> : null}
+      {getInitialQueryParam("customer") && !selectedConversation && hubState.status === "ready" ? <EmptyState title="No communication history linked yet" body="This customer has no existing authorized conversation." /> : null}
       <section className="hidden flex-col gap-4 rounded-2xl border border-[#E5E7EB] bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.06)] xl:flex xl:flex-row xl:items-center xl:justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-[#0F172A]">Communications</h1>
@@ -2507,7 +2535,7 @@ export function CommunicationsHub() {
         <div className="flex w-full flex-col gap-2 sm:flex-row lg:w-auto">
           <input
             className="h-10 w-full rounded-lg border border-[#E5E7EB] bg-[#F8FAFC] px-3 text-sm font-medium text-[#0F172A] outline-none placeholder:text-[#94A3B8] focus:border-[#0F6BFF] lg:w-[420px]"
-            onChange={(event) => setSearchQuery(event.target.value)}
+            onChange={(event) => changeHubFilter({ q: event.target.value })}
             placeholder="Search conversations, customers, or phone numbers..."
             type="search"
             value={searchQuery}
@@ -2554,7 +2582,7 @@ export function CommunicationsHub() {
                 <svg aria-hidden="true" className="pointer-events-none absolute left-3 top-3.5 text-slate-400" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="10" cy="10" r="7" /><path d="m15 15 6 6" /></svg>
                 <input
                   className="h-11 w-full min-w-0 rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] pl-9 pr-3 text-sm text-[#0F172A] outline-none placeholder:text-[#94A3B8] focus:border-[#0F6BFF]"
-                  onChange={(event) => setSearchQuery(event.target.value)}
+                  onChange={(event) => changeHubFilter({ q: event.target.value })}
                   placeholder="Search conversations..."
                   type="search"
                   value={searchQuery}
@@ -2563,13 +2591,13 @@ export function CommunicationsHub() {
               <div className="mt-2 flex min-w-0 items-center gap-1">
                 <div className="flex min-w-0 flex-1" aria-label="Conversation channels">
                   {([ ["all", "All"], ["calls", "Calls"], ["messages", "Messages"], ["web", "Web"] ] as Array<[ChannelFilter,string]>).map(([value,label]) => (
-                    <button key={value} type="button" aria-pressed={activeFilter === value || (value === "messages" && activeFilter === "texts")} onClick={() => setActiveFilter(value)} className={`min-h-11 min-w-11 flex-1 rounded-lg px-1 text-xs font-semibold ${activeFilter === value || (value === "messages" && activeFilter === "texts") ? "bg-blue-50 text-[#0F6BFF]" : "text-[#64748B]"}`}>{label}</button>
+                    <button key={value} type="button" aria-pressed={activeFilter === value || (value === "messages" && activeFilter === "texts")} onClick={() => changeHubFilter({ channel: value === "all" ? null : value })} className={`min-h-11 min-w-11 flex-1 rounded-lg px-1 text-xs font-semibold ${activeFilter === value || (value === "messages" && activeFilter === "texts") ? "bg-blue-50 text-[#0F6BFF]" : "text-[#64748B]"}`}>{label}</button>
                   ))}
                 </div>
                 <label className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-slate-50 text-slate-600">
                   <span className="sr-only">Workflow filter</span>
                   <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 6h16M7 12h10M10 18h4" /></svg>
-                  <select aria-label="Workflow filter" className="absolute inset-0 h-11 w-11 cursor-pointer opacity-0" value={inboxTab === "assigned" ? "inbox" : inboxTab} onChange={(event) => {setInboxTab(event.target.value as WorkflowFilter); if (activeFilter === "unread") setActiveFilter("all");}}>
+                  <select aria-label="Workflow filter" className="absolute inset-0 h-11 w-11 cursor-pointer opacity-0" value={inboxTab === "assigned" ? "inbox" : inboxTab} onChange={(event) => {changeHubFilter({ box: event.target.value === "inbox" ? null : event.target.value, ...(activeFilter === "unread" ? {channel: null} : {}) });}}>
                     <option value="inbox">Active conversations</option>
                     <option value="unread">Unread</option>
                     <option value="needs_action">Needs Action</option>
@@ -2581,7 +2609,7 @@ export function CommunicationsHub() {
               {inboxTab !== "inbox" && inboxTab !== "assigned" || activeFilter === "unread" ? <p className="mt-1 text-xs text-[#64748B]">{inboxTab === "archived" ? "Archived" : inboxTab === "needs_action" ? "Needs Action" : "Unread"}</p> : null}
             </div>
 
-            <div className="max-h-[calc(100dvh-220px)] overflow-y-auto">
+            <div data-hub-scroll="list-mobile" onScroll={event => saveHubScroll(window, "list-mobile", event.currentTarget.scrollTop)} className="max-h-[calc(100dvh-220px)] overflow-y-auto">
               {hubState.status === "loading" ? (
                 <p className="m-4 rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-4 text-sm font-semibold text-[#64748B]">
                   Loading conversations...
@@ -2630,7 +2658,7 @@ export function CommunicationsHub() {
                 <div className="flex min-w-0 flex-1 items-center gap-2">
                   <button
                     className="flex h-10 w-8 shrink-0 items-center justify-start text-2xl font-black text-[#0F6BFF]"
-                    onClick={() => setMobileDetailOpen(false)}
+                    onClick={() => backToHubList(window)}
                     title="Back to customer threads"
                     type="button"
                   >
@@ -2675,7 +2703,7 @@ export function CommunicationsHub() {
                     }`}
                     disabled={!canSendSmsFromConversation}
                     onClick={() => {
-                      setMobileDetailTab("conversation");
+                      changeHubTab("conversation");
                       setComposeMode("message");
                     }}
                     title="Message"
@@ -2731,7 +2759,7 @@ export function CommunicationsHub() {
                       : "text-[#64748B]"
                   }`}
                   key={value}
-                  onClick={() => setMobileDetailTab(value)}
+                  onClick={() => changeHubTab(value)}
                   type="button"
                 >
                   {label}
@@ -2739,7 +2767,7 @@ export function CommunicationsHub() {
               ))}
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto bg-[#F8FAFC] p-3">
+            <div data-hub-scroll="detail-mobile" onScroll={event => saveHubScroll(window, "detail-mobile", event.currentTarget.scrollTop)} className="min-h-0 flex-1 overflow-y-auto bg-[#F8FAFC] p-3">
               {detailState.status === "loading" ? (
                 <p className="rounded-xl border border-[#E5E7EB] bg-white p-4 text-sm font-semibold text-[#64748B]">
                   Loading conversation...
@@ -2867,7 +2895,7 @@ export function CommunicationsHub() {
                       : "text-[#64748B] hover:bg-[#F8FAFC]"
                   }`}
                   key={value}
-                  onClick={() => setActiveFilter(value)}
+                  onClick={() => changeHubFilter({ channel: value === "all" ? null : value })}
                   type="button"
                 >
                   {label}
@@ -2881,7 +2909,7 @@ export function CommunicationsHub() {
             </div>
           </div>
 
-          <div className="h-[calc(100%-86px)] overflow-y-auto">
+          <div data-hub-scroll="list-desktop" onScroll={event => saveHubScroll(window, "list-desktop", event.currentTarget.scrollTop)} className="h-[calc(100%-86px)] overflow-y-auto">
             {hubState.status === "loading" ? (
               <p className="m-4 rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-4 text-sm font-semibold text-[#64748B]">
                 Loading conversations...
@@ -3048,7 +3076,7 @@ export function CommunicationsHub() {
                 </p>
               ) : (
                 <>
-                  <div className="flex-1 space-y-3 overflow-y-auto bg-[#F8FAFC] p-4">
+                  <div data-hub-scroll="detail-desktop" onScroll={event => saveHubScroll(window, "detail-desktop", event.currentTarget.scrollTop)} className="flex-1 space-y-3 overflow-y-auto bg-[#F8FAFC] p-4">
                     {requestDetailRows.length > 0 ? (
                       <RequestDetailsCard
                         rows={requestDetailRows}

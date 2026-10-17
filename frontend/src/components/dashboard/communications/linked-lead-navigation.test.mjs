@@ -59,19 +59,20 @@ test('real returnTo builder encodes conversation and filters safely', () => {
  const start = source.indexOf('  const buildCommunicationsReturnTo =');
  const end = source.indexOf('  const openConversation =', start);
  const wrapper = source.slice(source.indexOf('  const destinationReturnTo ='),source.indexOf('  const linkedLeadId ='));
- const c = vm.createContext({URLSearchParams, selectedConversationId:'conversation', activeFilter:'texts', inboxTab:'assigned', searchQuery:'a&b # test'});
+ const c = vm.createContext({URLSearchParams, mobileDetailTab:'activity', selectedConversationId:'conversation', activeFilter:'texts', inboxTab:'assigned', searchQuery:'a&b # test'});
  vm.runInContext(ts.transpileModule(source.slice(start,end)+wrapper+`; globalThis.destination = withReturnTo('/dashboard/communication-leads/${id}');`,{}).outputText,c);
  const url = new URL(c.destination,'https://example.test');
  const back = new URL(url.searchParams.get('returnTo'),'https://example.test');
  assert.equal(back.pathname,'/dashboard/communications');
  assert.equal(back.searchParams.get('conversation'),'conversation');
  assert.equal(back.searchParams.get('view'),'detail');
+ assert.equal(back.searchParams.get('tab'),'activity');
  assert.equal(back.searchParams.get('q'),'a&b # test');
  assert.equal(back.searchParams.get('channel'),'texts');
  assert.equal(back.searchParams.get('box'),'assigned');
 });
 test('conversation history and initial selection remain intact for Back', () => {
- assert.match(source, /window\.history\.pushState\(null, "", buildCommunicationsReturnTo\(conversationId\)\)/);
+ assert.match(source, /navigateHub\(window, \{ conversation: conversationId, customer: null, job: null, view: "detail", tab: "conversation" \}\)/);
  assert.match(source, /getInitialQueryParam\("conversation"\)/);
  assert.match(source, /const router = useRouter\(\)/);
 });

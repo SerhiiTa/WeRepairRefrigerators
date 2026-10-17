@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { enterCustomerCommunications } from "./communications/hub-navigation";
 import { submitManualDispatch } from "@/lib/manual-dispatch";
 import Image from "next/image";
 import { useMobileFinancePresentation } from "./mobile-finance-preference";
@@ -1806,6 +1808,7 @@ export function ServiceRequestDetail({
   requestId,
   returnTo = "/dashboard/leads",
 }: ServiceRequestDetailProps) {
+  const router = useRouter();
   const [state, setState] = useState<DetailState>({
     status: "loading",
     request: null,
@@ -11905,6 +11908,7 @@ export function ServiceRequestDetail({
     <article className={!useClassicMobileFinance && activeJobTab === "estimate"
       ? "min-w-0 rounded-2xl border border-transparent bg-[#F5F5F7] p-4 text-black sm:p-5 lg:border-[#E5E7EB] lg:bg-white lg:text-[#0F172A] lg:shadow-[0_8px_24px_rgba(15,23,42,0.06)]"
       : "rounded-2xl border border-[#E5E7EB] bg-white p-4 text-[#0F172A] shadow-[0_8px_24px_rgba(15,23,42,0.06)] sm:p-5"}>
+      {request.customerId ? <button type="button" className="mb-3 min-h-11 rounded-xl border border-[#E5E7EB] px-4 text-sm font-semibold text-[#0F6BFF]" onClick={() => enterCustomerCommunications(window, request.customerId!, requestId, href => router.push(href), activeJobTab === "estimate" ? "finance" : activeJobTab)}>Communications</button> : null}
       <header className="lg:hidden">
         <div className={!useClassicMobileFinance && activeJobTab === "estimate" ? "grid grid-cols-[76px_minmax(0,1fr)_76px] items-center gap-2" : "grid grid-cols-[44px_1fr_44px] items-center gap-2"}>
           <Link

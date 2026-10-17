@@ -40,9 +40,9 @@ test('URL restoration reads current conversation on mount and popstate without n
  const end=hub.indexOf('    restoreConversationUrl();',start);
  const values={};
  const pending={current:true};
- const c=vm.createContext({window:{location:{pathname:'/dashboard/communications'}},leadNavigationPendingRef:pending,startTransition:fn=>fn(),getInitialQueryParam:key=>({conversation:id,view:'detail',q:'search'})[key],getInitialChannelFilter:()=> 'texts',getInitialInboxTab:()=> 'assigned',setSelectedConversationId:v=>values.id=v,setMobileDetailOpen:v=>values.open=v,setActiveFilter:v=>values.filter=v,setInboxTab:v=>values.box=v,setSearchQuery:v=>values.query=v});
+ const c=vm.createContext({window:{location:{pathname:'/dashboard/communications'}},leadNavigationPendingRef:pending,claimHubOrigin:()=>{},setNavigationContext:()=>{},startTransition:fn=>fn(),getInitialQueryParam:key=>({conversation:id,view:'detail',q:'search',tab:'activity'})[key],getInitialChannelFilter:()=> 'texts',getInitialInboxTab:()=> 'assigned',setSelectedConversationId:v=>values.id=v,setMobileDetailOpen:v=>values.open=v,hubTab:v=>v,setMobileDetailTab:v=>values.tab=v,setActiveFilter:v=>values.filter=v,setInboxTab:v=>values.box=v,setSearchQuery:v=>values.query=v});
  vm.runInContext(ts.transpileModule(hub.slice(start,end)+'restoreConversationUrl();',{}).outputText,c);
- assert.equal(values.id,id);assert.equal(values.open,true);assert.equal(pending.current,false);
+ assert.equal(values.tab,'activity');assert.equal(values.id,id);assert.equal(values.open,true);assert.equal(pending.current,false);
  assert.match(hub,/addEventListener\("popstate", restoreConversationUrl\)/);
  assert.match(hub,/removeEventListener\("popstate", restoreConversationUrl\)/);
  assert.doesNotMatch(hub.slice(start,end),/router\.|history\.|location\.(assign|replace)/);
