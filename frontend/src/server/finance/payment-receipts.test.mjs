@@ -243,7 +243,7 @@ test("success page waits for receipt-backed verified payment", () => {
       successExperience.indexOf("setReceiptDeliveryModal((current) =>", smsSelectionIndex),
   );
   assert.ok(
-    successExperience.indexOf("const sends: Array<Promise<Response>> = []") >
+    successExperience.indexOf("const results = await Promise.all(channels.map") >
       successExperience.indexOf("Choose SMS or Email before sending."),
   );
   assert.match(successExperience, /Receipt email delivery is not configured yet/);

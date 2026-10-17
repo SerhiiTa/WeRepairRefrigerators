@@ -20,6 +20,7 @@ type StripeSuccessExperienceProps = {
 type ReceiptDeliveryOptions = {
   email: {
     available: boolean;
+    recipient?: string | null;
     reason?: string | null;
   };
   sms: {
@@ -40,6 +41,7 @@ type ReceiptDeliveryHistoryItem = {
 type ReceiptDeliveryModalState = {
   deliveries: ReceiptDeliveryHistoryItem[];
   emailSelected: boolean;
+  emailRecipient: string;
   idempotencyKey: string;
   options: ReceiptDeliveryOptions;
   smsSelected: boolean;
@@ -193,6 +195,7 @@ function buildPreviewReceiptDeliveryModal(): ReceiptDeliveryModalState {
   return {
     deliveries: [],
     emailSelected: false,
+    emailRecipient: "",
     idempotencyKey: buildIdempotencyKey(),
     options: {
       email: {
@@ -280,6 +283,8 @@ export function StripeSuccessExperience({
   const [receiptDeliveryState, setReceiptDeliveryState] =
     useState<ReceiptDeliverySendState>({ message: null, status: "idle" });
   const requestSequenceRef = useRef(0);
+  const receiptSendLock = useRef(false);
+  const attemptedReceiptSends = useRef(new Set<string>());
 
   const queryString = useMemo(() => {
     const params = new URLSearchParams();
@@ -488,6 +493,7 @@ export function StripeSuccessExperience({
     setReceiptDeliveryModal({
       deliveries: payload.deliveries ?? [],
       emailSelected: false,
+      emailRecipient: payload.deliveryOptions.email.recipient ?? "",
       idempotencyKey: buildIdempotencyKey(),
       options: payload.deliveryOptions,
       smsSelected: payload.deliveryOptions.sms.available,
@@ -529,83 +535,72 @@ export function StripeSuccessExperience({
       return;
     }
 
-    const accessToken = await getDashboardAccessToken();
-
-    if (!accessToken) {
-      setReceiptDeliveryState({
-        message: "Log in again before sending this receipt.",
-        status: "error",
-      });
+    const emailRecipient = receiptDeliveryModal.emailRecipient.trim();
+    if (receiptDeliveryModal.emailSelected &&
+        (emailRecipient.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailRecipient))) {
+      setReceiptDeliveryState({ message: "Enter a valid email address.", status: "error" });
       return;
     }
-
-    const { paymentId, serviceRequestId } = status.staffReceiptDelivery;
-    const sends: Array<Promise<Response>> = [];
-
-    if (receiptDeliveryModal.smsSelected && receiptDeliveryModal.options.sms.recipient) {
-      sends.push(
-        fetch(`/api/service-requests/${serviceRequestId}/payments/${paymentId}/receipt`, {
-          body: JSON.stringify({
-            channel: "sms",
-            idempotencyKey: `${receiptDeliveryModal.idempotencyKey}-sms`,
-            recipient: receiptDeliveryModal.options.sms.recipient,
-          }),
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-          },
-          method: "POST",
-        }),
-      );
+    if (receiptDeliveryModal.smsSelected &&
+        (!receiptDeliveryModal.options.sms.available || !receiptDeliveryModal.options.sms.recipient)) {
+      setReceiptDeliveryState({ message: "No authorized SMS recipient is available.", status: "error" });
+      return;
     }
-
+    if (receiptSendLock.current) return;
+    receiptSendLock.current = true;
     setReceiptDeliveryState({ message: "Sending receipt...", status: "sending" });
-    const responses = await Promise.all(sends);
-    const failedResponse = responses.find((response) => !response.ok);
-
-    if (failedResponse) {
-      const payload = (await failedResponse.json().catch(() => null)) as
-        | { message?: string }
-        | null;
+    try {
+      const accessToken = await getDashboardAccessToken();
+      if (!accessToken) {
+        setReceiptDeliveryState({ message: "Log in again before sending this receipt.", status: "error" });
+        return;
+      }
+      const { paymentId, serviceRequestId } = status.staffReceiptDelivery;
+      const url = `/api/service-requests/${serviceRequestId}/payments/${paymentId}/receipt`;
+      const channels = [
+        ...(receiptDeliveryModal.smsSelected ? [{ channel: "sms", recipient: receiptDeliveryModal.options.sms.recipient }] : []),
+        ...(receiptDeliveryModal.emailSelected ? [{ channel: "email", recipient: emailRecipient }] : []),
+      ];
+      if (channels.some(({ channel }) => attemptedReceiptSends.current.has(`${receiptDeliveryModal.idempotencyKey}-${channel}`))) {
+        setReceiptDeliveryState({ message: "This send was already attempted. Review delivery history before sending again.", status: "error" });
+        return;
+      }
+      const results = await Promise.all(channels.map(async ({ channel, recipient }) => {
+        const idempotencyKey = `${receiptDeliveryModal.idempotencyKey}-${channel}`;
+        attemptedReceiptSends.current.add(idempotencyKey);
+        try {
+          const response = await fetch(url, {
+            body: JSON.stringify({ channel, recipient, idempotencyKey }),
+            headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+            method: "POST",
+          });
+          const payload = await response.json().catch(() => null) as { ok?: boolean; message?: string } | null;
+          return {
+            ok: response.ok && payload?.ok === true,
+            message: `${channel.toUpperCase()}: ${response.ok && payload?.ok === true
+              ? "Accepted for sending. Delivery is not yet confirmed."
+              : payload?.message ?? "Delivery outcome is not confirmed. Review history before retrying."}`,
+          };
+        } catch {
+          return { ok: false, message: `${channel.toUpperCase()}: Delivery outcome is not confirmed. Do not resend until reviewed.` };
+        }
+      }));
+      let historyUnavailable = false;
+      try {
+        const response = await fetch(url, { cache: "no-store", headers: { Authorization: `Bearer ${accessToken}` } });
+        const payload = await response.json() as { ok?: boolean; deliveries?: ReceiptDeliveryHistoryItem[] };
+        if (!response.ok || !payload.ok || !Array.isArray(payload.deliveries)) throw new Error("history unavailable");
+        setReceiptDeliveryModal(current => current ? { ...current, deliveries: payload.deliveries! } : current);
+      } catch { historyUnavailable = true; }
       setReceiptDeliveryState({
-        message: payload?.message ?? "Receipt could not be sent.",
-        status: "error",
+        message: results.map(result => result.message).join(" ") + (historyUnavailable ? " Delivery history could not be refreshed; reopen to check." : ""),
+        status: results.every(result => result.ok) ? "success" : "error",
       });
-      return;
+    } catch {
+      setReceiptDeliveryState({ message: "Delivery outcome is not confirmed. Do not resend until reviewed.", status: "error" });
+    } finally {
+      receiptSendLock.current = false;
     }
-    const successfulPayloads = await Promise.all(
-      responses.map(async (response) =>
-        (await response.json().catch(() => null)) as {
-          deliveryId?: string;
-          deliveryStatus?: string;
-        } | null,
-      ),
-    );
-    const firstDelivery = successfulPayloads.find(Boolean);
-
-    setReceiptDeliveryState({
-      message: "Receipt send request accepted.",
-      status: "success",
-    });
-    setReceiptDeliveryModal((current) =>
-      current
-        ? {
-            ...current,
-            deliveries: [
-              {
-                delivery_channel: receiptDeliveryModal.smsSelected ? "sms" : "email",
-                delivery_status: firstDelivery?.deliveryStatus ?? "accepted",
-                id: firstDelivery?.deliveryId ?? receiptDeliveryModal.idempotencyKey,
-                provider_status: "accepted",
-                recipient: receiptDeliveryModal.smsSelected
-                  ? receiptDeliveryModal.options.sms.recipient
-                  : null,
-              },
-              ...current.deliveries,
-            ],
-          }
-        : current,
-    );
   }
 
   if (pending) {
@@ -982,8 +977,11 @@ export function StripeSuccessExperience({
                 <input
                   checked={receiptDeliveryModal.emailSelected}
                   className="mt-1 h-4 w-4 accent-[#0F6BFF]"
-                  disabled
-                  onChange={() => undefined}
+                  disabled={receiptDeliveryState.status === "sending" || !receiptDeliveryModal.options.email.available}
+                  onChange={(event) => {
+                    const emailSelected = event.currentTarget.checked;
+                    setReceiptDeliveryModal(current => current ? { ...current, emailSelected } : current);
+                  }}
                   type="checkbox"
                 />
                 <span className="min-w-0">
@@ -991,11 +989,29 @@ export function StripeSuccessExperience({
                     Email
                   </span>
                   <span className="mt-1 block text-xs font-semibold text-[#94A3B8]">
-                    {receiptDeliveryModal.options.email.reason ??
-                      "Email delivery coming soon."}
+                    {receiptDeliveryModal.options.email.available
+                      ? "Send a secure receipt link by email."
+                      : receiptDeliveryModal.options.email.reason ?? "Receipt email delivery is not configured."}
                   </span>
                 </span>
               </label>
+              {receiptDeliveryModal.emailSelected && receiptDeliveryModal.options.email.available ? (
+                <label className="text-sm font-bold text-[#64748B]">
+                  Recipient email
+                  <input
+                    aria-label="Receipt recipient email"
+                    className="mt-1 min-h-11 w-full rounded-xl border border-[#D7DEE8] px-3 text-[#071A4A]"
+                    disabled={receiptDeliveryState.status === "sending"}
+                    type="email"
+                    autoComplete="email"
+                    value={receiptDeliveryModal.emailRecipient}
+                    onChange={(event) => {
+                      const emailRecipient = event.currentTarget.value;
+                      setReceiptDeliveryModal(current => current ? { ...current, emailRecipient } : current);
+                    }}
+                  />
+                </label>
+              ) : null}
             </div>
 
             <div className="mt-4 rounded-xl border border-[#E5E7EB] bg-[#F8FAFC] p-3">
