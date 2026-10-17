@@ -98,7 +98,7 @@ export type StripeCheckoutResult = {
 
 export type PublicActiveStripeCheckout = {
   amount: number;
-  checkoutUrl: string;
+  checkoutUrl: string | null;
   expiresAt: string | null;
 };
 
@@ -563,11 +563,26 @@ async function updateCheckoutAttemptAfterSession(
   }
 }
 
+async function reconcileUnpostedAttempt(attemptId: string, values: Record<string, unknown>) {
+  const serviceRole = getSupabaseServiceRoleClient();
+  if (!serviceRole) return false;
+  const { data, error } = await (serviceRole as any)
+    .from("service_request_payment_checkout_attempts")
+    .update(values)
+    .eq("id", attemptId)
+    .in("checkout_status", ["initiated", "processing"])
+    .is("succeeded_payment_id", null)
+    .select("id")
+    .maybeSingle();
+  return !error && Boolean(data);
+}
+
 export async function loadPublicInvoiceActiveStripeCheckout(input: {
   token: string;
 }): Promise<PublicActiveStripeCheckout | null> {
+  const unavailable: PublicActiveStripeCheckout = { amount: 0, checkoutUrl: null, expiresAt: null };
   if (!PUBLIC_TOKEN_PATTERN.test(input.token)) {
-    return null;
+    return unavailable;
   }
 
   let config: StripeRuntimeConfig;
@@ -575,18 +590,18 @@ export async function loadPublicInvoiceActiveStripeCheckout(input: {
   try {
     config = getStripeRuntimeConfig();
   } catch {
-    return null;
+    return unavailable;
   }
 
   if (config.mode !== "test" && config.mode !== "production_sandbox_pilot") {
-    return null;
+    return unavailable;
   }
 
   const serviceRole = getSupabaseServiceRoleClient();
   const stripe = getStripeClient();
 
   if (!serviceRole || !stripe) {
-    return null;
+    return unavailable;
   }
 
   try {
@@ -604,29 +619,29 @@ export async function loadPublicInvoiceActiveStripeCheckout(input: {
       .maybeSingle();
 
     if (tokenError || !tokenData?.invoice_id || !tokenData.service_request_id) {
-      return null;
+      return unavailable;
     }
 
     const { data: invoiceData, error: invoiceError } = await (serviceRole as any)
       .from("service_request_invoices")
-      .select("id,company_id,invoice_status,invoice_lifecycle_status,service_request_id")
+      .select("id,invoice_status,invoice_lifecycle_status,service_request_id")
       .eq("id", tokenData.invoice_id)
       .eq("service_request_id", tokenData.service_request_id)
-      .eq("company_id", tokenData.company_id)
       .maybeSingle();
 
     if (invoiceError || !invoiceData?.id) {
-      return null;
+      return unavailable;
     }
 
     if (
       invoiceData.invoice_status === "void" ||
       (invoiceData.invoice_lifecycle_status ?? "current") !== "current"
     ) {
-      return null;
+      return unavailable;
     }
 
     const targetContext = await resolveServiceRequestContext(tokenData.service_request_id);
+    if (targetContext.companyId !== tokenData.company_id || targetContext.customerCompanyId !== tokenData.company_id) return unavailable;
     assertPilotCustomerAllowed(config, targetContext);
 
     const { data: attemptData, error: attemptError } = await (serviceRole as any)
@@ -634,26 +649,26 @@ export async function loadPublicInvoiceActiveStripeCheckout(input: {
       .select(
         "id,amount,checkout_kind,checkout_metadata,checkout_status,company_id,currency,estimate_id,invoice_id,provider_checkout_session_id,provider_payment_intent_id,reserved_until,service_request_id,target_type,succeeded_payment_id",
       )
+      .eq("company_id", tokenData.company_id)
       .eq("provider", "stripe")
       .eq("target_type", "invoice")
       .eq("invoice_id", tokenData.invoice_id)
       .eq("service_request_id", tokenData.service_request_id)
       .in("checkout_status", ["initiated", "processing"])
       .is("succeeded_payment_id", null)
-      .not("provider_checkout_session_id", "is", null)
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
 
-    if (attemptError || !attemptData?.provider_checkout_session_id) {
-      return null;
-    }
+    if (attemptError) return unavailable;
+    if (!attemptData) return null;
+    if (!attemptData.provider_checkout_session_id) return unavailable;
 
     const attempt = attemptData as CheckoutAttempt;
     const checkoutSessionId = attempt.provider_checkout_session_id;
 
     if (!checkoutSessionId) {
-      return null;
+      return unavailable;
     }
 
     const session = await stripe.checkout.sessions.retrieve(checkoutSessionId);
@@ -664,6 +679,7 @@ export async function loadPublicInvoiceActiveStripeCheckout(input: {
 
     const sessionMatchesAttempt =
       !session.livemode &&
+      session.id === checkoutSessionId && session.currency === "usd" &&
       getSessionMetadataValue(sessionMetadata, "homefixos_checkout_attempt_id") ===
         attempt.id &&
       getSessionMetadataValue(sessionMetadata, "service_request_id") ===
@@ -673,7 +689,7 @@ export async function loadPublicInvoiceActiveStripeCheckout(input: {
       sessionAmountCents === attemptAmountCents;
 
     if (!sessionMatchesAttempt) {
-      return null;
+      return unavailable;
     }
 
     if (session.status === "open" && session.payment_status === "unpaid" && session.url) {
@@ -687,7 +703,7 @@ export async function loadPublicInvoiceActiveStripeCheckout(input: {
         extractStoredCheckoutUrl(attempt) !== session.url;
 
       if (shouldRefreshAttempt) {
-        await updateCheckoutAttemptAfterSession(attempt.id, {
+        const refreshed = await reconcileUnpostedAttempt(attempt.id, {
           checkout_status: "processing",
           reserved_until: expiresAt ?? attempt.reserved_until,
           checkout_metadata: {
@@ -699,6 +715,7 @@ export async function loadPublicInvoiceActiveStripeCheckout(input: {
             stripe_sandbox_pilot: config.mode === "production_sandbox_pilot",
           },
         });
+        if (!refreshed) return unavailable;
       }
 
       return {
@@ -708,8 +725,8 @@ export async function loadPublicInvoiceActiveStripeCheckout(input: {
       };
     }
 
-    if (session.status === "expired" && session.payment_status !== "paid") {
-      await updateCheckoutAttemptAfterSession(attempt.id, {
+    if (session.status === "expired" && session.payment_status === "unpaid") {
+      const released = await reconcileUnpostedAttempt(attempt.id, {
         checkout_status: "expired",
         failure_reason: "stripe_session_expired",
         checkout_metadata: {
@@ -718,12 +735,13 @@ export async function loadPublicInvoiceActiveStripeCheckout(input: {
           stripe_session_reconciled: true,
         },
       });
+      return released ? null : unavailable;
     }
   } catch {
-    return null;
+    return unavailable;
   }
 
-  return null;
+  return unavailable;
 }
 
 function categorizeProviderCheckoutError(error: unknown) {

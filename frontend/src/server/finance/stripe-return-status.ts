@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getSupabaseServiceRoleClient } from "@/lib/supabase/service-role";
 import type { Database, Json } from "@/lib/supabase/types";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -6,6 +7,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getStripeClient, getStripeRuntimeConfig } from "./stripe-config";
 
 type CheckoutAttemptRow = {
+  company_id: string;
   id: string;
   amount: number | string;
   checkout_kind: string;
@@ -62,6 +64,9 @@ type PublicEstimatePayload = {
 };
 
 type PublicInvoicePayload = {
+  link_state?: string;
+  company?: { id?: string };
+  job?: { id?: string };
   invoice?: {
     balance_due?: number | string | null;
     id?: string;
@@ -325,7 +330,7 @@ async function getCheckoutAttemptById(
   const { data, error } = await (serviceRole as any)
     .from("service_request_payment_checkout_attempts")
     .select(
-      "id,amount,checkout_kind,checkout_metadata,checkout_status,estimate_id,invoice_id,provider_checkout_session_id,provider_payment_intent_id,service_request_id,succeeded_payment_id,target_type",
+      "id,company_id,amount,checkout_kind,checkout_metadata,checkout_status,estimate_id,invoice_id,provider_checkout_session_id,provider_payment_intent_id,service_request_id,succeeded_payment_id,target_type",
     )
     .eq("id", attemptId)
     .maybeSingle();
@@ -470,7 +475,16 @@ async function releaseSandboxReservationAfterCancelReturn(
       attempt.provider_checkout_session_id,
     );
 
-    if (session.livemode || session.payment_status === "paid") {
+    if (
+      session.livemode || session.payment_status !== "unpaid" ||
+      session.id !== attempt.provider_checkout_session_id ||
+      session.metadata?.homefixos_checkout_attempt_id !== attempt.id ||
+      session.metadata?.service_request_id !== attempt.service_request_id ||
+      session.metadata?.target_type !== attempt.target_type ||
+      session.metadata?.target_id !== (attempt.target_type === "invoice" ? attempt.invoice_id : attempt.estimate_id) ||
+      session.amount_total !== Math.round(Number(attempt.amount) * 100) ||
+      session.currency !== "usd"
+    ) {
       return attempt;
     }
 
@@ -478,7 +492,7 @@ async function releaseSandboxReservationAfterCancelReturn(
       session = await stripe.checkout.sessions.expire(session.id);
     }
 
-    if (session.status !== "expired" || session.payment_status === "paid") {
+    if (session.status !== "expired" || session.payment_status !== "unpaid") {
       return attempt;
     }
 
@@ -507,7 +521,7 @@ async function releaseSandboxReservationAfterCancelReturn(
       .in("checkout_status", ["initiated", "processing"])
       .is("succeeded_payment_id", null)
       .select(
-        "id,amount,checkout_kind,checkout_metadata,checkout_status,estimate_id,invoice_id,provider_checkout_session_id,provider_payment_intent_id,service_request_id,succeeded_payment_id,target_type",
+        "id,company_id,amount,checkout_kind,checkout_metadata,checkout_status,estimate_id,invoice_id,provider_checkout_session_id,provider_payment_intent_id,service_request_id,succeeded_payment_id,target_type",
       )
       .maybeSingle();
 
@@ -550,7 +564,7 @@ export async function loadStripeReturnStatus(params: {
   const { data: attemptData, error: attemptError } = await (serviceRole as any)
     .from("service_request_payment_checkout_attempts")
     .select(
-      "id,amount,checkout_kind,checkout_metadata,checkout_status,estimate_id,invoice_id,provider_checkout_session_id,provider_payment_intent_id,service_request_id,succeeded_payment_id,target_type",
+      "id,company_id,amount,checkout_kind,checkout_metadata,checkout_status,estimate_id,invoice_id,provider_checkout_session_id,provider_payment_intent_id,service_request_id,succeeded_payment_id,target_type",
     )
     .eq("id", params.attemptId)
     .maybeSingle();
@@ -586,7 +600,9 @@ export async function loadStripeReturnStatus(params: {
     attempt.target_type === "invoice" &&
     attempt.checkout_metadata?.public_invoice_token === true
   ) {
-    const { data: invoiceData, error: invoiceError } = await (serviceRole as any).rpc(
+    const publicClient = getSupabaseServerClient();
+    if (!publicClient) return { authorized: false, state: "unconfigured" };
+    const { data: invoiceData, error: invoiceError } = await (publicClient as any).rpc(
       "get_public_invoice_by_token_rpc",
       {
         p_token: params.token,
@@ -600,7 +616,12 @@ export async function loadStripeReturnStatus(params: {
     const invoicePayload = parseInvoicePayload(invoiceData as Json);
     const tokenInvoiceId = invoicePayload?.invoice?.id;
 
-    if (!tokenInvoiceId || tokenInvoiceId !== attempt.invoice_id) {
+    if (
+      invoicePayload?.link_state !== "active" ||
+      !tokenInvoiceId || tokenInvoiceId !== attempt.invoice_id ||
+      invoicePayload.job?.id !== attempt.service_request_id ||
+      invoicePayload.company?.id !== attempt.company_id
+    ) {
       return { authorized: false, state: "unauthorized" };
     }
 

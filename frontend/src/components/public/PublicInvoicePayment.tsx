@@ -54,7 +54,7 @@ export type PublicInvoicePayload = {
 type PublicInvoicePaymentProps = {
   activeCheckout?: {
     amount: number;
-    checkoutUrl: string;
+    checkoutUrl: string | null;
     expiresAt: string | null;
   } | null;
   data: PublicInvoicePayload;
@@ -105,7 +105,7 @@ export function PublicInvoicePayment({
       return "Paid";
     }
     if (activeCheckout) {
-      return "Payment checkout in progress";
+      return activeCheckout.checkoutUrl ? "Payment checkout in progress" : "Payment is being verified. Refresh this page before trying again.";
     }
     return "Balance due";
   }, [
@@ -301,7 +301,7 @@ export function PublicInvoicePayment({
               : `Pay Balance Due ${formatServiceRequestMoney(data.invoice.balance_due)}`}
           </button>
         ) : null}
-        {activeCheckout ? (
+        {activeCheckout?.checkoutUrl ? (
           <a
             className="mt-3 flex min-h-12 w-full items-center justify-center rounded-xl bg-[#0F6BFF] px-4 text-center text-base font-black text-white transition hover:bg-[#0959D9]"
             href={activeCheckout.checkoutUrl}
