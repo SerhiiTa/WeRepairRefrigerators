@@ -135,12 +135,27 @@ test('recent timestamp payload cannot expose extra history, identifiers or sessi
  const f=engagementFixture();f.data.service_request_estimate_revisions[0].recent=Array.from({length:30},(_,i)=>({viewed_at:`2026-10-${String(i+1).padStart(2,'0')}T12:00:00Z`,session_hash:'SECRET',event_id:'PRIVATE'}));
  const e=(await f.read({})).find(e=>e.documentType==='estimate');assert.equal(e.engagement.recent.length,2);assert.equal(e.engagement.lastViewed,'2026-10-30T12:00:00Z');assert(!JSON.stringify(e.engagement).includes('SECRET'));assert(!JSON.stringify(e.engagement).includes('PRIVATE'));
 });
-test('engagement UI shows zero/one/two timestamps and never full history',()=>{
+test('compact engagement uses canonical timezone and displays each of at most two timestamps once',()=>{
  const hub=fs.readFileSync(new URL('../../components/dashboard/communications/CommunicationsHub.tsx',import.meta.url),'utf8');
  const ast=ts.createSourceFile('hub.tsx',hub,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
  const fn=ast.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='DocumentEngagement').getText(ast);
- const jsx=(type,props)=>({type,props});const ctx={exports:{},formatServiceRequestDate:v=>v,formatTimeOnly:()=>'',require:()=>({jsx,jsxs:jsx})};vm.createContext(ctx);vm.runInContext(ts.transpileModule(fn,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,ctx);
- for(const count of [0,1,20]){const tree=ctx.DocumentEngagement({summary:{total:count,lastViewed:count?'latest':null,recent:Array.from({length:count},(_,i)=>'time'+i)}});const out=JSON.stringify(tree);if(!count)assert(out.includes('Not viewed yet'));else assert(out.includes('Last viewed:'));assert(!out.includes('time2'));assert(!out.includes('button'));}
+ const dates=fs.readFileSync(new URL('../../lib/service-request-records.ts',import.meta.url),'utf8');
+ const dateAst=ts.createSourceFile('dates.ts',dates,ts.ScriptTarget.Latest,true);
+ const formatter=dateAst.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='formatServiceRequestDate').getText(dateAst);
+ const jsx=(type,props)=>({type,props});const ctx={exports:{},require:()=>({jsx,jsxs:jsx})};vm.createContext(ctx);vm.runInContext(ts.transpileModule(formatter+'\n'+fn,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,ctx);
+ const latest='2026-10-17T17:31:00Z',previous='2026-10-16T16:20:00Z';
+ function text(node){if(Array.isArray(node))return node.map(text).join('');if(node&&typeof node==='object')return text(node.props?.children);return typeof node==='string'||typeof node==='number'?String(node):'';}
+ for(const count of [0,1,5,20]){
+  const summary={total:count,lastViewed:count?latest:null,recent:count===0?[]:count===1?[latest]:[latest,previous,'2026-10-15T00:00:00Z']};
+  const snapshot=JSON.stringify(summary),tree=ctx.DocumentEngagement({summary}),out=text(tree);
+  assert.equal(JSON.stringify(summary),snapshot);
+  if(!count)assert.equal(out,'Not viewed yet');
+  else {assert(out.startsWith(`${count} view${count===1?'':'s'}`));assert(out.includes('Last viewed: Oct 17, 12:31 PM'));assert.equal(out.split('12:31 PM').length-1,1);}
+  assert.equal(out.includes('Previous:'),count>=2);
+  if(count>=2){assert(out.includes('Previous: Oct 16, 11:20 AM'));assert.equal(out.split('11:20 AM').length-1,1);}
+  assert(!out.includes('Recent:'));assert(!out.includes('qualified'));assert(!out.includes('2026'));assert(!out.includes('Oct 15'));
+  assert(JSON.stringify(tree).includes('svg'));
+ }
  assert(hub.includes('summary={email.engagement}'));assert(hub.includes('summary={smsEngagement[message.id]}'));
 });
 

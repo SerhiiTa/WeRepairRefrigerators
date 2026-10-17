@@ -4041,16 +4041,16 @@ function MessageBodyWithLinks({
   );
 }
 function DocumentEngagement({ summary }: { summary: DocumentViewSummary }) {
-  const stamp = (value: string) => `${formatServiceRequestDate(value)} · ${formatTimeOnly(value)}`;
+  const stamp = (value: string) => formatServiceRequestDate(value).replace(/, \d{4} at /, ", ");
   return <div className="mt-2 rounded-lg bg-slate-50 px-2.5 py-2 text-xs text-slate-500">
     <p className="flex items-center gap-1.5">
       <svg aria-hidden="true" className="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" /><circle cx="12" cy="12" r="3" />
       </svg>
-      {summary.total === 0 ? "Not viewed yet" : `${summary.total} qualified view${summary.total === 1 ? "" : "s"}`}
+      {summary.total === 0 ? "Not viewed yet" : `${summary.total} view${summary.total === 1 ? "" : "s"}`}
     </p>
-    {summary.lastViewed ? <p className="mt-1">Last viewed: {stamp(summary.lastViewed)}</p> : null}
-    {summary.recent.length ? <div className="mt-1"><span>Recent:</span><ul>{summary.recent.slice(0, 2).map((time, index) => <li key={`${time}:${index}`}>{stamp(time)}</li>)}</ul></div> : null}
+    {summary.total > 0 && summary.lastViewed ? <p className="mt-1">Last viewed: {stamp(summary.lastViewed)}</p> : null}
+    {summary.total >= 2 && summary.recent[1] ? <p className="mt-1">Previous: {stamp(summary.recent[1])}</p> : null}
   </div>;
 }
 
