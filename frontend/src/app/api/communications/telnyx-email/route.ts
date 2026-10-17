@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { verifyTelnyxWebhookSignature } from '@/server/communications/telnyx-sms-transport';
-import { applyReceiptEmailEvent, applyInvoiceEmailEvent, applyEstimateEmailEvent } from '@/server/finance/receipt-email-webhook';
+import { applyReceiptEmailEvent, applyInvoiceEmailEvent, applyEstimateEmailEvent, logEmailWebhookDiagnostic } from '@/server/finance/receipt-email-webhook';
 export const runtime = 'nodejs';
 export async function POST(request: Request) {
     const rawBody = await request.text();
@@ -19,7 +19,8 @@ export async function POST(request: Request) {
         if (status === 503) status = await applyEstimateEmailEvent(body);
         return NextResponse.json({ ok: status === 200 }, { status });
     }
-    catch {
+    catch (error) {
+        logEmailWebhookDiagnostic('handler_exception', undefined, body, error);
         return NextResponse.json({ ok: false }, { status: 503 });
     }
 }
