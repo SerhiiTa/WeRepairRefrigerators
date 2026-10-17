@@ -29,13 +29,21 @@ export async function applyEstimateEmailEvent(body: any): Promise<number> {
 // Only a genuine missing row permits cross-document fallback. Lookup/update
 // failures retain their original table and retryable response.
 export async function applyDocumentEmailWebhookEvent(body: any): Promise<number> {
-    for (const table of [
-        'service_request_payment_receipt_deliveries',
-        'service_request_invoice_deliveries',
-        'service_request_estimate_revision_deliveries',
-    ] as const) {
-        const status = await applyEmailEvent(body, table);
-        if (status !== null) return status;
+    // Absorb a short send-finalization race without acknowledging unpersisted
+    // events. Longer delays still rely on the provider's durable retry policy.
+    for (const delayMs of [0, 250, 750]) {
+        if (delayMs) {
+            logEmailWebhookDiagnostic('delivery_correlation_retry', undefined, body);
+            await new Promise<void>(resolve => setTimeout(resolve, delayMs));
+        }
+        for (const table of [
+            'service_request_payment_receipt_deliveries',
+            'service_request_invoice_deliveries',
+            'service_request_estimate_revision_deliveries',
+        ] as const) {
+            const status = await applyEmailEvent(body, table);
+            if (status !== null) return status;
+        }
     }
     // A provider callback can precede persistence of its message ID. Never
     // acknowledge an uncorrelated event; allow the provider to retry later.
