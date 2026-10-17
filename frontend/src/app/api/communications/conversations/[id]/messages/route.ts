@@ -123,8 +123,9 @@ export async function GET(request: Request, { params }: ConversationMessagesRout
   if (!access.ok) return access.response;
   try {
     const { id } = await params;
-    const emails = await readDocumentEmailHistory(access.context.supabase, id, process.env.HOMEFIXOS_PUBLIC_ORIGIN);
-    return NextResponse.json({ ok: true, emails }, { headers: { "Cache-Control": "private, no-store" } });
+    const smsEngagement: Record<string, import("@/server/communications/document-email-history").DocumentViewSummary> = {};
+    const emails = await readDocumentEmailHistory(access.context.supabase, id, process.env.HOMEFIXOS_PUBLIC_ORIGIN, smsEngagement);
+    return NextResponse.json({ ok: true, emails, smsEngagement }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     return NextResponse.json({ ok: false, message: error instanceof EmailHistoryError ? error.message : "Email history is unavailable." },
       { status: error instanceof EmailHistoryError ? error.status : 503, headers: { "Cache-Control": "private, no-store" } });

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import type { DocumentEmail } from "@/server/communications/document-email-history";
+import type { DocumentEmail, DocumentViewSummary } from "@/server/communications/document-email-history";
 import { WebsiteRequestCard } from "./WebsiteRequestCard";
 import { canonicalWebsiteEvents } from "@/lib/communications/website-request";
 type RequestTimelineEvent = CommunicationTimelineEvent & {conversationId?: string; intakeRequestId?: string | null};
@@ -1317,7 +1317,7 @@ export function CommunicationsHub() {
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(() =>
     getInitialQueryParam("conversation"),
   );
-  const [emailHistory, setEmailHistory] = useState<{ key: string; emails: DocumentEmail[]; error: string | null }>({ key: "", emails: [], error: null });
+  const [emailHistory, setEmailHistory] = useState<{ key: string; emails: DocumentEmail[]; smsEngagement: Record<string, DocumentViewSummary>; error: string | null }>({ key: "", emails: [], smsEngagement: {}, error: null });
   const [detailState, setDetailState] = useState<DetailState>({
     status: "idle",
     data: emptyDetailData,
@@ -1993,14 +1993,14 @@ export function CommunicationsHub() {
           const response = await fetch(`/api/communications/conversations/${id}/messages`, {
             cache: "no-store", headers: { Authorization: `Bearer ${token}` }, signal: controller.signal,
           });
-          const payload = await response.json() as { ok?: boolean; emails?: DocumentEmail[] };
+          const payload = await response.json() as { ok?: boolean; emails?: DocumentEmail[]; smsEngagement?: Record<string, DocumentViewSummary> };
           if (!response.ok || !payload.ok || !Array.isArray(payload.emails)) throw new Error("unavailable");
-          return payload.emails;
+          return { emails: payload.emails, smsEngagement: payload.smsEngagement ?? {} };
         }));
-        if (!controller.signal.aborted) setEmailHistory({ key: emailConversationKey, emails: [...new Map(lists.flat().map(email => [email.id, email])).values()], error: null });
+        if (!controller.signal.aborted) setEmailHistory({ key: emailConversationKey, emails: [...new Map(lists.flatMap(list => list.emails).map(email => [email.id, email])).values()], smsEngagement: Object.assign({}, ...lists.map(list => list.smsEngagement)), error: null });
       } catch {
         // Clear stale links when authorization or refresh fails.
-        if (!controller.signal.aborted) setEmailHistory({ key: emailConversationKey, emails: [], error: "Email history is unavailable. Reopen this conversation to retry." });
+        if (!controller.signal.aborted) setEmailHistory({ key: emailConversationKey, emails: [], smsEngagement: {}, error: "Email history is unavailable. Reopen this conversation to retry." });
       } finally { busy = false; }
     }
     void refreshEmails();
@@ -2752,6 +2752,7 @@ export function CommunicationsHub() {
                 <>
                   <ThreadEventTimeline
                     attachmentsByMessageId={detail.attachmentsByMessageId}
+                    smsEngagement={emailHistory.key === emailConversationKey ? emailHistory.smsEngagement : {}}
                     emailError={emailHistory.key === emailConversationKey ? emailHistory.error : null}
                     events={threadEvents}
                     expandedTranscriptByCallId={expandedTranscriptByCallId}
@@ -3064,6 +3065,7 @@ export function CommunicationsHub() {
 
                     <ThreadEventTimeline
                       attachmentsByMessageId={detail.attachmentsByMessageId}
+                      smsEngagement={emailHistory.key === emailConversationKey ? emailHistory.smsEngagement : {}}
                       emailError={emailHistory.key === emailConversationKey ? emailHistory.error : null}
                     events={threadEvents}
                       expandedTranscriptByCallId={expandedTranscriptByCallId}
@@ -3792,6 +3794,7 @@ function Panel({ title, children }: { title: string; children: ReactNode }) {
 }
 
 function ThreadEventTimeline({
+  smsEngagement,
   emailError,
   attachmentsByMessageId,
   events,
@@ -3807,6 +3810,7 @@ function ThreadEventTimeline({
   attachmentsByMessageId: Record<string, SignedMessageAttachment[]>;
   events: ThreadEvent[];
   emailError?: string | null;
+  smsEngagement: Record<string, DocumentViewSummary>;
   expandedTranscriptByCallId: ExpandedTranscriptByCallId;
   onLoadRecording: (callId: string) => void;
   onPreviewAttachment: (attachment: SignedMessageAttachment) => void;
@@ -3860,6 +3864,7 @@ function ThreadEventTimeline({
             <div key={event.id}>
               {showDateSeparator ? <DateSeparator label={currentDate} /> : null}
               <SmsMessageGroup
+                smsEngagement={smsEngagement}
                 attachmentsByMessageId={attachmentsByMessageId}
                 messages={event.messages}
                 onPreviewAttachment={onPreviewAttachment}
@@ -4035,6 +4040,20 @@ function MessageBodyWithLinks({
     </div>
   );
 }
+function DocumentEngagement({ summary }: { summary: DocumentViewSummary }) {
+  const stamp = (value: string) => `${formatServiceRequestDate(value)} · ${formatTimeOnly(value)}`;
+  return <div className="mt-2 rounded-lg bg-slate-50 px-2.5 py-2 text-xs text-slate-500">
+    <p className="flex items-center gap-1.5">
+      <svg aria-hidden="true" className="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" /><circle cx="12" cy="12" r="3" />
+      </svg>
+      {summary.total === 0 ? "Not viewed yet" : `${summary.total} qualified view${summary.total === 1 ? "" : "s"}`}
+    </p>
+    {summary.lastViewed ? <p className="mt-1">Last viewed: {stamp(summary.lastViewed)}</p> : null}
+    {summary.recent.length ? <div className="mt-1"><span>Recent:</span><ul>{summary.recent.slice(0, 2).map((time, index) => <li key={`${time}:${index}`}>{stamp(time)}</li>)}</ul></div> : null}
+  </div>;
+}
+
 function DocumentEmailCard({ email }: { email: DocumentEmail }) {
   const [opened, setOpened] = useState(false);
   const preview = email.preview.replace(/\s+/g, " ").trim();
@@ -4048,6 +4067,7 @@ function DocumentEmailCard({ email }: { email: DocumentEmail }) {
         <span className="mt-1 block text-xs text-[#64748B]">{email.sentAt ? "Sent" : "Requested"} {formatServiceRequestDate(email.occurredAt)} · {formatTimeOnly(email.occurredAt)} · <span className="capitalize">{email.status}</span></span>
       </span>
     </button>
+    {email.engagement ? <DocumentEngagement summary={email.engagement} /> : null}
     {opened ? <div className="mt-3 border-t border-[#E5E7EB] pt-3">
       {email.jobNumber ? <p className="font-medium">Job #{email.jobNumber}</p> : null}
       <p className="mt-2 break-words">From: {email.sender}</p><p className="break-words">To: {email.recipient}</p>
@@ -4060,12 +4080,14 @@ function DocumentEmailCard({ email }: { email: DocumentEmail }) {
 }
 
 function SmsMessageGroup({
+  smsEngagement,
   attachmentsByMessageId,
   messages,
   onPreviewAttachment,
 }: {
   attachmentsByMessageId: Record<string, SignedMessageAttachment[]>;
   messages: MessageRow[];
+  smsEngagement: Record<string, DocumentViewSummary>;
   onPreviewAttachment: (attachment: SignedMessageAttachment) => void;
 }) {
   const [showEarlier, setShowEarlier] = useState(false);
@@ -4115,6 +4137,7 @@ function SmsMessageGroup({
                 ) : attachments.length === 0 ? (
                   <p className="text-sm font-medium leading-5">Message body unavailable.</p>
                 ) : null}
+                {smsEngagement[message.id] ? <DocumentEngagement summary={smsEngagement[message.id]} /> : null}
                 <MessageAttachments attachments={attachments} onPreview={onPreviewAttachment} />
                 <p
                   className={`mt-1 text-[11px] font-semibold ${

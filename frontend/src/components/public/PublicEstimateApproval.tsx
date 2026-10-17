@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { PublicDocumentViewTracker } from "./PublicDocumentViewTracker";
 
 import {
   CustomerEstimatePreview,
@@ -394,6 +395,9 @@ export function PublicEstimateApproval({
 
   return (
     <main className="min-h-screen bg-[#F3F6FA] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+      {["active", "approved", "declined"].includes(linkState) ? (
+        <PublicDocumentViewTracker documentType="estimate" token={token} />
+      ) : null}
       <CustomerEstimatePreview data={customerPreviewData} fillViewport={false} />
 
       <section className="mx-auto mt-2 max-w-4xl px-3 sm:mt-4 sm:px-6">

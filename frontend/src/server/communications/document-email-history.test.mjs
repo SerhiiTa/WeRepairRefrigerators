@@ -22,8 +22,8 @@ function fixture(){
  };
  for(const [type,table] of [['estimate','service_request_estimate_revision_deliveries'],['invoice','service_request_invoice_deliveries'],['receipt','service_request_payment_receipt_deliveries']]) data[table]=[{id:type+'-delivery',company_id:'company',service_request_id:'job',revision_id:'revision',invoice_id:'invoice',invoice_token_id:'invoice-token',receipt_id:'receipt',recipient:'qa@example.com',delivery_channel:'email',provider:'telnyx-email',delivery_status:'sent',provider_status:'accepted',sent_at:'2026-10-16T10:00:00Z',created_at:'2026-10-16T09:59:00Z',delivery_metadata:{secret:'never exposed',request:{from:'sender@example.com',subject:type+' subject',text_body:`Read your ${type}: https://example.com/${type==='estimate'?'estimates':type==='invoice'?'invoices':'receipts'}/${raw}`,html_body:'<script>unsafe</script>'}}}];
  const calls=[]; let denied=false,errorTable=null;
- const db={rpc:async(name,args)=>{calls.push({name,args});return {data:!denied}},from(table){let filters=[],start=0,end=499;const q={select(){return q},eq(k,v){filters.push(r=>r[k]===v);return q},in(k,vs){filters.push(r=>vs.includes(r[k]));return q},order(){return q},range(a,b){start=a;end=b;return q},then(resolve,reject){calls.push({table});return Promise.resolve(table===errorTable?{error:{code:'42501'}}:{data:(data[table]??[]).filter(r=>filters.every(f=>f(r))).slice(start,end+1)}).then(resolve,reject)}};return q}};
- return {data,calls,db,deny(){denied=true},fail(table){errorTable=table},read:()=>api.readDocumentEmailHistory(db,'conversation','https://example.com')};
+ const db={rpc:async(name,args)=>{calls.push({name,args});return {data:!denied}},from(table){let filters=[],start=0,end=499,selection='',orders=[],limits=[];const q={select(value){selection=value;return q},limit(n,options){limits.push({n,options});return q},eq(k,v){if(!k.includes('.')) filters.push(r=>r[k]===v);return q},in(k,vs){if(!k.includes('.')) filters.push(r=>vs.includes(r[k]));return q},order(k,options){orders.push({k,options});return q},range(a,b){start=a;end=b;return q},then(resolve,reject){calls.push({table,selection,orders,limits});return Promise.resolve(table===errorTable?{error:{code:'42501'}}:{data:(data[table]??[]).filter(r=>filters.every(f=>f(r))).slice(start,end+1)}).then(resolve,reject)}};return q}};
+ return {data,calls,db,deny(){denied=true},fail(table){errorTable=table},read:(summaries)=>api.readDocumentEmailHistory(db,'conversation','https://example.com',summaries)};
 }
 test('all three canonical Email types project with content, recipients, links and stable identity',async()=>{
  const f=fixture(),result=await f.read();assert.equal(result.length,3);
@@ -85,4 +85,67 @@ for (const type of ['estimate','invoice','receipt']) test(`${type} Email card op
  n.find(x=>x.type==='button').props.onClick();n=nodes();assert(JSON.stringify(n).includes(email.preview));assert(JSON.stringify(n).includes(email.sender));assert.equal(n.find(x=>x.type==='a').props.href,email.url);
  email.url=null;assert(!nodes().some(x=>x.type==='a'));assert(JSON.stringify(nodes()).includes('Document unavailable.'));
  nodes().find(x=>x.type==='button').props.onClick();assert.equal(nodes().find(x=>x.type==='button').props['aria-expanded'],false);
+});
+
+function engagementFixture(total = 20) {
+ const f=fixture();
+ for(const table of ['service_request_estimate_revisions','service_request_invoice_delivery_tokens']) {
+  f.data[table][0].stats=[{count:total}];
+  f.data[table][0].recent=Array.from({length:Math.min(total,2)},(_,i)=>({viewed_at:`2026-10-${17-i}T12:00:00Z`}));
+ }
+ return f;
+}
+for (const total of [0,1,20,1200]) test(`bounded Estimate/Invoice summary with ${total} views`,async()=>{
+ const f=engagementFixture(total),sms={};const emails=await f.read(sms);
+ for(const type of ['estimate','invoice']) {
+  const e=emails.find(e=>e.documentType===type);assert.equal(e.engagement.total,total);
+  assert.equal(e.engagement.recent.length,Math.min(total,2));
+  assert.equal(e.engagement.lastViewed,total?'2026-10-17T12:00:00Z':null);
+  assert.deepEqual(Object.keys(e.engagement).sort(),['lastViewed','recent','total']);
+ }
+ assert(!emails.find(e=>e.documentType==='receipt').engagement);
+ const batches=f.calls.filter(c=>c.selection?.includes('stats:'));
+ assert.equal(batches.length,2);
+ for(const c of batches){assert(c.selection.includes('document_view_events(count)'));assert(!c.selection.includes('session_hash'));assert(c.limits.some(l=>l.n===2&&l.options?.referencedTable==='recent'));assert(c.orders.some(o=>o.options?.ascending===false));}
+});
+test('shared Email/SMS references reuse summaries without adding messages or summing counts',async()=>{
+ const f=engagementFixture(),sms={};
+ for(const type of ['estimate','invoice']){
+  const table=type==='estimate'?'service_request_estimate_revision_deliveries':'service_request_invoice_deliveries';
+  f.data[table].push({...f.data[table][0],id:type+'-sms',delivery_channel:'sms',provider:'telnyx',communication_message_id:type+'-message'});
+ }
+ const emails=await f.read(sms);assert.equal(emails.length,3);
+ for(const type of ['estimate','invoice']) assert.deepEqual(sms[type+'-message'],emails.find(e=>e.documentType===type).engagement);
+ assert.equal(f.calls.filter(c=>c.selection?.includes('stats:')).length,2);
+ assert.equal((await f.read({})).length,3);
+});
+test('expired/revoked documents expose neither active link nor engagement and perform no event queries',async()=>{
+ for(const field of ['token_expires_at','token_revoked_at']){
+  const f=engagementFixture();for(const t of ['service_request_estimate_revisions','service_request_invoice_delivery_tokens'])f.data[t][0][field]='2000-01-01';
+  const emails=await f.read({});for(const e of emails.filter(e=>e.documentType!=='receipt')){assert.equal(e.url,null);assert(!e.engagement)}
+  assert.equal(f.calls.filter(c=>c.selection?.includes('stats:')).length,0);
+ }
+});
+test('event query error, malformed counts, company and Job mismatch fail closed',async()=>{
+ const f=engagementFixture();f.fail('service_request_estimate_revisions');await assert.rejects(f.read({}),e=>e.status===503);
+ const g=engagementFixture();g.data.service_request_estimate_revisions[0].stats=[{count:'20'}];await assert.rejects(g.read({}),e=>e.status===503);
+ const h=engagementFixture();h.data.communication_conversations[0].service_request_id='foreign-job';await assert.rejects(h.read({}),e=>e.status===403);
+});
+test('recent timestamp payload cannot expose extra history, identifiers or session hashes',async()=>{
+ const f=engagementFixture();f.data.service_request_estimate_revisions[0].recent=Array.from({length:30},(_,i)=>({viewed_at:`2026-10-${String(i+1).padStart(2,'0')}T12:00:00Z`,session_hash:'SECRET',event_id:'PRIVATE'}));
+ const e=(await f.read({})).find(e=>e.documentType==='estimate');assert.equal(e.engagement.recent.length,2);assert.equal(e.engagement.lastViewed,'2026-10-30T12:00:00Z');assert(!JSON.stringify(e.engagement).includes('SECRET'));assert(!JSON.stringify(e.engagement).includes('PRIVATE'));
+});
+test('engagement UI shows zero/one/two timestamps and never full history',()=>{
+ const hub=fs.readFileSync(new URL('../../components/dashboard/communications/CommunicationsHub.tsx',import.meta.url),'utf8');
+ const ast=ts.createSourceFile('hub.tsx',hub,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+ const fn=ast.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='DocumentEngagement').getText(ast);
+ const jsx=(type,props)=>({type,props});const ctx={exports:{},formatServiceRequestDate:v=>v,formatTimeOnly:()=>'',require:()=>({jsx,jsxs:jsx})};vm.createContext(ctx);vm.runInContext(ts.transpileModule(fn,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,ctx);
+ for(const count of [0,1,20]){const tree=ctx.DocumentEngagement({summary:{total:count,lastViewed:count?'latest':null,recent:Array.from({length:count},(_,i)=>'time'+i)}});const out=JSON.stringify(tree);if(!count)assert(out.includes('Not viewed yet'));else assert(out.includes('Last viewed:'));assert(!out.includes('time2'));assert(!out.includes('button'));}
+ assert(hub.includes('summary={email.engagement}'));assert(hub.includes('summary={smsEngagement[message.id]}'));
+});
+
+test('ambiguous SMS association fails closed rather than overwriting engagement',async()=>{
+ const f=engagementFixture();
+ for(const table of ['service_request_estimate_revision_deliveries','service_request_invoice_deliveries'])f.data[table].push({...f.data[table][0],id:'sms',delivery_channel:'sms',communication_message_id:'same-message'});
+ await assert.rejects(f.read({}),e=>e.status===403);
 });

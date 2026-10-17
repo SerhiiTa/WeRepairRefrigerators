@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { PublicDocumentViewTracker } from "./PublicDocumentViewTracker";
 
 import {
   formatServiceRequestDate,
@@ -159,6 +160,7 @@ export function PublicInvoicePayment({
 
   return (
     <main className="min-h-screen bg-[#F3F6FA] px-3 py-4 text-[#0F172A] sm:px-6 sm:py-8">
+      {data.link_state === "active" ? <PublicDocumentViewTracker documentType="invoice" token={token} /> : null}
       <article className="mx-auto max-w-4xl bg-white px-4 py-4 shadow-[0_18px_44px_rgba(15,23,42,0.08)] ring-1 ring-[#E5E7EB] sm:px-8 sm:py-7">
         <header className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b border-[#CBD5E1] pb-3">
           <div className="min-w-0">
