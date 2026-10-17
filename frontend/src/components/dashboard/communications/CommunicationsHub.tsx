@@ -884,6 +884,7 @@ type ThreadEvent =
   | { event: RequestTimelineEvent; request?: IntakeRequestRow; id: string; occurredAt: string; type: "timeline" };
 
 type IconName =
+  | "circle-dollar-sign"
   | "ai"
   | "attachment"
   | "human"
@@ -1003,6 +1004,14 @@ function getEventIdentity(event: CommunicationTimelineEvent): {
   const title = event.title || getTimelineEventLabel(event.type);
   const normalized = `${event.type} ${title}`.toLowerCase();
 
+  if (event.type === "payment_received") {
+    return {
+      accent: "bg-emerald-50 text-emerald-600",
+      icon: "circle-dollar-sign",
+      route: "Customer → HomeFix",
+      title,
+    };
+  }
   if (normalized.includes("voicemail")) {
     return {
       accent: "bg-blue-50 text-[#0F6BFF]",
@@ -4174,6 +4183,15 @@ function EventIcon({ name }: { name: IconName }) {
     viewBox: "0 0 24 24",
   };
 
+  if (name === "circle-dollar-sign") {
+    return (
+      <svg {...common} aria-hidden="true">
+        <circle cx="12" cy="12" r="10" />
+        <path d="M16 8h-6a2 2 0 0 0 0 4h4a2 2 0 0 1 0 4H8" />
+        <path d="M12 18V6" />
+      </svg>
+    );
+  }
   if (name === "sms") {
     return (
       <svg {...common} aria-hidden="true">
@@ -4515,7 +4533,7 @@ function TimelineEventCard({ event }: { event: CommunicationTimelineEvent }) {
         <div
           className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[11px] font-black ${identity.accent}`}
         >
-          {identity.icon}
+          {identity.icon === "circle-dollar-sign" ? <EventIcon name={identity.icon} /> : identity.icon}
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-3">
